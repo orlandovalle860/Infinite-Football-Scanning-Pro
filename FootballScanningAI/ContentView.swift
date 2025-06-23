@@ -802,7 +802,7 @@ struct MainView: View {
                                         .padding(.horizontal, 4)
                                         .environment(\.sizeCategory, .large) // Force consistent size
                                     
-                                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 5), spacing: 8) {
+                                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
                                         Button(action: {
                                             displayMode = .colors
                                             selectedNumbers.removeAll()
@@ -814,10 +814,10 @@ struct MainView: View {
                                             criticalScanDuration = 1.0
                                         }) {
                                             Text("Colors")
-                                                .font(.system(size: 14, weight: .semibold))
+                                                .font(.system(size: 13, weight: .semibold))
                                                 .foregroundColor(displayMode == .colors ? .white : .white.opacity(0.7))
                                                 .padding(.vertical, 12)
-                                                .padding(.horizontal, 8)
+                                                .padding(.horizontal, 6)
                                                 .frame(maxWidth: .infinity)
                                                 .environment(\.sizeCategory, .large) // Force consistent size
                                         }
@@ -834,10 +834,10 @@ struct MainView: View {
                                             criticalScanDuration = 1.0
                                         }) {
                                             Text("Colors + Nums")
-                                                .font(.system(size: 14, weight: .semibold))
+                                                .font(.system(size: 13, weight: .semibold))
                                                 .foregroundColor(displayMode == .colorsNumbers ? .white : .white.opacity(0.7))
                                                 .padding(.vertical, 12)
-                                                .padding(.horizontal, 8)
+                                                .padding(.horizontal, 6)
                                                 .frame(maxWidth: .infinity)
                                         }
                                         .buttonStyle(DisplayModeButtonStyle(isSelected: displayMode == .colorsNumbers, color: .blue))
@@ -853,10 +853,10 @@ struct MainView: View {
                                             criticalScanDuration = 1.0
                                         }) {
                                             Text("Colors + Arrows")
-                                                .font(.system(size: 14, weight: .semibold))
+                                                .font(.system(size: 13, weight: .semibold))
                                                 .foregroundColor(displayMode == .colorsArrows ? .white : .white.opacity(0.7))
                                                 .padding(.vertical, 12)
-                                                .padding(.horizontal, 8)
+                                                .padding(.horizontal, 6)
                                                 .frame(maxWidth: .infinity)
                                         }
                                         .buttonStyle(DisplayModeButtonStyle(isSelected: displayMode == .colorsArrows, color: .blue))
@@ -872,10 +872,10 @@ struct MainView: View {
                                             criticalScanDuration = 1.0
                                         }) {
                                             Text("Nums")
-                                                .font(.system(size: 14, weight: .semibold))
+                                                .font(.system(size: 13, weight: .semibold))
                                                 .foregroundColor(displayMode == .numbers ? .white : .white.opacity(0.7))
                                                 .padding(.vertical, 12)
-                                                .padding(.horizontal, 8)
+                                                .padding(.horizontal, 6)
                                                 .frame(maxWidth: .infinity)
                                         }
                                         .buttonStyle(DisplayModeButtonStyle(isSelected: displayMode == .numbers, color: .blue))
@@ -891,10 +891,10 @@ struct MainView: View {
                                             criticalScanDuration = 1.0
                                         }) {
                                             Text("Lanes")
-                                                .font(.system(size: 14, weight: .semibold))
+                                                .font(.system(size: 13, weight: .semibold))
                                                 .foregroundColor(displayMode == .lanes ? .white : .white.opacity(0.7))
                                                 .padding(.vertical, 12)
-                                                .padding(.horizontal, 8)
+                                                .padding(.horizontal, 6)
                                                 .frame(maxWidth: .infinity)
                                         }
                                         .buttonStyle(DisplayModeButtonStyle(isSelected: displayMode == .lanes, color: .blue))

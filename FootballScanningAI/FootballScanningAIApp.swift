@@ -6,12 +6,19 @@
 //
 
 import SwiftUI
+import UIKit
 
 @main
 struct FootballScanningAIApp: App {
+    init() {
+        // Prevent screen from dimming and lock screen from appearing while app is running
+        UIApplication.shared.isIdleTimerDisabled = true
+    }
+    
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            SplashScreen()
+                .preferredColorScheme(.dark)
         }
     }
 }

@@ -709,6 +709,9 @@ struct MainView: View {
     @State private var selectedActionForNumber: Int = 1
     @State private var selectedCriticalScanNumbers: Set<Int> = [1] // Default to only number 1
     
+    // Screen protection toggle for outdoor/indoor training
+    @State private var screenProtectionEnabled: Bool = true // Default to enabled for safety
+    
     
     // Arrow directions for colorsArrows mode
     private let arrowDirections = [
@@ -1495,6 +1498,46 @@ struct MainView: View {
                                 }
                                 .padding(.horizontal)
                             }
+                            
+                            // Screen Protection Toggle
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Screen Protection")
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                                
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack {
+                                        Toggle("", isOn: $screenProtectionEnabled)
+                                            .toggleStyle(SwitchToggleStyle(tint: .blue))
+                                            .scaleEffect(1.2)
+                                        
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(screenProtectionEnabled ? "Enabled" : "Disabled")
+                                                .font(.subheadline)
+                                                .fontWeight(.semibold)
+                                                .foregroundColor(.white)
+                                            
+                                            Text(screenProtectionEnabled ? "Maximum brightness & prevents sleep" : "Normal device behavior")
+                                                .font(.caption)
+                                                .foregroundColor(.white.opacity(0.7))
+                                        }
+                                        
+                                        Spacer()
+                                    }
+                                    
+                                    Text("Enable for outdoor training to prevent screen dimming in bright sunlight")
+                                        .font(.caption)
+                                        .foregroundColor(.white.opacity(0.6))
+                                        .padding(.top, 4)
+                                }
+                            }
+                            .padding()
+                            .background {
+                                RoundedRectangle(cornerRadius: 15)
+                                    .fill(.ultraThinMaterial)
+                                    .opacity(0.7)
+                            }
+                            .padding(.horizontal)
                             
                             // Start Button
                             Button(action: {

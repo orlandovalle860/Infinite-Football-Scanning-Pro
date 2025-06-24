@@ -765,7 +765,8 @@ struct MainView: View {
                 criticalScanDuration: criticalScanDuration,
                 selectedColorSet: selectedColorSet,
                 customActions: customActions,
-                selectedCriticalScanNumbers: Array(selectedCriticalScanNumbers).sorted()
+                selectedCriticalScanNumbers: Array(selectedCriticalScanNumbers).sorted(),
+                showDisplay: $showDisplay
             )
             .ignoresSafeArea()
             .background(Color.black.ignoresSafeArea())
@@ -1674,6 +1675,7 @@ struct DisplayView: View {
     let selectedColorSet: ScanningColorSet
     let customActions: [CustomAction]
     let selectedCriticalScanNumbers: [Int]
+    @Binding var showDisplay: Bool
     
     @State private var currentColor: Color
     @State private var currentNumber: Int = 1
@@ -1720,7 +1722,7 @@ struct DisplayView: View {
     
     let availableLanes = ["Left", "Center", "Right"]
     
-    init(selectedColors: [Color], displayMode: DisplayMode, changeInterval: Double, selectedNumbers: [Int], soundEnabled: Bool, laneSpeed: Double, numberRange: Double, selectedArrows: [String], selectedBeepInterval: BeepInterval, criticalScanDelay: Double, criticalScanDuration: Double, selectedColorSet: ScanningColorSet, customActions: [CustomAction], selectedCriticalScanNumbers: [Int]) {
+    init(selectedColors: [Color], displayMode: DisplayMode, changeInterval: Double, selectedNumbers: [Int], soundEnabled: Bool, laneSpeed: Double, numberRange: Double, selectedArrows: [String], selectedBeepInterval: BeepInterval, criticalScanDelay: Double, criticalScanDuration: Double, selectedColorSet: ScanningColorSet, customActions: [CustomAction], selectedCriticalScanNumbers: [Int], showDisplay: Binding<Bool>) {
         self.selectedColors = selectedColors
         self.displayMode = displayMode
         self.changeInterval = changeInterval
@@ -1735,8 +1737,9 @@ struct DisplayView: View {
         self.selectedColorSet = selectedColorSet
         self.customActions = customActions
         self.selectedCriticalScanNumbers = selectedCriticalScanNumbers
-        _currentColor = State(initialValue: selectedColors.first ?? selectedColors.randomElement() ?? .red)
-        _currentNumberColor = State(initialValue: selectedColors.first ?? selectedColors.randomElement() ?? .red)
+        self._currentColor = State(initialValue: selectedColors.first ?? selectedColors.randomElement() ?? .red)
+        self._currentNumberColor = State(initialValue: selectedColors.first ?? selectedColors.randomElement() ?? .red)
+        self._showDisplay = showDisplay
     }
     
     var body: some View {
@@ -2005,7 +2008,7 @@ struct DisplayView: View {
         .onTapGesture(count: 2) {
             if !isCountingDown {
                 isActive = false
-                dismiss()
+                showDisplay = false
             }
         }
     }

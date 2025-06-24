@@ -736,6 +736,9 @@ struct MainView: View {
     @State private var isCountingDown: Bool = true
     @Environment(\.dismiss) private var dismiss
     
+    // Screen protection timer for outdoor use
+    @State private var screenProtectionTimer: Timer?
+    
     let availableLanes = ["Left", "Center", "Right"]
     
     init(selectedColors: [Color] = [], displayMode: DisplayMode = .colors, changeInterval: Double = 1.5, selectedNumbers: Set<Int> = [], soundEnabled: Bool = true) {
@@ -1720,6 +1723,9 @@ struct DisplayView: View {
     @State private var isCountingDown: Bool = true
     @Environment(\.dismiss) private var dismiss
     
+    // Screen protection timer for outdoor use
+    @State private var screenProtectionTimer: Timer?
+    
     let availableLanes = ["Left", "Center", "Right"]
     
     init(selectedColors: [Color], displayMode: DisplayMode, changeInterval: Double, selectedNumbers: [Int], soundEnabled: Bool, laneSpeed: Double, numberRange: Double, selectedArrows: [String], selectedBeepInterval: BeepInterval, criticalScanDelay: Double, criticalScanDuration: Double, selectedColorSet: ScanningColorSet, customActions: [CustomAction], selectedCriticalScanNumbers: [Int], showDisplay: Binding<Bool>) {
@@ -1999,6 +2005,10 @@ struct DisplayView: View {
         }
         .ignoresSafeArea()
         .onAppear {
+            // Ensure maximum brightness and prevent sleep for outdoor training
+            UIScreen.main.brightness = 1.0
+            UIApplication.shared.isIdleTimerDisabled = true
+            
             startCountdown()
         }
         .onDisappear {
@@ -2033,6 +2043,9 @@ struct DisplayView: View {
         showNumberOrArrow = false // Reset at start
         startTimer()
         setupAudio()
+        
+        // Start screen protection timer for outdoor use
+        startScreenProtectionTimer()
         
         if displayMode == .colorsNumbers || displayMode == .colorsArrows {
             startBeepTimer()
@@ -2195,6 +2208,21 @@ struct DisplayView: View {
         timer = nil
         stopBeepTimer()
         stopScanningCircleTimer()
+        stopScreenProtectionTimer()
+    }
+    
+    private func startScreenProtectionTimer() {
+        screenProtectionTimer?.invalidate()
+        screenProtectionTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            // Continuously maintain maximum brightness and prevent sleep
+            UIScreen.main.brightness = 1.0
+            UIApplication.shared.isIdleTimerDisabled = true
+        }
+    }
+    
+    private func stopScreenProtectionTimer() {
+        screenProtectionTimer?.invalidate()
+        screenProtectionTimer = nil
     }
     
     private func startCriticalScanSequence() {

@@ -13,12 +13,39 @@ struct FootballScanningAIApp: App {
     init() {
         // Prevent screen from dimming and lock screen from appearing while app is running
         UIApplication.shared.isIdleTimerDisabled = true
+        
+        // Additional protection for outdoor use
+        setupScreenProtection()
+    }
+    
+    private func setupScreenProtection() {
+        // Set screen brightness to maximum for outdoor visibility
+        UIScreen.main.brightness = 1.0
+        
+        // Request to keep the device awake
+        UIApplication.shared.isIdleTimerDisabled = true
+        
+        // Set up notification observers to re-enable protection if needed
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            // Re-enable protection when app becomes active
+            UIApplication.shared.isIdleTimerDisabled = true
+            UIScreen.main.brightness = 1.0
+        }
     }
     
     var body: some Scene {
         WindowGroup {
             SplashScreen()
                 .preferredColorScheme(.dark)
+                .onAppear {
+                    // Ensure protection is active when app appears
+                    UIApplication.shared.isIdleTimerDisabled = true
+                    UIScreen.main.brightness = 1.0
+                }
         }
     }
 }

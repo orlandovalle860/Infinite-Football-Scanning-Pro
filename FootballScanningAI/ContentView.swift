@@ -712,6 +712,9 @@ struct MainView: View {
     // Screen protection toggle for outdoor/indoor training
     @State private var screenProtectionEnabled: Bool = true // Default to enabled for safety
     
+    // Number and Arrow Color Selection
+    @State private var numberColor: Color = .white // Default to white
+    @State private var arrowColor: Color = .white // Default to white
     
     // Arrow directions for colorsArrows mode
     private let arrowDirections = [
@@ -773,6 +776,8 @@ struct MainView: View {
                 customActions: customActions,
                 selectedCriticalScanNumbers: Array(selectedCriticalScanNumbers).sorted(),
                 screenProtectionEnabled: screenProtectionEnabled,
+                numberColor: numberColor,
+                arrowColor: arrowColor,
                 showDisplay: $showDisplay
             )
             .ignoresSafeArea()
@@ -1024,6 +1029,130 @@ struct MainView: View {
                                     .opacity(0.7)
                             }
                             .padding(.horizontal)
+                            
+                            // Number Color Selection (for modes that use numbers)
+                            if displayMode == .numbers || displayMode == .colorsNumbers || displayMode == .criticalScan {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text("Number Color")
+                                        .font(.headline)
+                                        .foregroundColor(.white)
+                                    
+                                    HStack(spacing: 15) {
+                                        Button(action: {
+                                            numberColor = .white
+                                        }) {
+                                            HStack {
+                                                Circle()
+                                                    .fill(.white)
+                                                    .frame(width: 20, height: 20)
+                                                    .overlay(
+                                                        Circle()
+                                                            .stroke(numberColor == .white ? .blue : .gray, lineWidth: 3)
+                                                    )
+                                                Text("White")
+                                                    .foregroundColor(.white)
+                                                Spacer()
+                                            }
+                                            .padding()
+                                            .background(
+                                                RoundedRectangle(cornerRadius: 10)
+                                                    .fill(numberColor == .white ? .blue.opacity(0.3) : .gray.opacity(0.2))
+                                            )
+                                        }
+                                        
+                                        Button(action: {
+                                            numberColor = .black
+                                        }) {
+                                            HStack {
+                                                Circle()
+                                                    .fill(.black)
+                                                    .frame(width: 20, height: 20)
+                                                    .overlay(
+                                                        Circle()
+                                                            .stroke(numberColor == .black ? .blue : .gray, lineWidth: 3)
+                                                    )
+                                                Text("Black")
+                                                    .foregroundColor(.white)
+                                                Spacer()
+                                            }
+                                            .padding()
+                                            .background(
+                                                RoundedRectangle(cornerRadius: 10)
+                                                    .fill(numberColor == .black ? .blue.opacity(0.3) : .gray.opacity(0.2))
+                                            )
+                                        }
+                                    }
+                                }
+                                .padding()
+                                .background {
+                                    RoundedRectangle(cornerRadius: 15)
+                                        .fill(.ultraThinMaterial)
+                                        .opacity(0.7)
+                                }
+                                .padding(.horizontal)
+                            }
+                            
+                            // Arrow Color Selection (for modes that use arrows)
+                            if displayMode == .colorsArrows || displayMode == .criticalScanArrows {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text("Arrow Color")
+                                        .font(.headline)
+                                        .foregroundColor(.white)
+                                    
+                                    HStack(spacing: 15) {
+                                        Button(action: {
+                                            arrowColor = .white
+                                        }) {
+                                            HStack {
+                                                Circle()
+                                                    .fill(.white)
+                                                    .frame(width: 20, height: 20)
+                                                    .overlay(
+                                                        Circle()
+                                                            .stroke(arrowColor == .white ? .blue : .gray, lineWidth: 3)
+                                                    )
+                                                Text("White")
+                                                    .foregroundColor(.white)
+                                                Spacer()
+                                            }
+                                            .padding()
+                                            .background(
+                                                RoundedRectangle(cornerRadius: 10)
+                                                    .fill(arrowColor == .white ? .blue.opacity(0.3) : .gray.opacity(0.2))
+                                            )
+                                        }
+                                        
+                                        Button(action: {
+                                            arrowColor = .black
+                                        }) {
+                                            HStack {
+                                                Circle()
+                                                    .fill(.black)
+                                                    .frame(width: 20, height: 20)
+                                                    .overlay(
+                                                        Circle()
+                                                            .stroke(arrowColor == .black ? .blue : .gray, lineWidth: 3)
+                                                    )
+                                                Text("Black")
+                                                    .foregroundColor(.white)
+                                                Spacer()
+                                            }
+                                            .padding()
+                                            .background(
+                                                RoundedRectangle(cornerRadius: 10)
+                                                    .fill(arrowColor == .black ? .blue.opacity(0.3) : .gray.opacity(0.2))
+                                            )
+                                        }
+                                    }
+                                }
+                                .padding()
+                                .background {
+                                    RoundedRectangle(cornerRadius: 15)
+                                        .fill(.ultraThinMaterial)
+                                        .opacity(0.7)
+                                }
+                                .padding(.horizontal)
+                            }
                             
                             // Beep Interval Selection (only for Colors + Numbers and Colors + Arrows modes)
                             if displayMode == .colorsNumbers || displayMode == .colorsArrows {
@@ -1721,6 +1850,8 @@ struct DisplayView: View {
     let customActions: [CustomAction]
     let selectedCriticalScanNumbers: [Int]
     let screenProtectionEnabled: Bool
+    let numberColor: Color
+    let arrowColor: Color
     @Binding var showDisplay: Bool
     
     @State private var currentColor: Color
@@ -1771,7 +1902,7 @@ struct DisplayView: View {
     
     let availableLanes = ["Left", "Center", "Right"]
     
-    init(selectedColors: [Color], displayMode: DisplayMode, changeInterval: Double, selectedNumbers: [Int], soundEnabled: Bool, laneSpeed: Double, numberRange: Double, selectedArrows: [String], selectedBeepInterval: BeepInterval, criticalScanDelay: Double, criticalScanDuration: Double, selectedColorSet: ScanningColorSet, customActions: [CustomAction], selectedCriticalScanNumbers: [Int], screenProtectionEnabled: Bool, showDisplay: Binding<Bool>) {
+    init(selectedColors: [Color], displayMode: DisplayMode, changeInterval: Double, selectedNumbers: [Int], soundEnabled: Bool, laneSpeed: Double, numberRange: Double, selectedArrows: [String], selectedBeepInterval: BeepInterval, criticalScanDelay: Double, criticalScanDuration: Double, selectedColorSet: ScanningColorSet, customActions: [CustomAction], selectedCriticalScanNumbers: [Int], screenProtectionEnabled: Bool, numberColor: Color, arrowColor: Color, showDisplay: Binding<Bool>) {
         self.selectedColors = selectedColors
         self.displayMode = displayMode
         self.changeInterval = changeInterval
@@ -1790,6 +1921,8 @@ struct DisplayView: View {
         self._currentNumberColor = State(initialValue: selectedColors.first ?? selectedColors.randomElement() ?? .red)
         self._showDisplay = showDisplay
         self.screenProtectionEnabled = screenProtectionEnabled
+        self.numberColor = numberColor
+        self.arrowColor = arrowColor
     }
     
     var body: some View {
@@ -1833,7 +1966,7 @@ struct DisplayView: View {
                             VStack {
                                 Text("\(currentNumber)")
                                     .font(.system(size: 300, weight: .black))
-                                    .foregroundColor(.white)
+                                    .foregroundColor(numberColor)
                                     .shadow(radius: 15)
                             }
                         }
@@ -1848,7 +1981,7 @@ struct DisplayView: View {
                             VStack {
                                 Image(systemName: currentArrowDirection)
                                     .font(.system(size: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.35, weight: .black))
-                                    .foregroundColor(.white)
+                                    .foregroundColor(arrowColor)
                                     .shadow(radius: 10)
                             }
                         }
@@ -1862,7 +1995,7 @@ struct DisplayView: View {
                         VStack {
                     Text("\(currentNumber)")
                                 .font(.system(size: 120, weight: .bold))
-                                .foregroundColor(.white)
+                                .foregroundColor(numberColor)
                                 .shadow(radius: 10)
                         }
                     }
@@ -1922,7 +2055,7 @@ struct DisplayView: View {
                                 VStack(spacing: 15) {
                                     Text("\(currentActionNumber)")
                                         .font(.system(size: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.4, weight: .bold))
-                                        .foregroundColor(.white)
+                                        .foregroundColor(numberColor)
                                         .shadow(radius: 10)
                                     
                                     Text("CRITICAL SCAN")
@@ -1998,7 +2131,7 @@ struct DisplayView: View {
                                 VStack(spacing: 15) {
                                     Image(systemName: currentArrowDirection)
                                         .font(.system(size: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.35, weight: .black))
-                                        .foregroundColor(.white)
+                                        .foregroundColor(arrowColor)
                                         .shadow(radius: 10)
                                     
                                     Text("CRITICAL SCAN")

@@ -795,6 +795,43 @@ struct MainView: View {
                     // Content
                     ScrollView(showsIndicators: false) {
                         VStack(spacing: 15) {
+                            // Training Environment Section (moved to top)
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Training Environment")
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                                
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack {
+                                        Toggle("", isOn: $screenProtectionEnabled)
+                                            .toggleStyle(SwitchToggleStyle(tint: .green))
+                                        Spacer()
+                                    }
+                                    .padding(.bottom, 4)
+                                    
+                                    Text(screenProtectionEnabled ? "Outdoor Training" : "Indoor Training")
+                                        .font(.subheadline)
+                                        .fontWeight(.semibold)
+                                        .foregroundColor(.white)
+                                    
+                                    Text(screenProtectionEnabled ? "Maximum brightness (100%) & prevents sleep - Use for bright sunlight or hot conditions" : "Standard brightness & prevents sleep - Recommended for indoor training")
+                                        .font(.caption)
+                                        .foregroundColor(.white.opacity(0.7))
+                                    
+                                    Text(screenProtectionEnabled ? "Recommended: Use when training outdoors in bright sunlight, hot weather, or when you need maximum visibility" : "Recommended: Use for indoor training, overcast days, or when you want to save battery")
+                                        .font(.caption)
+                                        .foregroundColor(.white.opacity(0.6))
+                                        .padding(.top, 4)
+                                }
+                            }
+                            .padding()
+                            .background {
+                                RoundedRectangle(cornerRadius: 15)
+                                    .fill(.ultraThinMaterial)
+                                    .opacity(0.7)
+                            }
+                            .padding(.horizontal)
+                            
                             // Mode Selection
                             VStack(alignment: .leading, spacing: 10) {
                                 Text("Scanning Activities")
@@ -1499,43 +1536,6 @@ struct MainView: View {
                                 }
                                 .padding(.horizontal)
                             }
-                            
-                            // Screen Protection Toggle
-                            VStack(alignment: .leading, spacing: 10) {
-                                Text("Training Environment")
-                                    .font(.headline)
-                                    .foregroundColor(.white)
-                                
-                                VStack(alignment: .leading, spacing: 8) {
-                                    HStack {
-                                        Toggle("", isOn: $screenProtectionEnabled)
-                                            .toggleStyle(SwitchToggleStyle(tint: .green))
-                                        Spacer()
-                                    }
-                                    .padding(.bottom, 4)
-                                    
-                                    Text(screenProtectionEnabled ? "Outdoor Training" : "Indoor Training")
-                                        .font(.subheadline)
-                                        .fontWeight(.semibold)
-                                        .foregroundColor(.white)
-                                    
-                                    Text(screenProtectionEnabled ? "Maximum brightness (100%) & prevents sleep - Use for bright sunlight or hot conditions" : "Standard brightness & prevents sleep - Recommended for indoor training")
-                                        .font(.caption)
-                                        .foregroundColor(.white.opacity(0.7))
-                                    
-                                    Text(screenProtectionEnabled ? "Recommended: Use when training outdoors in bright sunlight, hot weather, or when you need maximum visibility" : "Recommended: Use for indoor training, overcast days, or when you want to save battery")
-                                        .font(.caption)
-                                        .foregroundColor(.white.opacity(0.6))
-                                        .padding(.top, 4)
-                                }
-                            }
-                            .padding()
-                            .background {
-                                RoundedRectangle(cornerRadius: 15)
-                                    .fill(.ultraThinMaterial)
-                                    .opacity(0.7)
-                            }
-                            .padding(.horizontal)
                             
                             // Start Button
                             Button(action: {
@@ -2316,6 +2316,7 @@ struct DisplayView: View {
                 currentActionNumber = selectedCriticalScanNumbers.randomElement() ?? 1
                 print("🚨 Phase: CRITICAL SCAN - Action \(currentActionNumber)")
                 
+                
                 // Phase 3: Execution (custom duration to receive and decide)
                 DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanDuration) {
                     guard isActive && displayMode == .criticalScan else { return }
@@ -2545,6 +2546,16 @@ struct ActivitiesGuideView: View {
                             }
                             .padding(.horizontal)
                         }
+                        // Critical Scan Activities
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Critical Scan Activities")
+                            .font(.subheadline)
+                            .foregroundColor(.white.opacity(0.8))
+                                .padding(.horizontal, 4)
+                                .environment(\.sizeCategory, .large) // Force consistent size
+                        // ... existing code ...
+                        }
+                        .padding(.top, 16)
                     .padding(.bottom, 30)
                 }
             }

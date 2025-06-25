@@ -797,14 +797,14 @@ struct MainView: View {
                         VStack(spacing: 15) {
                             // Mode Selection
                             VStack(alignment: .leading, spacing: 10) {
-                                Text("Display Mode")
+                                Text("Scanning Activities")
                                     .font(.headline)
                         .foregroundColor(.white)
                                     .environment(\.sizeCategory, .large) // Force consistent size
                                 
-                                // Normal Scan Modes
+                                // Normal Scan Activities
                                 VStack(alignment: .leading, spacing: 8) {
-                                    Text("Normal Scan Modes")
+                                    Text("Normal Scan Activities")
                                         .font(.subheadline)
                                         .foregroundColor(.white.opacity(0.8))
                                         .padding(.horizontal, 4)
@@ -911,7 +911,7 @@ struct MainView: View {
                                 
                                 // Critical Scan Modes
                                 VStack(alignment: .leading, spacing: 8) {
-                                    Text("Critical Scan Modes")
+                                    Text("Critical Scan Activites")
                                     .font(.subheadline)
                                     .foregroundColor(.white.opacity(0.8))
                                         .padding(.horizontal, 4)

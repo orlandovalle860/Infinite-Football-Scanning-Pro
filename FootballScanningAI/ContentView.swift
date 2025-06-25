@@ -689,7 +689,7 @@ struct MainView: View {
     @State private var numberRange: Double = 2.0 // 1-2 range for Colors + Numbers mode
     @State private var selectedArrows: Set<String> = [] // Selected arrows for Colors + Arrows mode
     @State private var selectedBeepInterval: BeepInterval = .medium // Default to medium
-    @State private var criticalScanDelay: Double = 1.5 // Delay time for critical scan (0.5-3.0 seconds)
+    @State private var criticalScanDelay: Double = 0.5 // Delay time for critical scan (0.5-3.0 seconds)
     @State private var criticalScanDuration: Double = 1.0 // How long critical scan stays on screen (0.5-2.0 seconds)
     @State private var selectedColorSet: ScanningColorSet = .standard // Default to standard colors
     @State private var selectedActionSet: ActionSet = .basic // Default to basic actions
@@ -772,6 +772,7 @@ struct MainView: View {
                 selectedColorSet: selectedColorSet,
                 customActions: customActions,
                 selectedCriticalScanNumbers: Array(selectedCriticalScanNumbers).sorted(),
+                screenProtectionEnabled: screenProtectionEnabled,
                 showDisplay: $showDisplay
             )
             .ignoresSafeArea()
@@ -817,7 +818,7 @@ struct MainView: View {
                                             selectedColors.removeAll()
                                             selectedArrows.removeAll()
                                             selectedBeepInterval = .medium
-                                            criticalScanDelay = 1.5
+                                            criticalScanDelay = 0.5
                                             criticalScanDuration = 1.0
                                         }) {
                                             Text("Colors")
@@ -837,7 +838,7 @@ struct MainView: View {
                                             selectedColors.removeAll()
                                             selectedArrows.removeAll()
                                             selectedBeepInterval = .medium
-                                            criticalScanDelay = 1.5
+                                            criticalScanDelay = 0.5
                                             criticalScanDuration = 1.0
                                         }) {
                                             Text("Colors + Nums")
@@ -856,7 +857,7 @@ struct MainView: View {
                                             selectedColors.removeAll()
                                             selectedArrows.removeAll()
                                             selectedBeepInterval = .medium
-                                            criticalScanDelay = 1.5
+                                            criticalScanDelay = 0.5
                                             criticalScanDuration = 1.0
                                         }) {
                                             Text("Colors + Arrows")
@@ -875,7 +876,7 @@ struct MainView: View {
                                             selectedColors.removeAll()
                                             selectedArrows.removeAll()
                                             selectedBeepInterval = .medium
-                                            criticalScanDelay = 1.5
+                                            criticalScanDelay = 0.5
                                             criticalScanDuration = 1.0
                                         }) {
                                             Text("Nums")
@@ -894,7 +895,7 @@ struct MainView: View {
                                             selectedColors.removeAll()
                                             selectedArrows.removeAll()
                                             selectedBeepInterval = .medium
-                                            criticalScanDelay = 1.5
+                                            criticalScanDelay = 0.5
                                             criticalScanDuration = 1.0
                                         }) {
                                             Text("Lanes")
@@ -924,7 +925,7 @@ struct MainView: View {
                                             selectedColors.removeAll()
                                             selectedArrows.removeAll()
                                             selectedBeepInterval = .medium
-                                            criticalScanDelay = 1.5
+                                            criticalScanDelay = 0.5
                                             criticalScanDuration = 1.0
                                         }) {
                                             Text("Critical Scan Numbers")
@@ -943,7 +944,7 @@ struct MainView: View {
                                             selectedColors.removeAll()
                                             selectedArrows.removeAll()
                                             selectedBeepInterval = .medium
-                                            criticalScanDelay = 1.5
+                                            criticalScanDelay = 0.5
                                             criticalScanDuration = 1.0
                                         }) {
                                             Text("Critical Scan Arrows")
@@ -1283,7 +1284,7 @@ struct MainView: View {
                             // Time Interval Slider (only show for modes that use it)
                             if displayMode != .criticalScan && displayMode != .criticalScanArrows {
                                 VStack(alignment: .leading, spacing: 10) {
-                                    Text(displayMode == .colors || displayMode == .colorsNumbers || displayMode == .colorsArrows ? "Color Changing Time Interval: \(String(format: "%.1f", changeInterval))s" : displayMode == .numbers ? "Color and Number Changing Time Interval: \(String(format: "%.1f", changeInterval))s" : "Time Interval: \(String(format: "%.1f", changeInterval))s")
+                                    Text(displayMode == .colors || displayMode == .colorsNumbers || displayMode == .colorsArrows || displayMode == .lanes ? "Color Changing Time Interval: \(String(format: "%.1f", changeInterval))s" : displayMode == .numbers ? "Color and Number Changing Time Interval: \(String(format: "%.1f", changeInterval))s" : "Time Interval: \(String(format: "%.1f", changeInterval))s")
                                         .font(.headline)
                                         .foregroundColor(.white)
                                     
@@ -1501,31 +1502,28 @@ struct MainView: View {
                             
                             // Screen Protection Toggle
                             VStack(alignment: .leading, spacing: 10) {
-                                Text("Screen Protection")
+                                Text("Training Environment")
                                     .font(.headline)
                                     .foregroundColor(.white)
                                 
                                 VStack(alignment: .leading, spacing: 8) {
                                     HStack {
                                         Toggle("", isOn: $screenProtectionEnabled)
-                                            .toggleStyle(SwitchToggleStyle(tint: .blue))
-                                            .scaleEffect(1.2)
-                                        
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(screenProtectionEnabled ? "Enabled" : "Disabled")
-                                                .font(.subheadline)
-                                                .fontWeight(.semibold)
-                                                .foregroundColor(.white)
-                                            
-                                            Text(screenProtectionEnabled ? "Maximum brightness & prevents sleep" : "Normal device behavior")
-                                                .font(.caption)
-                                                .foregroundColor(.white.opacity(0.7))
-                                        }
-                                        
+                                            .toggleStyle(SwitchToggleStyle(tint: .green))
                                         Spacer()
                                     }
+                                    .padding(.bottom, 4)
                                     
-                                    Text("Enable for outdoor training to prevent screen dimming in bright sunlight")
+                                    Text(screenProtectionEnabled ? "Outdoor Training" : "Indoor Training")
+                                        .font(.subheadline)
+                                        .fontWeight(.semibold)
+                                        .foregroundColor(.white)
+                                    
+                                    Text(screenProtectionEnabled ? "Maximum brightness (100%) & prevents sleep - Use for bright sunlight or hot conditions" : "Standard brightness & prevents sleep - Recommended for indoor training")
+                                        .font(.caption)
+                                        .foregroundColor(.white.opacity(0.7))
+                                    
+                                    Text(screenProtectionEnabled ? "Recommended: Use when training outdoors in bright sunlight, hot weather, or when you need maximum visibility" : "Recommended: Use for indoor training, overcast days, or when you want to save battery")
                                         .font(.caption)
                                         .foregroundColor(.white.opacity(0.6))
                                         .padding(.top, 4)
@@ -1636,8 +1634,9 @@ struct MainView: View {
         .blue,
         .green,
         Color(red: 1.0, green: 0.8, blue: 0.0), // Bright yellow
-        Color(red: 0.9, green: 0.5, blue: 0.0), // Darker orange
+        Color(red: 0.9, green: 0.5, blue: 0.0), // Darker orange (distinct from red and yellow)
         .white,
+        .black,
         Color(red: 1.0, green: 0.4, blue: 0.8)
     ]
     
@@ -1721,6 +1720,7 @@ struct DisplayView: View {
     let selectedColorSet: ScanningColorSet
     let customActions: [CustomAction]
     let selectedCriticalScanNumbers: [Int]
+    let screenProtectionEnabled: Bool
     @Binding var showDisplay: Bool
     
     @State private var currentColor: Color
@@ -1771,7 +1771,7 @@ struct DisplayView: View {
     
     let availableLanes = ["Left", "Center", "Right"]
     
-    init(selectedColors: [Color], displayMode: DisplayMode, changeInterval: Double, selectedNumbers: [Int], soundEnabled: Bool, laneSpeed: Double, numberRange: Double, selectedArrows: [String], selectedBeepInterval: BeepInterval, criticalScanDelay: Double, criticalScanDuration: Double, selectedColorSet: ScanningColorSet, customActions: [CustomAction], selectedCriticalScanNumbers: [Int], showDisplay: Binding<Bool>) {
+    init(selectedColors: [Color], displayMode: DisplayMode, changeInterval: Double, selectedNumbers: [Int], soundEnabled: Bool, laneSpeed: Double, numberRange: Double, selectedArrows: [String], selectedBeepInterval: BeepInterval, criticalScanDelay: Double, criticalScanDuration: Double, selectedColorSet: ScanningColorSet, customActions: [CustomAction], selectedCriticalScanNumbers: [Int], screenProtectionEnabled: Bool, showDisplay: Binding<Bool>) {
         self.selectedColors = selectedColors
         self.displayMode = displayMode
         self.changeInterval = changeInterval
@@ -1789,6 +1789,7 @@ struct DisplayView: View {
         self._currentColor = State(initialValue: selectedColors.first ?? selectedColors.randomElement() ?? .red)
         self._currentNumberColor = State(initialValue: selectedColors.first ?? selectedColors.randomElement() ?? .red)
         self._showDisplay = showDisplay
+        self.screenProtectionEnabled = screenProtectionEnabled
     }
     
     var body: some View {
@@ -1807,7 +1808,7 @@ struct DisplayView: View {
                     
                     if countdown == 0 {
                         Text("GO!")
-                            .font(.system(size: 150, weight: .bold))
+                            .font(.system(size: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.15, weight: .bold))
                             .foregroundColor(.green)
                             .scaleEffect(1.2)
                             .animation(.easeInOut(duration: 0.3), value: countdown)
@@ -1846,9 +1847,9 @@ struct DisplayView: View {
                         if showNumberOrArrow {
                             VStack {
                                 Image(systemName: currentArrowDirection)
-                                    .font(.system(size: 200, weight: .black))
+                                    .font(.system(size: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.35, weight: .black))
                                     .foregroundColor(.white)
-                                    .shadow(radius: 15)
+                                    .shadow(radius: 10)
                             }
                         }
                     }
@@ -1904,7 +1905,7 @@ struct DisplayView: View {
                                     // Scanning circle (cycles through colors every second)
                                     Circle()
                                         .fill(selectedColorSet.colors[scanningColorIndex])
-                                        .frame(width: 300, height: 300)
+                                        .frame(width: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.6, height: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.6)
                                         .background(Color.black)
                                         .clipShape(Circle())
                                         .overlay(
@@ -1920,7 +1921,7 @@ struct DisplayView: View {
                             } else if criticalScanPhase == "CRITICAL" {
                                 VStack(spacing: 15) {
                                     Text("\(currentActionNumber)")
-                                        .font(.system(size: 120, weight: .bold))
+                                        .font(.system(size: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.4, weight: .bold))
                                         .foregroundColor(.white)
                                         .shadow(radius: 10)
                                     
@@ -1930,7 +1931,7 @@ struct DisplayView: View {
                                         .shadow(radius: 5)
                                     
                                     Text(customActions.first { $0.number == currentActionNumber }?.action ?? "")
-                                        .font(.system(size: 30, weight: .medium))
+                                        .font(.system(size: 60, weight: .medium))
                                         .foregroundColor(.white.opacity(0.8))
                                         .multilineTextAlignment(.center)
                                         .padding()
@@ -1980,7 +1981,7 @@ struct DisplayView: View {
                                     // Scanning circle (cycles through colors every second)
                                     Circle()
                                         .fill(selectedColorSet.colors[scanningColorIndex])
-                                        .frame(width: 300, height: 300)
+                                        .frame(width: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.6, height: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.6)
                                         .background(Color.black)
                                         .clipShape(Circle())
                                         .overlay(
@@ -1996,7 +1997,7 @@ struct DisplayView: View {
                             } else if criticalScanPhase == "CRITICAL" {
                                 VStack(spacing: 15) {
                                     Image(systemName: currentArrowDirection)
-                                        .font(.system(size: 120, weight: .bold))
+                                        .font(.system(size: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.35, weight: .black))
                                         .foregroundColor(.white)
                                         .shadow(radius: 10)
                                     
@@ -2048,9 +2049,13 @@ struct DisplayView: View {
         }
         .ignoresSafeArea()
         .onAppear {
-            // Ensure maximum brightness and prevent sleep for outdoor training
-            UIScreen.main.brightness = 1.0
-            UIApplication.shared.isIdleTimerDisabled = true
+            // Set brightness and prevent sleep based on toggle setting
+            if screenProtectionEnabled {
+                UIScreen.main.brightness = 1.0
+                UIApplication.shared.isIdleTimerDisabled = true
+            } else {
+                UIApplication.shared.isIdleTimerDisabled = true // Always prevent sleep during training
+            }
             
             startCountdown()
         }
@@ -2256,9 +2261,15 @@ struct DisplayView: View {
     
     private func startScreenProtectionTimer() {
         screenProtectionTimer?.invalidate()
-        screenProtectionTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-            // Continuously maintain maximum brightness and prevent sleep
-            UIScreen.main.brightness = 1.0
+        
+        if screenProtectionEnabled {
+            screenProtectionTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+                // Continuously maintain maximum brightness and prevent sleep
+                UIScreen.main.brightness = 1.0
+                UIApplication.shared.isIdleTimerDisabled = true
+            }
+        } else {
+            // Only prevent sleep, don't force maximum brightness
             UIApplication.shared.isIdleTimerDisabled = true
         }
     }
@@ -2309,12 +2320,12 @@ struct DisplayView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanDuration) {
                     guard isActive && displayMode == .criticalScan else { return }
                     
-                    // Phase 4: Reset Period (immediate for action 1, 10 seconds for others)
+                    // Phase 4: Reset Period (10 seconds for all actions)
                     criticalScanPhase = "RESET"
                     print("🔄 Phase: RESET - Preparing for next play")
                     
-                    // Determine reset duration based on action performed
-                    let resetDuration: Double = currentActionNumber == 1 ? 0.0 : 10.0
+                    // All actions get 10 second reset period
+                    let resetDuration: Double = 10.0
                     print("⏱️ Reset duration: \(resetDuration) seconds (Action: \(currentActionNumber))")
                     
                     DispatchQueue.main.asyncAfter(deadline: .now() + resetDuration) {
@@ -2409,7 +2420,7 @@ struct DisplayView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanDuration) {
                     guard isActive && displayMode == .criticalScanArrows else { return }
                     
-                    // Phase 4: Reset Period (10 seconds)
+                    // Phase 4: Reset Period (10 seconds for all actions)
                     criticalScanPhase = "RESET"
                     print("🔄 Phase: RESET - Preparing for next play")
                     

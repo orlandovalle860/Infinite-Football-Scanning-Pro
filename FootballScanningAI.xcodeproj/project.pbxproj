@@ -29,7 +29,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		9F592D6F2DFF0B7D00525BF9 /* InfiniteFootballScanningPro.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = InfiniteFootballScanningPro.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		9F592D6F2DFF0B7D00525BF9 /* InfiniteFootballScanningPro.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = InfiniteFootballScanningPro.app; path = "Infinite Football Scanning Pro.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		9F592D7C2DFF0B7E00525BF9 /* FootballScanningAITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FootballScanningAITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9F592D862DFF0B7E00525BF9 /* FootballScanningAIUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FootballScanningAIUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9FDCE9C32E089EAD00F39677 /* critical scan beep.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "critical scan beep.wav"; sourceTree = "<group>"; };
@@ -104,7 +104,7 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		9F592D6E2DFF0B7D00525BF9 /* FootballScanningAI */ = {
+		9F592D6E2DFF0B7D00525BF9 /* InfiniteFootballScanningPro */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 9F592D902DFF0B7E00525BF9 /* Build configuration list for PBXNativeTarget "InfiniteFootballScanningPro" */;
 			buildPhases = (
@@ -209,7 +209,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				9F592D6E2DFF0B7D00525BF9 /* FootballScanningAI */,
+				9F592D6E2DFF0B7D00525BF9 /* InfiniteFootballScanningPro */,
 				9F592D7B2DFF0B7E00525BF9 /* FootballScanningAITests */,
 				9F592D852DFF0B7E00525BF9 /* FootballScanningAIUITests */,
 			);
@@ -269,12 +269,12 @@
 /* Begin PBXTargetDependency section */
 		9F592D7E2DFF0B7E00525BF9 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = 9F592D6E2DFF0B7D00525BF9 /* FootballScanningAI */;
+			target = 9F592D6E2DFF0B7D00525BF9 /* InfiniteFootballScanningPro */;
 			targetProxy = 9F592D7D2DFF0B7E00525BF9 /* PBXContainerItemProxy */;
 		};
 		9F592D882DFF0B7E00525BF9 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = 9F592D6E2DFF0B7D00525BF9 /* FootballScanningAI */;
+			target = 9F592D6E2DFF0B7D00525BF9 /* InfiniteFootballScanningPro */;
 			targetProxy = 9F592D872DFF0B7E00525BF9 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */

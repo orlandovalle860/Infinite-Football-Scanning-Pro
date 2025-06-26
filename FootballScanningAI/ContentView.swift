@@ -888,9 +888,8 @@ struct MainView: View {
                                             displayMode = .colors
                                             selectedNumbers.removeAll()
                                             selectedLanes.removeAll()
-                                            selectedArrows.removeAll()
                                             selectedBeepInterval = .medium
-                                            // Keep selectedColors for shared color selection across normal activities
+                                            // Keep selectedColors and selectedArrows for session persistence
                                         }) {
                                             Text("Colors")
                                                 .font(.system(size: 13, weight: .semibold))
@@ -906,8 +905,8 @@ struct MainView: View {
                                             displayMode = .colorsNumbers
                                             selectedNumbers.removeAll()
                                             selectedLanes.removeAll()
-                                            selectedArrows.removeAll()
                                             selectedBeepInterval = .medium
+                                            // Keep selectedColors and selectedArrows for session persistence
                                         }) {
                                             Text("Colors + Nums")
                                                 .font(.system(size: 13, weight: .semibold))
@@ -922,8 +921,8 @@ struct MainView: View {
                                             displayMode = .colorsArrows
                                             selectedNumbers.removeAll()
                                             selectedLanes.removeAll()
-                                            selectedArrows.removeAll()
                                             selectedBeepInterval = .medium
+                                            // Keep selectedArrows for shared arrow selection between arrow activities
                                         }) {
                                             Text("Colors + Arrows")
                                                 .font(.system(size: 13, weight: .semibold))
@@ -938,8 +937,8 @@ struct MainView: View {
                                             displayMode = .numbers
                                             selectedNumbers.removeAll()
                                             selectedLanes.removeAll()
-                                            selectedArrows.removeAll()
                                             selectedBeepInterval = .medium
+                                            // Keep selectedColors and selectedArrows for session persistence
                                         }) {
                                             Text("Nums")
                                                 .font(.system(size: 13, weight: .semibold))
@@ -955,8 +954,8 @@ struct MainView: View {
                                             selectedNumbers.removeAll()
                                             selectedLanes.removeAll()
                                             selectedColors.removeAll()
-                                            selectedArrows.removeAll()
                                             selectedBeepInterval = .medium
+                                            // Keep selectedArrows for session persistence, but clear colors for independent lane selection
                                         }) {
                                             Text("Lanes")
                                                 .font(.system(size: 13, weight: .semibold))
@@ -982,8 +981,8 @@ struct MainView: View {
                                             displayMode = .criticalScan
                                             selectedNumbers.removeAll()
                                             selectedLanes.removeAll()
-                                            selectedArrows.removeAll()
                                             selectedBeepInterval = .medium
+                                            // Keep selectedArrows for session persistence
                                         }) {
                                             Text("Critical Scan Numbers")
                                                 .font(.system(size: 14, weight: .semibold))
@@ -998,8 +997,8 @@ struct MainView: View {
                                             displayMode = .criticalScanArrows
                                             selectedNumbers.removeAll()
                                             selectedLanes.removeAll()
-                                            selectedArrows.removeAll()
                                             selectedBeepInterval = .medium
+                                            // Keep selectedArrows for shared arrow selection between arrow activities
                                         }) {
                                             Text("Critical Scan Arrows")
                                                 .font(.system(size: 14, weight: .semibold))

@@ -12,63 +12,6 @@ import AVFoundation
 import AudioToolbox
 import UIKit
 
-enum BeepInterval: String, CaseIterable {
-    case fast = "Fast (2-4s)"
-    case medium = "Medium (4-6s)" 
-    case slow = "Slow (8-10s)"
-    
-    var range: ClosedRange<Double> {
-        switch self {
-        case .fast: return 2.0...4.0
-        case .medium: return 4.0...6.0
-        case .slow: return 8.0...10.0
-        }
-    }
-}
-
-enum ScanningColorSet: String, CaseIterable {
-    case standard = "Standard (White/Black/Red)"
-    case highContrast = "High Contrast (Yellow/Blue/White)"
-    case vibrant = "Vibrant (Orange/Green/Purple)"
-    
-    var colors: [Color] {
-        switch self {
-        case .standard:
-            return [.white, .black, .red]
-        case .highContrast:
-            return [.yellow, .blue, .white]
-        case .vibrant:
-            return [.orange, .green, .purple]
-        }
-    }
-}
-
-enum ActionSet: String, CaseIterable {
-    case basic = "Basic Actions"
-    case advanced = "Advanced Actions"
-    case defensive = "Defensive Actions"
-    case custom = "Custom Actions"
-    
-    var actions: [String] {
-        switch self {
-        case .basic:
-            return ["Dribble forward", "Dribble left", "Dribble right", "Dribble back", "Pass left", "Pass right", "Pass forward", "Pass back", "Shoot"]
-        case .advanced:
-            return ["Turn left", "Turn right", "Cross to far post", "Through ball", "Long shot", "One-touch pass"]
-        case .defensive:
-            return ["Tackle", "Intercept", "Mark player", "Clear ball", "Close down", "Cover space"]
-        case .custom:
-            return ["Custom Action 1", "Custom Action 2", "Custom Action 3", "Custom Action 4"]
-        }
-    }
-}
-
-struct CustomAction {
-    let number: Int
-    var action: String
-    var isCustom: Bool
-}
-
 struct DisplayModeButtonStyle: ButtonStyle {
     let isSelected: Bool
     let color: Color
@@ -164,6 +107,29 @@ struct ActivitiesButtonStyle: ButtonStyle {
             )
             .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
             .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
+    }
+}
+
+struct NumberColorButtonStyle: ButtonStyle {
+    let isSelected: Bool
+    let color: Color
+    
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(backgroundColor)
+            )
+            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
+            .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
+    }
+    
+    private var backgroundColor: Color {
+        if isSelected {
+            return .blue.opacity(0.3)
+        } else {
+            return color == .white ? Color(.sRGB, white: 0.15, opacity: 1.0) : Color(.sRGB, white: 0.95, opacity: 1.0)
+        }
     }
 }
 
@@ -340,9 +306,18 @@ struct SplashScreen: View {
 }
 
 struct ContentView: View {
+    @StateObject private var settingsViewModel = SettingsViewModel()
+    @StateObject private var profileManager = UserProfileManager()
+    
     var body: some View {
-        NavigationStack {
-            IntroView()
+        Group {
+            if profileManager.isProfileCreated {
+                // User has profiles - show main app with tabs
+                MainAppView(profileManager: profileManager, settingsViewModel: settingsViewModel)
+            } else {
+                // No profiles - show profile creation
+                ProfileCreationView(profileManager: profileManager)
+            }
         }
         .navigationViewStyle(.stack)
         .environment(\.sizeCategory, .large) // Force consistent sizing
@@ -350,16 +325,58 @@ struct ContentView: View {
     }
 }
 
+struct MainAppView: View {
+    @ObservedObject var profileManager: UserProfileManager
+    @ObservedObject var settingsViewModel: SettingsViewModel
+    @State private var selectedTab = 0
+    
+    var body: some View {
+        TabView(selection: $selectedTab) {
+            // Training Tab
+            NavigationStack {
+                IntroView(profileManager: profileManager)
+            }
+            .tabItem {
+                Image(systemName: "figure.soccer")
+                Text("Training")
+            }
+            .tag(0)
+            
+            // Profile Tab
+            ProfileView(profileManager: profileManager)
+            .tabItem {
+                Image(systemName: "person.circle")
+                Text("Profile")
+            }
+            .tag(1)
+        }
+        .accentColor(.blue)
+    }
+}
+
 struct IntroView: View {
+    @ObservedObject var profileManager: UserProfileManager
     @State private var navigateToMain = false
     
     var body: some View {
         ScrollView {
             VStack(spacing: 30) {
                 // Header
+                VStack(spacing: 10) {
                 Text("The Art of Scanning")
                     .font(.system(size: 40, weight: .bold))
                     .foregroundColor(.white)
+                    
+                    if profileManager.hasMultipleProfiles(), let currentProfile = profileManager.currentProfile {
+                        Text("Training as: \(currentProfile.name)")
+                            .font(.headline)
+                            .foregroundColor(.blue)
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 8)
+                            .background(.ultraThinMaterial)
+                            .cornerRadius(20)
+                    }
+                }
                     .padding(.top, 40)
                 
                 // What is Scanning Section
@@ -546,18 +563,18 @@ struct IntroView: View {
                             .stroke(.white.opacity(0.2), lineWidth: 1)
                     )
                     
-                    // Kroos Section
+                    // De Bruyne Section
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("Toni Kroos")
+                        Text("Kevin De Bruyne")
                             .font(.title3)
                             .fontWeight(.bold)
                             .foregroundColor(.white)
                         
-                        Text("Kroos scans the field before receiving the ball, enabling him to make perfect first-time passes.")
+                        Text("De Bruyne's scanning skills enable him to execute perfect through balls and crosses, often without even looking at his target.")
                             .foregroundColor(.white.opacity(0.8))
                             .lineSpacing(4)
                         
-                        Link(destination: URL(string: "https://www.youtube.com/shorts/cUZnfkri6yw")!) {
+                        Link(destination: URL(string: "https://www.youtube.com/watch?v=8j8BxM0ZqXY")!) {
                             HStack {
                                 Image(systemName: "play.circle.fill")
                                 Text("Watch Example")
@@ -582,17 +599,27 @@ struct IntroView: View {
                         .stroke(.white.opacity(0.2), lineWidth: 1)
                 )
                 
-                // Start Practice Button
-                Button(action: { navigateToMain = true }) {
-                    Text("Start Practice")
+                // Start Training Button
+                NavigationLink(destination: MainView(profileManager: profileManager)) {
+                    HStack {
+                        Image(systemName: "figure.soccer")
+                        if profileManager.hasMultipleProfiles(), let currentProfile = profileManager.currentProfile {
+                            Text("Start Training - \(currentProfile.name)")
+                        } else {
+                            Text("Start Training")
+                        }
+                    }
                         .font(.title2)
                         .fontWeight(.bold)
                         .foregroundColor(.white)
                         .frame(maxWidth: .infinity)
                         .padding()
+                    .background(Color.blue)
+                    .cornerRadius(15)
                 }
-                .buttonStyle(StartButtonStyle(isEnabled: true))
+                .buttonStyle(PlainButtonStyle())
                 .padding(.horizontal)
+                .padding(.bottom, 40)
             }
             .padding()
         }
@@ -607,9 +634,6 @@ struct IntroView: View {
             )
             .ignoresSafeArea()
         )
-        .navigationDestination(isPresented: $navigateToMain) {
-            MainView()
-        }
     }
 }
 
@@ -659,6 +683,9 @@ struct PlayerExample: View {
 }
 
 struct MainView: View {
+    @StateObject private var settingsViewModel = SettingsViewModel()
+    @ObservedObject var profileManager: UserProfileManager
+    
     @State private var selectedColors: [Color] = []
     @State private var selectedNumbers: Set<Int> = []
     @State private var selectedLanes: Set<String> = []
@@ -677,7 +704,7 @@ struct MainView: View {
     @State private var animationDirection: Bool = true // true = top to bottom, false = bottom to top
     @State private var animationOffset: CGFloat = 0
     @State private var timer: Timer?
-    @State private var soundEnabled: Bool = true
+    // Sound and critical scan settings now managed by ViewModel
     @State private var isActive: Bool = true
     @State private var audioPlayer: AVAudioPlayer?
     @State private var criticalScanAudioPlayer: AVAudioPlayer?
@@ -689,20 +716,10 @@ struct MainView: View {
     @State private var numberRange: Double = 2.0 // 1-2 range for Colors + Numbers mode
     @State private var selectedArrows: Set<String> = [] // Selected arrows for Colors + Arrows mode
     @State private var selectedBeepInterval: BeepInterval = .medium // Default to medium
-    @State private var criticalScanDelay: Double = 0.5 // Delay time for critical scan (0.5-3.0 seconds)
-    @State private var criticalScanDuration: Double = 1.0 // How long critical scan stays on screen (0.5-2.0 seconds)
+    // Critical scan settings now managed by ViewModel
     @State private var selectedColorSet: ScanningColorSet = .standard // Default to standard colors
     @State private var selectedActionSet: ActionSet = .basic // Default to basic actions
-    @State private var customActions: [CustomAction] = [
-        CustomAction(number: 1, action: "Action", isCustom: false),
-        CustomAction(number: 2, action: "Action", isCustom: false),
-        CustomAction(number: 3, action: "Action", isCustom: false),
-        CustomAction(number: 4, action: "Action", isCustom: false),
-        CustomAction(number: 5, action: "Action", isCustom: false),
-        CustomAction(number: 6, action: "Action", isCustom: false),
-        CustomAction(number: 7, action: "Action", isCustom: false),
-        CustomAction(number: 8, action: "Action", isCustom: false)
-    ]
+    // Custom actions now managed by SettingsViewModel
     @State private var showingCustomActionSheet = false
     @State private var editingActionNumber: Int = 1
     @State private var showingActionList = false
@@ -715,6 +732,10 @@ struct MainView: View {
     // Number and Arrow Color Selection
     @State private var numberColor: Color = .white // Default to white
     @State private var arrowColor: Color = .white // Default to white
+    
+    // Session tracking
+    @State private var sessionStartTime: Date?
+    @State private var sessionDuration: TimeInterval = 0
     
     // Arrow directions for colorsArrows mode
     private let arrowDirections = [
@@ -747,12 +768,12 @@ struct MainView: View {
     
     let availableLanes = ["Left", "Center", "Right"]
     
-    init(selectedColors: [Color] = [], displayMode: DisplayMode = .colors, changeInterval: Double = 1.5, selectedNumbers: Set<Int> = [], soundEnabled: Bool = true) {
+    init(profileManager: UserProfileManager, selectedColors: [Color] = [], displayMode: DisplayMode = .colors, changeInterval: Double = 1.5, selectedNumbers: Set<Int> = []) {
+        self.profileManager = profileManager
         self.selectedColors = selectedColors
         self.displayMode = displayMode
         self.changeInterval = changeInterval
         self.selectedNumbers = selectedNumbers
-        self.soundEnabled = soundEnabled
         _currentColor = State(initialValue: selectedColors.first ?? selectedColors.randomElement() ?? .red)
         _currentNumberColor = State(initialValue: selectedColors.first ?? selectedColors.randomElement() ?? .red)
     }
@@ -765,26 +786,28 @@ struct MainView: View {
                 displayMode: displayMode,
                 changeInterval: changeInterval,
                 selectedNumbers: Array(selectedNumbers).sorted(),
-                soundEnabled: soundEnabled,
+                soundEnabled: settingsViewModel.soundEnabled,
                 laneSpeed: laneSpeed,
                 numberRange: numberRange,
                 selectedArrows: Array(selectedArrows),
                 selectedBeepInterval: selectedBeepInterval,
-                criticalScanDelay: criticalScanDelay,
-                criticalScanDuration: criticalScanDuration,
+                criticalScanDelay: settingsViewModel.criticalScanDelay,
+                criticalScanDuration: settingsViewModel.criticalScanDuration,
+                criticalScanResetTime: settingsViewModel.criticalScanResetTime,
                 selectedColorSet: selectedColorSet,
-                customActions: customActions,
+                selectedActionSet: selectedActionSet,
+                customActions: settingsViewModel.customActions,
                 selectedCriticalScanNumbers: Array(selectedCriticalScanNumbers).sorted(),
-                screenProtectionEnabled: screenProtectionEnabled,
+                screenProtectionEnabled: settingsViewModel.screenProtectionEnabled,
                 numberColor: numberColor,
                 arrowColor: arrowColor,
-                showDisplay: $showDisplay
+                showDisplay: $showDisplay,
+                profileManager: profileManager
             )
             .ignoresSafeArea()
             .background(Color.black.ignoresSafeArea())
         } else {
             // Configuration View
-            NavigationView {
         ZStack {
                     // Background
                     LinearGradient(
@@ -800,48 +823,56 @@ struct MainView: View {
                     // Content
                     ScrollView(showsIndicators: false) {
                         VStack(spacing: 15) {
-                            // Training Environment Section (moved to top)
-                            VStack(alignment: .leading, spacing: 10) {
-                                Text("Training Environment")
-                                    .font(.headline)
+                        // Training Environment Section (moved to top)
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Training Environment")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                            
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Toggle("", isOn: $settingsViewModel.screenProtectionEnabled)
+                                        .toggleStyle(SwitchToggleStyle(tint: .green))
+                                    Spacer()
+                                }
+                                .padding(.bottom, 4)
+                                
+                                Text(settingsViewModel.screenProtectionEnabled ? "Outdoor Training" : "Indoor Training")
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
                                     .foregroundColor(.white)
                                 
-                                VStack(alignment: .leading, spacing: 8) {
-                                    HStack {
-                                        Toggle("", isOn: $screenProtectionEnabled)
-                                            .toggleStyle(SwitchToggleStyle(tint: .green))
-                                        Spacer()
-                                    }
-                                    .padding(.bottom, 4)
-                                    
-                                    Text(screenProtectionEnabled ? "Outdoor Training" : "Indoor Training")
-                                        .font(.subheadline)
-                                        .fontWeight(.semibold)
-                                        .foregroundColor(.white)
-                                    
-                                    Text(screenProtectionEnabled ? "Maximum brightness (100%) & prevents sleep - Use for bright sunlight or hot conditions" : "Standard brightness & prevents sleep - Recommended for indoor training")
-                                        .font(.caption)
-                                        .foregroundColor(.white.opacity(0.7))
-                                    
-                                    Text(screenProtectionEnabled ? "Recommended: Use when training outdoors in bright sunlight, hot weather, or when you need maximum visibility" : "Recommended: Use for indoor training, overcast days, or when you want to save battery")
-                                        .font(.caption)
-                                        .foregroundColor(.white.opacity(0.6))
-                                        .padding(.top, 4)
-                                }
+                                Text(settingsViewModel.screenProtectionEnabled ? "Maximum brightness (100%) & prevents sleep - Use for bright sunlight or hot conditions" : "Standard brightness & prevents sleep - Recommended for indoor training")
+                                    .font(.caption)
+                                    .foregroundColor(.white.opacity(0.7))
+                                
+                                Text(settingsViewModel.screenProtectionEnabled ? "Recommended: Use when training outdoors in bright sunlight, hot weather, or when you need maximum visibility" : "Recommended: Use for indoor training, overcast days, or when you want to save battery")
+                                    .font(.caption)
+                                    .foregroundColor(.white.opacity(0.6))
+                                    .padding(.top, 4)
                             }
-                            .padding()
-                            .background {
-                                RoundedRectangle(cornerRadius: 15)
-                                    .fill(.ultraThinMaterial)
-                                    .opacity(0.7)
-                            }
-                            .padding(.horizontal)
-                            
+                        }
+                        .padding()
+                        .background {
+                            RoundedRectangle(cornerRadius: 15)
+                                .fill(.ultraThinMaterial)
+                                .opacity(0.7)
+                        }
+                        .padding(.horizontal)
+                        
                             // Mode Selection
                             VStack(alignment: .leading, spacing: 10) {
-                                Text("Scanning Activities")
+                            Text("Scanning Activities")
                                     .font(.headline)
                         .foregroundColor(.white)
+                                    .environment(\.sizeCategory, .large) // Force consistent size
+                                
+                            // Normal Scan Activities
+                                VStack(alignment: .leading, spacing: 8) {
+                                Text("Normal Scan Activities")
+                                    .font(.subheadline)
+                                    .foregroundColor(.white.opacity(0.8))
+                                    .padding(.horizontal, 4)
                                     .environment(\.sizeCategory, .large) // Force consistent size
                                 
                                 // Normal Scan Activities
@@ -857,11 +888,9 @@ struct MainView: View {
                                             displayMode = .colors
                                             selectedNumbers.removeAll()
                                             selectedLanes.removeAll()
-                                            selectedColors.removeAll()
                                             selectedArrows.removeAll()
                                             selectedBeepInterval = .medium
-                                            criticalScanDelay = 0.5
-                                            criticalScanDuration = 1.0
+                                            // Keep selectedColors for shared color selection across normal activities
                                         }) {
                                             Text("Colors")
                                                 .font(.system(size: 13, weight: .semibold))
@@ -877,11 +906,8 @@ struct MainView: View {
                                             displayMode = .colorsNumbers
                                             selectedNumbers.removeAll()
                                             selectedLanes.removeAll()
-                                            selectedColors.removeAll()
                                             selectedArrows.removeAll()
                                             selectedBeepInterval = .medium
-                                            criticalScanDelay = 0.5
-                                            criticalScanDuration = 1.0
                                         }) {
                                             Text("Colors + Nums")
                                                 .font(.system(size: 13, weight: .semibold))
@@ -896,11 +922,8 @@ struct MainView: View {
                                             displayMode = .colorsArrows
                                             selectedNumbers.removeAll()
                                             selectedLanes.removeAll()
-                                            selectedColors.removeAll()
                                             selectedArrows.removeAll()
                                             selectedBeepInterval = .medium
-                                            criticalScanDelay = 0.5
-                                            criticalScanDuration = 1.0
                                         }) {
                                             Text("Colors + Arrows")
                                                 .font(.system(size: 13, weight: .semibold))
@@ -915,11 +938,8 @@ struct MainView: View {
                                             displayMode = .numbers
                                             selectedNumbers.removeAll()
                                             selectedLanes.removeAll()
-                                            selectedColors.removeAll()
                                             selectedArrows.removeAll()
                                             selectedBeepInterval = .medium
-                                            criticalScanDelay = 0.5
-                                            criticalScanDuration = 1.0
                                         }) {
                                             Text("Nums")
                                                 .font(.system(size: 13, weight: .semibold))
@@ -937,8 +957,6 @@ struct MainView: View {
                                             selectedColors.removeAll()
                                             selectedArrows.removeAll()
                                             selectedBeepInterval = .medium
-                                            criticalScanDelay = 0.5
-                                            criticalScanDuration = 1.0
                                         }) {
                                             Text("Lanes")
                                                 .font(.system(size: 13, weight: .semibold))
@@ -964,11 +982,8 @@ struct MainView: View {
                                             displayMode = .criticalScan
                                             selectedNumbers.removeAll()
                                             selectedLanes.removeAll()
-                                            selectedColors.removeAll()
                                             selectedArrows.removeAll()
                                             selectedBeepInterval = .medium
-                                            criticalScanDelay = 0.5
-                                            criticalScanDuration = 1.0
                                         }) {
                                             Text("Critical Scan Numbers")
                                                 .font(.system(size: 14, weight: .semibold))
@@ -983,11 +998,8 @@ struct MainView: View {
                                             displayMode = .criticalScanArrows
                                             selectedNumbers.removeAll()
                                             selectedLanes.removeAll()
-                                            selectedColors.removeAll()
                                             selectedArrows.removeAll()
                                             selectedBeepInterval = .medium
-                                            criticalScanDelay = 0.5
-                                            criticalScanDuration = 1.0
                                         }) {
                                             Text("Critical Scan Arrows")
                                                 .font(.system(size: 14, weight: .semibold))
@@ -1018,7 +1030,7 @@ struct MainView: View {
                                     
                         Spacer()
                                     
-                                    Toggle("", isOn: $soundEnabled)
+                                    Toggle("", isOn: $settingsViewModel.soundEnabled)
                                         .labelsHidden()
                                 }
                             }
@@ -1030,7 +1042,7 @@ struct MainView: View {
                             }
                             .padding(.horizontal)
                             
-                            // Number Color Selection (for modes that use numbers)
+                            // Number Color Selection (only for modes that use numbers)
                             if displayMode == .numbers || displayMode == .colorsNumbers || displayMode == .criticalScan {
                                 VStack(alignment: .leading, spacing: 10) {
                                     Text("Number Color")
@@ -1051,14 +1063,12 @@ struct MainView: View {
                                                     )
                                                 Text("White")
                                                     .foregroundColor(.white)
-                                                Spacer()
                                             }
-                                            .padding()
-                                            .background(
-                                                RoundedRectangle(cornerRadius: 10)
-                                                    .fill(numberColor == .white ? .blue.opacity(0.3) : .gray.opacity(0.2))
-                                            )
+                                            .padding(.vertical, 12)
+                                            .padding(.horizontal, 16)
+                                            .frame(maxWidth: .infinity)
                                         }
+                                        .buttonStyle(NumberColorButtonStyle(isSelected: numberColor == .white, color: .white))
                                         
                                         Button(action: {
                                             numberColor = .black
@@ -1072,15 +1082,13 @@ struct MainView: View {
                                                             .stroke(numberColor == .black ? .blue : .gray, lineWidth: 3)
                                                     )
                                                 Text("Black")
-                                                    .foregroundColor(.white)
-                                                Spacer()
+                                                    .foregroundColor(.black)
                                             }
-                                            .padding()
-                                            .background(
-                                                RoundedRectangle(cornerRadius: 10)
-                                                    .fill(numberColor == .black ? .blue.opacity(0.3) : .gray.opacity(0.2))
-                                            )
+                                            .padding(.vertical, 12)
+                                            .padding(.horizontal, 16)
+                                            .frame(maxWidth: .infinity)
                                         }
+                                        .buttonStyle(NumberColorButtonStyle(isSelected: numberColor == .black, color: .black))
                                     }
                                 }
                                 .padding()
@@ -1113,14 +1121,12 @@ struct MainView: View {
                                                     )
                                                 Text("White")
                                                     .foregroundColor(.white)
-                                                Spacer()
                                             }
-                                            .padding()
-                                            .background(
-                                                RoundedRectangle(cornerRadius: 10)
-                                                    .fill(arrowColor == .white ? .blue.opacity(0.3) : .gray.opacity(0.2))
-                                            )
+                                            .padding(.vertical, 12)
+                                            .padding(.horizontal, 16)
+                                            .frame(maxWidth: .infinity)
                                         }
+                                        .buttonStyle(NumberColorButtonStyle(isSelected: arrowColor == .white, color: .white))
                                         
                                         Button(action: {
                                             arrowColor = .black
@@ -1134,15 +1140,13 @@ struct MainView: View {
                                                             .stroke(arrowColor == .black ? .blue : .gray, lineWidth: 3)
                                                     )
                                                 Text("Black")
-                                                    .foregroundColor(.white)
-                                                Spacer()
+                                                    .foregroundColor(.black)
                                             }
-                                            .padding()
-                                            .background(
-                                                RoundedRectangle(cornerRadius: 10)
-                                                    .fill(arrowColor == .black ? .blue.opacity(0.3) : .gray.opacity(0.2))
-                                            )
+                                            .padding(.vertical, 12)
+                                            .padding(.horizontal, 16)
+                                            .frame(maxWidth: .infinity)
                                         }
+                                        .buttonStyle(NumberColorButtonStyle(isSelected: arrowColor == .black, color: .black))
                                     }
                                 }
                                 .padding()
@@ -1154,8 +1158,8 @@ struct MainView: View {
                                 .padding(.horizontal)
                             }
                             
-                            // Beep Interval Selection (only for Colors + Numbers and Colors + Arrows modes)
-                            if displayMode == .colorsNumbers || displayMode == .colorsArrows {
+                            // Beep Interval Selection (for Colors, Colors + Numbers, Colors + Arrows, Numbers, and Lanes modes)
+                            if displayMode == .colors || displayMode == .colorsNumbers || displayMode == .colorsArrows || displayMode == .numbers || displayMode == .lanes {
                                 VStack(alignment: .leading, spacing: 10) {
                                     Text("Beep Interval")
                                         .font(.headline)
@@ -1488,11 +1492,11 @@ struct MainView: View {
                             // Critical Scan Delay Slider (only for Critical Scan mode)
                             if displayMode == .criticalScan || displayMode == .criticalScanArrows {
                                 VStack(alignment: .leading, spacing: 10) {
-                                    Text("Critical Scan Delay: \(String(format: "%.1f", criticalScanDelay))s")
+                                    Text("Critical Scan Delay: \(String(format: "%.1f", settingsViewModel.criticalScanDelay))s")
                                         .font(.headline)
                                         .foregroundColor(.white)
                                     
-                                    Slider(value: $criticalScanDelay, in: 0.5...3.0, step: 0.1)
+                                    Slider(value: $settingsViewModel.criticalScanDelay, in: 0.5...3.0, step: 0.1)
                                         .accentColor(.red)
                                 }
                                 .padding()
@@ -1507,12 +1511,31 @@ struct MainView: View {
                             // Critical Scan Duration Slider (only for Critical Scan mode)
                             if displayMode == .criticalScan || displayMode == .criticalScanArrows {
                                 VStack(alignment: .leading, spacing: 10) {
-                                    Text("Critical Scan Duration: \(String(format: "%.1f", criticalScanDuration))s")
+                                    Text("Critical Scan Duration: \(String(format: "%.1f", settingsViewModel.criticalScanDuration))s")
                                         .font(.headline)
                                         .foregroundColor(.white)
                                     
-                                    Slider(value: $criticalScanDuration, in: 0.5...2.0, step: 0.1)
+                                    Slider(value: $settingsViewModel.criticalScanDuration, in: 0.5...2.0, step: 0.1)
                                         .accentColor(.orange)
+                                }
+                                .padding()
+                                .background {
+                                    RoundedRectangle(cornerRadius: 15)
+                                        .fill(.ultraThinMaterial)
+                                        .opacity(0.7)
+                                }
+                                .padding(.horizontal)
+                            }
+                            
+                            // Critical Scan Reset Time Slider (only for Critical Scan mode)
+                            if displayMode == .criticalScan || displayMode == .criticalScanArrows {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text("Reset Time: \(String(format: "%.0f", settingsViewModel.criticalScanResetTime))s")
+                                        .font(.headline)
+                                        .foregroundColor(.white)
+                                    
+                                    Slider(value: $settingsViewModel.criticalScanResetTime, in: 1.0...10.0, step: 1.0)
+                                        .accentColor(.purple)
                                 }
                                 .padding()
                                 .background {
@@ -1538,9 +1561,6 @@ struct MainView: View {
                                     .pickerStyle(MenuPickerStyle())
                                     .accentColor(.white)
                                     .frame(maxWidth: .infinity, alignment: .leading)
-                                    .onChange(of: selectedActionSet) { _, newValue in
-                                        updateCustomActions()
-                                    }
                                 }
                                 .padding()
                                 .background {
@@ -1627,7 +1647,7 @@ struct MainView: View {
                                         .foregroundColor(.white)
                                     
                                     VStack(spacing: 8) {
-                                        ForEach(customActions.filter { selectedCriticalScanNumbers.contains($0.number) }, id: \.number) { customAction in
+                                        ForEach(settingsViewModel.customActions.filter { selectedCriticalScanNumbers.contains($0.number) }, id: \.number) { customAction in
                                             Button(action: {
                                                 selectedActionForNumber = customAction.number
                                                 showingActionList = true
@@ -1683,6 +1703,16 @@ struct MainView: View {
                             .disabled(!isStartEnabled)
                             .padding(.horizontal)
                             
+                            // Helper text when start button is disabled
+                            if !isStartEnabled {
+                                Text(requiredSelectionsText)
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                                    .multilineTextAlignment(.center)
+                                    .padding(.horizontal)
+                                    .padding(.bottom, 10)
+                            }
+                            
                             // Activities Button
                             Button(action: {
                                 showActivities = true
@@ -1712,26 +1742,28 @@ struct MainView: View {
                 .sheet(isPresented: $showingCustomActionSheet) {
                     CustomActionSheet(
                         actionNumber: editingActionNumber,
-                        currentAction: customActions.first { $0.number == editingActionNumber }?.action ?? "",
+                        currentAction: settingsViewModel.customActions.first { $0.number == editingActionNumber }?.action ?? "",
                         selectedActionSet: selectedActionSet,
                         onSave: { newAction in
-                            if let index = customActions.firstIndex(where: { $0.number == editingActionNumber }) {
-                                customActions[index].action = newAction
-                                customActions[index].isCustom = true
-                            }
+                            settingsViewModel.updateCustomAction(
+                                number: editingActionNumber,
+                                action: newAction,
+                                isCustom: true
+                            )
                         }
                     )
                 }
                 .sheet(isPresented: $showingActionList) {
                     ActionListSheet(
                         actionNumber: selectedActionForNumber,
-                        currentAction: customActions.first { $0.number == selectedActionForNumber }?.action ?? "",
-                        basicActions: ActionSet.basic.actions,
+                        currentAction: settingsViewModel.customActions.first { $0.number == selectedActionForNumber }?.action ?? "",
+                        basicActions: ActionSet.basic.actions + ActionSet.advanced.actions + ActionSet.defensive.actions,
                         onSelect: { selectedAction in
-                            if let index = customActions.firstIndex(where: { $0.number == selectedActionForNumber }) {
-                                customActions[index].action = selectedAction
-                                customActions[index].isCustom = !ActionSet.basic.actions.contains(selectedAction)
-                            }
+                            settingsViewModel.updateCustomAction(
+                                number: selectedActionForNumber,
+                                action: selectedAction,
+                                isCustom: !ActionSet.basic.actions.contains(selectedAction)
+                            )
                         }
                     )
                 }
@@ -1740,22 +1772,73 @@ struct MainView: View {
     }
     
     private var isStartEnabled: Bool {
-        if displayMode == .colors {
+        switch displayMode {
+        case .colors:
+            // Require at least one color for basic colors activity
             return !selectedColors.isEmpty
-        } else if displayMode == .colorsNumbers {
+        case .colorsNumbers:
+            // Require at least one color (number range is handled by slider)
             return !selectedColors.isEmpty
-        } else if displayMode == .colorsArrows {
+        case .colorsArrows:
+            // Require at least one color and one arrow
             return !selectedColors.isEmpty && !selectedArrows.isEmpty
-        } else if displayMode == .numbers {
-            return !selectedColors.isEmpty && !selectedNumbers.isEmpty
-        } else if displayMode == .lanes {
-            return !selectedColors.isEmpty && !selectedLanes.isEmpty
-        } else if displayMode == .criticalScan {
-            return true // Critical Scan mode doesn't need any selections
-        } else if displayMode == .criticalScanArrows {
-            return !selectedArrows.isEmpty // Need at least one arrow selected
+        case .numbers:
+            // Require at least one number and one color
+            return !selectedNumbers.isEmpty && !selectedColors.isEmpty
+        case .lanes:
+            // Require at least one lane and one color
+            return !selectedLanes.isEmpty && !selectedColors.isEmpty
+        case .criticalScan:
+            // Critical scan numbers mode works with default values
+            return true
+        case .criticalScanArrows:
+            // Require at least one arrow direction
+            return !selectedArrows.isEmpty
         }
-        return false
+    }
+    
+    private var requiredSelectionsText: String {
+        switch displayMode {
+        case .colors:
+            if selectedColors.isEmpty {
+                return "Please select at least one color to start training"
+            }
+        case .colorsNumbers:
+            if selectedColors.isEmpty {
+                return "Please select at least one color to start training"
+            }
+        case .colorsArrows:
+            if selectedColors.isEmpty && selectedArrows.isEmpty {
+                return "Please select at least one color and one arrow direction"
+            } else if selectedColors.isEmpty {
+                return "Please select at least one color"
+            } else if selectedArrows.isEmpty {
+                return "Please select at least one arrow direction"
+            }
+        case .numbers:
+            if selectedNumbers.isEmpty && selectedColors.isEmpty {
+                return "Please select at least one number and one color"
+            } else if selectedNumbers.isEmpty {
+                return "Please select at least one number"
+            } else if selectedColors.isEmpty {
+                return "Please select at least one color"
+            }
+        case .lanes:
+            if selectedLanes.isEmpty && selectedColors.isEmpty {
+                return "Please select at least one lane and one color"
+            } else if selectedLanes.isEmpty {
+                return "Please select at least one lane"
+            } else if selectedColors.isEmpty {
+                return "Please select at least one color"
+            }
+        case .criticalScan:
+            return "" // Critical scan numbers mode works with defaults
+        case .criticalScanArrows:
+            if selectedArrows.isEmpty {
+                return "Please select at least one arrow direction"
+            }
+        }
+        return ""
     }
     
     private let availableColors: [Color] = [
@@ -1769,19 +1852,6 @@ struct MainView: View {
         Color(red: 1.0, green: 0.4, blue: 0.8)
     ]
     
-    private func updateCustomActions() {
-        let actions = selectedActionSet.actions
-        // Update existing actions and add new ones if needed
-        for i in 0..<actions.count {
-            if i < customActions.count {
-                customActions[i].action = actions[i]
-                customActions[i].isCustom = false
-            } else {
-                customActions.append(CustomAction(number: i + 1, action: actions[i], isCustom: false))
-            }
-        }
-    }
-}
 
 struct ColorButton: View {
     let color: Color
@@ -1824,16 +1894,6 @@ struct ContentView_Previews: PreviewProvider {
     }
 }
 
-enum DisplayMode {
-    case colors
-    case colorsNumbers
-    case colorsArrows
-    case numbers
-    case lanes
-    case criticalScan
-    case criticalScanArrows
-}
-
 struct DisplayView: View {
     let selectedColors: [Color]
     let displayMode: DisplayMode
@@ -1846,13 +1906,16 @@ struct DisplayView: View {
     let selectedBeepInterval: BeepInterval
     let criticalScanDelay: Double
     let criticalScanDuration: Double
+        let criticalScanResetTime: Double
     let selectedColorSet: ScanningColorSet
+        let selectedActionSet: ActionSet
     let customActions: [CustomAction]
     let selectedCriticalScanNumbers: [Int]
-    let screenProtectionEnabled: Bool
-    let numberColor: Color
-    let arrowColor: Color
-    @Binding var showDisplay: Bool
+        let screenProtectionEnabled: Bool
+        let numberColor: Color
+        let arrowColor: Color
+        @Binding var showDisplay: Bool
+        @ObservedObject var profileManager: UserProfileManager
     
     @State private var currentColor: Color
     @State private var currentNumber: Int = 1
@@ -1870,6 +1933,10 @@ struct DisplayView: View {
     @State private var currentArrowDirection: String = "arrow.up"
     @State private var showNumberOrArrow: Bool = false
     @State private var beepTimer: Timer?
+        
+        // Session tracking
+        @State private var sessionStartTime: Date?
+        @State private var sessionDuration: TimeInterval = 0
     
     // Arrow directions for colorsArrows mode
     private let arrowDirections = [
@@ -1896,13 +1963,14 @@ struct DisplayView: View {
     @State private var countdown: Int = 3
     @State private var isCountingDown: Bool = true
     @Environment(\.dismiss) private var dismiss
-    
-    // Screen protection timer for outdoor use
-    @State private var screenProtectionTimer: Timer?
+        
+        // Screen protection timer for outdoor use
+        @State private var screenProtectionTimer: Timer?
     
     let availableLanes = ["Left", "Center", "Right"]
     
-    init(selectedColors: [Color], displayMode: DisplayMode, changeInterval: Double, selectedNumbers: [Int], soundEnabled: Bool, laneSpeed: Double, numberRange: Double, selectedArrows: [String], selectedBeepInterval: BeepInterval, criticalScanDelay: Double, criticalScanDuration: Double, selectedColorSet: ScanningColorSet, customActions: [CustomAction], selectedCriticalScanNumbers: [Int], screenProtectionEnabled: Bool, numberColor: Color, arrowColor: Color, showDisplay: Binding<Bool>) {
+        init(selectedColors: [Color], displayMode: DisplayMode, changeInterval: Double, selectedNumbers: [Int], soundEnabled: Bool, laneSpeed: Double, numberRange: Double, selectedArrows: [String], selectedBeepInterval: BeepInterval, criticalScanDelay: Double, criticalScanDuration: Double, criticalScanResetTime: Double, selectedColorSet: ScanningColorSet, selectedActionSet: ActionSet, customActions: [CustomAction], selectedCriticalScanNumbers: [Int], screenProtectionEnabled: Bool, numberColor: Color, arrowColor: Color, showDisplay: Binding<Bool>, profileManager: UserProfileManager) {
+            self.profileManager = profileManager
         self.selectedColors = selectedColors
         self.displayMode = displayMode
         self.changeInterval = changeInterval
@@ -1914,15 +1982,17 @@ struct DisplayView: View {
         self.selectedBeepInterval = selectedBeepInterval
         self.criticalScanDelay = criticalScanDelay
         self.criticalScanDuration = criticalScanDuration
+            self.criticalScanResetTime = criticalScanResetTime
         self.selectedColorSet = selectedColorSet
+            self.selectedActionSet = selectedActionSet
         self.customActions = customActions
         self.selectedCriticalScanNumbers = selectedCriticalScanNumbers
-        self._currentColor = State(initialValue: selectedColors.first ?? selectedColors.randomElement() ?? .red)
-        self._currentNumberColor = State(initialValue: selectedColors.first ?? selectedColors.randomElement() ?? .red)
-        self._showDisplay = showDisplay
-        self.screenProtectionEnabled = screenProtectionEnabled
-        self.numberColor = numberColor
-        self.arrowColor = arrowColor
+            self._currentColor = State(initialValue: selectedColors.first ?? selectedColors.randomElement() ?? .red)
+            self._currentNumberColor = State(initialValue: selectedColors.first ?? selectedColors.randomElement() ?? .red)
+            self._showDisplay = showDisplay
+            self.screenProtectionEnabled = screenProtectionEnabled
+            self.numberColor = numberColor
+            self.arrowColor = arrowColor
     }
     
     var body: some View {
@@ -1941,7 +2011,7 @@ struct DisplayView: View {
                     
                     if countdown == 0 {
                         Text("GO!")
-                            .font(.system(size: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.15, weight: .bold))
+                                .font(.system(size: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.15, weight: .bold))
                             .foregroundColor(.green)
                             .scaleEffect(1.2)
                             .animation(.easeInOut(duration: 0.3), value: countdown)
@@ -1966,7 +2036,7 @@ struct DisplayView: View {
                             VStack {
                                 Text("\(currentNumber)")
                                     .font(.system(size: 300, weight: .black))
-                                    .foregroundColor(numberColor)
+                                        .foregroundColor(numberColor)
                                     .shadow(radius: 15)
                             }
                         }
@@ -1980,9 +2050,9 @@ struct DisplayView: View {
                         if showNumberOrArrow {
                             VStack {
                                 Image(systemName: currentArrowDirection)
-                                    .font(.system(size: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.35, weight: .black))
-                                    .foregroundColor(arrowColor)
-                                    .shadow(radius: 10)
+                                        .font(.system(size: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.35, weight: .black))
+                                        .foregroundColor(arrowColor)
+                                        .shadow(radius: 10)
                             }
                         }
                     }
@@ -1995,7 +2065,7 @@ struct DisplayView: View {
                         VStack {
                     Text("\(currentNumber)")
                                 .font(.system(size: 120, weight: .bold))
-                                .foregroundColor(numberColor)
+                                    .foregroundColor(numberColor)
                                 .shadow(radius: 10)
                         }
                     }
@@ -2038,7 +2108,7 @@ struct DisplayView: View {
                                     // Scanning circle (cycles through colors every second)
                                     Circle()
                                         .fill(selectedColorSet.colors[scanningColorIndex])
-                                        .frame(width: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.6, height: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.6)
+                                            .frame(width: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.6, height: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.6)
                                         .background(Color.black)
                                         .clipShape(Circle())
                                         .overlay(
@@ -2054,8 +2124,8 @@ struct DisplayView: View {
                             } else if criticalScanPhase == "CRITICAL" {
                                 VStack(spacing: 15) {
                                     Text("\(currentActionNumber)")
-                                        .font(.system(size: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.4, weight: .bold))
-                                        .foregroundColor(numberColor)
+                                            .font(.system(size: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.4, weight: .bold))
+                                            .foregroundColor(numberColor)
                                         .shadow(radius: 10)
                                     
                                     Text("CRITICAL SCAN")
@@ -2064,7 +2134,7 @@ struct DisplayView: View {
                                         .shadow(radius: 5)
                                     
                                     Text(customActions.first { $0.number == currentActionNumber }?.action ?? "")
-                                        .font(.system(size: 60, weight: .medium))
+                                            .font(.system(size: 60, weight: .medium))
                                         .foregroundColor(.white.opacity(0.8))
                                         .multilineTextAlignment(.center)
                                         .padding()
@@ -2114,7 +2184,7 @@ struct DisplayView: View {
                                     // Scanning circle (cycles through colors every second)
                                     Circle()
                                         .fill(selectedColorSet.colors[scanningColorIndex])
-                                        .frame(width: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.6, height: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.6)
+                                            .frame(width: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.6, height: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.6)
                                         .background(Color.black)
                                         .clipShape(Circle())
                                         .overlay(
@@ -2130,8 +2200,8 @@ struct DisplayView: View {
                             } else if criticalScanPhase == "CRITICAL" {
                                 VStack(spacing: 15) {
                                     Image(systemName: currentArrowDirection)
-                                        .font(.system(size: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.35, weight: .black))
-                                        .foregroundColor(arrowColor)
+                                            .font(.system(size: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.35, weight: .black))
+                                            .foregroundColor(arrowColor)
                                         .shadow(radius: 10)
                                     
                                     Text("CRITICAL SCAN")
@@ -2182,24 +2252,37 @@ struct DisplayView: View {
         }
         .ignoresSafeArea()
         .onAppear {
-            // Set brightness and prevent sleep based on toggle setting
-            if screenProtectionEnabled {
-                UIScreen.main.brightness = 1.0
-                UIApplication.shared.isIdleTimerDisabled = true
-            } else {
-                UIApplication.shared.isIdleTimerDisabled = true // Always prevent sleep during training
-            }
-            
+                // Set brightness and prevent sleep based on toggle setting
+                if screenProtectionEnabled {
+                    UIScreen.main.brightness = 1.0
+                    UIApplication.shared.isIdleTimerDisabled = true
+                } else {
+                    UIApplication.shared.isIdleTimerDisabled = true // Always prevent sleep during training
+                }
+                
             startCountdown()
         }
         .onDisappear {
             isActive = false
             stopTimer()
+                
+                // End session tracking
+                if let startTime = sessionStartTime {
+                    sessionDuration = Date().timeIntervalSince(startTime)
+                    endTrainingSession()
+                }
         }
         .onTapGesture(count: 2) {
             if !isCountingDown {
                 isActive = false
-                showDisplay = false
+                    
+                    // End session tracking
+                    if let startTime = sessionStartTime {
+                        sessionDuration = Date().timeIntervalSince(startTime)
+                        endTrainingSession()
+                    }
+                    
+                    showDisplay = false
             }
         }
     }
@@ -2225,10 +2308,14 @@ struct DisplayView: View {
         startTimer()
         setupAudio()
         
-        // Start screen protection timer for outdoor use
-        startScreenProtectionTimer()
+            // Start session tracking
+            sessionStartTime = Date()
+            startTrainingSession()
+            
+            // Start screen protection timer for outdoor use
+            startScreenProtectionTimer()
         
-        if displayMode == .colorsNumbers || displayMode == .colorsArrows {
+        if displayMode == .colors || displayMode == .colorsNumbers || displayMode == .colorsArrows || displayMode == .numbers || displayMode == .lanes {
             startBeepTimer()
         } else if displayMode != .criticalScan && displayMode != .criticalScanArrows {
             scheduleRandomBeep()
@@ -2243,12 +2330,41 @@ struct DisplayView: View {
         } else if displayMode == .criticalScanArrows {
             print("🔍 Starting Critical Scan Arrows Mode")
             startCriticalScanArrowsSequence()
-        } else if displayMode == .colorsNumbers || displayMode == .colorsArrows {
+        } else if displayMode == .colors || displayMode == .colorsNumbers || displayMode == .colorsArrows {
             print("🎨 Starting \(displayMode) Mode")
             // These modes use the standard timer + beep timer
         } else {
             print("🎯 Starting other mode: \(displayMode)")
         }
+    }
+        
+        // MARK: - Session Tracking Methods
+        
+        private func startTrainingSession() {
+            let settings = TrainingSessionSettings(
+                displayMode: displayMode,
+                colorsUsed: selectedColors,
+                numbersUsed: selectedNumbers,
+                arrowsUsed: selectedArrows,
+                lanesUsed: availableLanes,
+                beepInterval: selectedBeepInterval,
+                numberColor: numberColor,
+                arrowColor: arrowColor,
+                colorSet: selectedColorSet,
+                actionSet: selectedActionSet,
+                customActions: customActions,
+                criticalScanDelay: criticalScanDelay,
+                criticalScanDuration: criticalScanDuration,
+                criticalScanResetTime: criticalScanResetTime,
+                screenProtectionEnabled: screenProtectionEnabled,
+                soundEnabled: soundEnabled
+            )
+            
+            profileManager.startTrainingSession(settings: settings)
+        }
+        
+        private func endTrainingSession() {
+            profileManager.endTrainingSession(duration: sessionDuration)
     }
     
     private func startLaneAnimation() {
@@ -2333,31 +2449,38 @@ struct DisplayView: View {
     }
     
     private func scheduleNextBeep() {
-        guard isActive && (displayMode == .colorsNumbers || displayMode == .colorsArrows) else { return }
+        guard isActive && (displayMode == .colors || displayMode == .colorsNumbers || displayMode == .colorsArrows || displayMode == .numbers || displayMode == .lanes) else { return }
         
         let randomInterval = Double.random(in: selectedBeepInterval.range)
         
+        
         DispatchQueue.main.asyncAfter(deadline: .now() + randomInterval) {
-            guard isActive && (displayMode == .colorsNumbers || displayMode == .colorsArrows) else { return }
+            guard isActive && (displayMode == .colors || displayMode == .colorsNumbers || displayMode == .colorsArrows || displayMode == .numbers || displayMode == .lanes) else { return }
             
-            // Play beep and show number/arrow
+            // Play beep
             if soundEnabled {
                 audioPlayer?.play()
             }
             
-            // Show number or arrow
+            // Show number or arrow for specific modes
             if displayMode == .colorsNumbers {
                 currentNumber = Int.random(in: 1...Int(numberRange))
+                showNumberOrArrow = true
+                
+                // Hide after 1 second
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    showNumberOrArrow = false
+                }
             } else if displayMode == .colorsArrows {
                 currentArrowDirection = selectedArrows.randomElement() ?? "arrow.up"
-            }
-            
             showNumberOrArrow = true
             
             // Hide after 1 second
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 showNumberOrArrow = false
             }
+            }
+            // For regular colors, numbers, and lanes modes, just play the beep without showing additional elements
             
             // Schedule next beep
             scheduleNextBeep()
@@ -2372,12 +2495,12 @@ struct DisplayView: View {
     private func scheduleRandomBeep() {
         guard soundEnabled && isActive else { return }
         
-        // Don't schedule beeps for Critical Scan modes - they have their own timing
-        guard displayMode != .criticalScan && displayMode != .criticalScanArrows && displayMode != .colorsNumbers && displayMode != .colorsArrows else { return }
+        // Don't schedule beeps for Critical Scan modes or modes with their own beep timer
+        guard displayMode != .criticalScan && displayMode != .criticalScanArrows && displayMode != .colors && displayMode != .colorsNumbers && displayMode != .colorsArrows && displayMode != .numbers && displayMode != .lanes else { return }
         
         let randomInterval = Double.random(in: 10...15)
         DispatchQueue.main.asyncAfter(deadline: .now() + randomInterval) {
-            if soundEnabled && isActive && displayMode != .criticalScan && displayMode != .criticalScanArrows && displayMode != .colorsNumbers && displayMode != .colorsArrows {
+            if soundEnabled && isActive && displayMode != .criticalScan && displayMode != .criticalScanArrows && displayMode != .colors && displayMode != .colorsNumbers && displayMode != .colorsArrows && displayMode != .numbers && displayMode != .lanes {
                 audioPlayer?.play()
                 scheduleRandomBeep() // Schedule next beep
             }
@@ -2388,98 +2511,115 @@ struct DisplayView: View {
         timer?.invalidate()
         timer = nil
         stopBeepTimer()
-        stopScanningCircleTimer()
-        stopScreenProtectionTimer()
     }
     
-    private func startScreenProtectionTimer() {
-        screenProtectionTimer?.invalidate()
-        
-        if screenProtectionEnabled {
+        private func startScreenProtectionTimer() {
+            guard screenProtectionEnabled else { return }
+            
+            screenProtectionTimer?.invalidate()
             screenProtectionTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-                // Continuously maintain maximum brightness and prevent sleep
                 UIScreen.main.brightness = 1.0
-                UIApplication.shared.isIdleTimerDisabled = true
             }
-        } else {
-            // Only prevent sleep, don't force maximum brightness
-            UIApplication.shared.isIdleTimerDisabled = true
         }
-    }
-    
-    private func stopScreenProtectionTimer() {
-        screenProtectionTimer?.invalidate()
-        screenProtectionTimer = nil
-    }
-    
-    private func startCriticalScanSequence() {
-        print("🔍 Critical Scan Sequence Started")
         
-        // Stop any existing critical scan timer
-        criticalScanTimer?.invalidate()
+        private func stopScreenProtectionTimer() {
+            screenProtectionTimer?.invalidate()
+            screenProtectionTimer = nil
+        }
         
-        // Don't start if app is not active
-        guard isActive else { return }
-        
-        // Phase 1: Normal Scan (Green background, 5-7 seconds)
-        criticalScanPhase = "NORMAL"
-        print("📖 Phase: NORMAL SCAN")
-        
-        // Start scanning circle timer (changes every second)
-        startScanningCircleTimer()
-        
-        // Phase 2: Critical Scan (Red background, custom delay)
-        DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: 5.0...7.0)) {
-            // Check if still active before proceeding
-            guard isActive else { return }
+        private func startCriticalScanSequence() {
+            print("🔍 Starting Critical Scan Sequence")
             
-            // Stop scanning circle timer
-            stopScanningCircleTimer()
+            // Start scanning circle timer
+            scanningCircleTimer = Timer.scheduledTimer(withTimeInterval: changeInterval, repeats: true) { _ in
+                scanningColorIndex = (scanningColorIndex + 1) % selectedColorSet.colors.count
+            }
             
-            // Play single beep to alert passer to play the ball
+            // Schedule first critical scan
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: 5...10)) {
+                startCriticalScanPhase()
+            }
+        }
+        
+        private func startCriticalScanPhase() {
+                guard isActive else { return }
+                
+            print("🔴 Starting Critical Scan Phase")
+                criticalScanPhase = "CRITICAL"
+            
+            // Select random action number
+                currentActionNumber = selectedCriticalScanNumbers.randomElement() ?? 1
+            
+            // Play critical scan sound
             if soundEnabled {
                 playCriticalScanSound()
             }
             
-            // Show critical scan screen after custom delay (time for passer to react and play ball)
-            DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanDelay) {
-                guard isActive else { return }
-                
-                criticalScanPhase = "CRITICAL"
-                currentActionNumber = selectedCriticalScanNumbers.randomElement() ?? 1
-                print("🚨 Phase: CRITICAL SCAN - Action \(currentActionNumber)")
-                
-                
-                // Phase 3: Execution (custom duration to receive and decide)
+            // End critical phase after duration
                 DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanDuration) {
-                    guard isActive && displayMode == .criticalScan else { return }
-                    
-                    // Phase 4: Reset Period (10 seconds for all actions)
-                    criticalScanPhase = "RESET"
-                    print("🔄 Phase: RESET - Preparing for next play")
-                    
-                    // All actions get 10 second reset period
-                    let resetDuration: Double = 10.0
-                    print("⏱️ Reset duration: \(resetDuration) seconds (Action: \(currentActionNumber))")
-                    
-                    DispatchQueue.main.asyncAfter(deadline: .now() + resetDuration) {
-                        // Check if still active and still in critical scan mode
-                        guard isActive && displayMode == .criticalScan else { return }
-                        
-                        print("🔄 Restarting Critical Scan Sequence")
-                        startCriticalScanSequence() // Restart the sequence
-                    }
-                }
+                startResetPhase()
             }
+        }
+                    
+        private func startResetPhase() {
+            guard isActive else { return }
+            
+            print("🔵 Starting Reset Phase")
+                    criticalScanPhase = "RESET"
+                    
+            // End reset phase after reset time
+            DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanResetTime) {
+                startNormalPhase()
         }
     }
     
-    private func playCriticalScanSound() {
-        // Only play sound if app is still active
+        private func startNormalPhase() {
         guard isActive else { return }
         
-        // Use the critical scan beep file
-        if criticalScanAudioPlayer == nil {
+            print("⚪ Starting Normal Phase")
+            criticalScanPhase = "NORMAL"
+            
+            // Schedule next critical scan
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: 5...10)) {
+                startCriticalScanPhase()
+            }
+        }
+        
+        private func startCriticalScanArrowsSequence() {
+            print("🔍 Starting Critical Scan Arrows Sequence")
+            
+            // Start scanning circle timer
+            scanningCircleTimer = Timer.scheduledTimer(withTimeInterval: changeInterval, repeats: true) { _ in
+                scanningColorIndex = (scanningColorIndex + 1) % selectedColorSet.colors.count
+            }
+            
+            // Schedule first critical scan
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: 5...10)) {
+                startCriticalScanArrowsPhase()
+            }
+        }
+        
+        private func startCriticalScanArrowsPhase() {
+        guard isActive else { return }
+        
+            print("🔴 Starting Critical Scan Arrows Phase")
+            criticalScanPhase = "CRITICAL"
+            
+            // Select random arrow
+            currentArrowDirection = selectedArrows.randomElement() ?? "arrow.up"
+            
+            // Play critical scan sound
+            if soundEnabled {
+                playCriticalScanSound()
+            }
+            
+            // End critical phase after duration
+                DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanDuration) {
+                startResetPhase()
+            }
+        }
+        
+        private func playCriticalScanSound() {
             guard let soundURL = Bundle.main.url(forResource: "critical scan beep", withExtension: "wav") else {
                 print("Could not find critical scan sound file")
                 return
@@ -2487,143 +2627,65 @@ struct DisplayView: View {
             
             do {
                 criticalScanAudioPlayer = try AVAudioPlayer(contentsOf: soundURL)
-                criticalScanAudioPlayer?.volume = 1.0 // Maximum volume
-                criticalScanAudioPlayer?.prepareToPlay()
+                criticalScanAudioPlayer?.play()
             } catch {
                 print("Could not create critical scan audio player: \(error)")
-                return
-            }
-        }
-        
-        criticalScanAudioPlayer?.play()
-    }
-    
-    private func startScanningCircleTimer() {
-        scanningCircleTimer?.invalidate()
-        scanningCircleTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-            if isActive && criticalScanPhase == "NORMAL" {
-                // Randomly select a color from the selected color set
-                scanningColorIndex = Int.random(in: 0..<selectedColorSet.colors.count)
-            }
-        }
-    }
-    
-    private func stopScanningCircleTimer() {
-        scanningCircleTimer?.invalidate()
-        scanningCircleTimer = nil
-    }
-    
-    private func startCriticalScanArrowsSequence() {
-        print("🔍 Critical Scan Arrows Sequence Started")
-        
-        // Stop any existing critical scan timer
-        criticalScanTimer?.invalidate()
-        
-        // Don't start if app is not active
-        guard isActive else { return }
-        
-        // Phase 1: Normal Scan (Black background, 5-7 seconds)
-        criticalScanPhase = "NORMAL"
-        print("📖 Phase: NORMAL SCAN")
-        
-        // Start scanning circle timer (changes every second)
-        startScanningCircleTimer()
-        
-        // Phase 2: Critical Scan (Red background, custom delay)
-        DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: 5.0...7.0)) {
-            // Check if still active before proceeding
-            guard isActive else { return }
-            
-            // Stop scanning circle timer
-            stopScanningCircleTimer()
-            
-            // Play single beep to alert passer to play the ball
-            if soundEnabled {
-                playCriticalScanSound()
-            }
-            
-            // Show critical scan screen after custom delay (time for passer to react and play ball)
-            DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanDelay) {
-                guard isActive else { return }
-                
-                criticalScanPhase = "CRITICAL"
-                currentArrowDirection = selectedArrows.randomElement() ?? "arrow.up"
-                print("🚨 Phase: CRITICAL SCAN - Arrow \(currentArrowDirection)")
-                
-                // Phase 3: Execution (custom duration to receive and decide)
-                DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanDuration) {
-                    guard isActive && displayMode == .criticalScanArrows else { return }
-                    
-                    // Phase 4: Reset Period (10 seconds for all actions)
-                    criticalScanPhase = "RESET"
-                    print("🔄 Phase: RESET - Preparing for next play")
-                    
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
-                        // Check if still active and still in critical scan arrows mode
-                        guard isActive && displayMode == .criticalScanArrows else { return }
-                        
-                        print("🔄 Restarting Critical Scan Arrows Sequence")
-                        startCriticalScanArrowsSequence() // Restart the sequence
                     }
                 }
             }
         }
-    }
+
+#Preview {
+        ContentView()
 }
 
-struct Activity {
-    let title: String
-    let description: String
-    let setup: String
-    let progression: String
-    let duration: String
-    let focus: String
-}
-
-struct DetailRow: View {
-    let label: String
-    let text: String
+struct ActionListSheet: View {
+    let actionNumber: Int
+    let currentAction: String
+    let basicActions: [String]
+    let onSelect: (String) -> Void
     
-    var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Text(label)
-                .font(.caption)
-                .fontWeight(.semibold)
-                .foregroundColor(.blue)
-                .frame(width: 70, alignment: .leading)
-            
-            Text(text)
-                .font(.caption)
-                .foregroundColor(.white.opacity(0.8))
-                .multilineTextAlignment(.leading)
-        }
-    }
-}
-
-struct TipRow: View {
-    let text: String
-    
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundColor(.green)
-                .font(.system(size: 16))
-            
-            Text(text)
-                                                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.9))
-        }
-    }
-}
-
-struct ActivitiesGuideView: View {
     @Environment(\.dismiss) private var dismiss
-    let selectedMode: DisplayMode
     
     var body: some View {
         NavigationView {
-            ZStack {
-                // Background
+            VStack(spacing: 20) {
+                Text("Select Action for Number \(actionNumber)")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                    .foregroundColor(.white)
+                    .padding(.top)
+                
+                ScrollView {
+                    LazyVGrid(columns: [GridItem(.flexible())], spacing: 12) {
+                        ForEach(basicActions, id: \.self) { action in
+                            Button(action: {
+                                onSelect(action)
+                                dismiss()
+                            }) {
+                                HStack {
+                                    Text(action)
+                                        .font(.body)
+                                        .foregroundColor(.white)
+                                    Spacer()
+                                    if action == currentAction {
+                                        Image(systemName: "checkmark")
+                .foregroundColor(.green)
+                                    }
+                                }
+                                .padding()
+                                .background(Color.gray.opacity(0.2))
+                                .cornerRadius(10)
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+                
+                Spacer()
+            }
+            .background(
                 LinearGradient(
                     gradient: Gradient(colors: [
                         Color(red: 0.05, green: 0.05, blue: 0.1),
@@ -2633,66 +2695,71 @@ struct ActivitiesGuideView: View {
                     endPoint: .bottom
                 )
                 .ignoresSafeArea()
-                
+            )
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .foregroundColor(.white)
+                }
+            }
+        }
+    }
+}
+
+struct ActivitiesGuideView: View {
+    let selectedMode: DisplayMode
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        NavigationView {
                 ScrollView {
-                    VStack(spacing: 20) {
+                VStack(alignment: .leading, spacing: 20) {
                         // Header
-                        VStack(spacing: 10) {
-                            Text("\(modeTitle) Activities")
+                    Text("Training Activities Guide")
                                 .font(.largeTitle)
                                 .fontWeight(.bold)
                                 .foregroundColor(.white)
-                            
-                            Text(modeSubtitle)
-                                .font(.title3)
-                                .foregroundColor(.white.opacity(0.8))
-                        }
                         .padding(.top)
                         
-                        // Activities for selected mode
-                        ActivitySection(
-                            title: "\(modeTitle) Activities",
-                            subtitle: modeSubtitle,
-                            activities: selectedActivities
-                        )
-                        
-                        // General Tips
-                        VStack(alignment: .leading, spacing: 15) {
-                            Text("Training Tips")
-                                .font(.title2)
-                                .fontWeight(.bold)
-                                .foregroundColor(.white)
-                            
-                            VStack(alignment: .leading, spacing: 10) {
-                                TipRow(text: "Position iPad behind players for realistic shoulder checking")
-                                TipRow(text: "Start with longer intervals and gradually increase speed")
-                                TipRow(text: "Focus on technique before speed")
-                                TipRow(text: "Take regular breaks to prevent fatigue")
-                                TipRow(text: "Practice consistently for best results")
-                                }
+                    // Mode-specific instructions
+                    Group {
+                        if selectedMode == .colors {
+                            colorsGuide
+                        } else if selectedMode == .colorsNumbers {
+                            colorsNumbersGuide
+                        } else if selectedMode == .colorsArrows {
+                            colorsArrowsGuide
+                        } else if selectedMode == .numbers {
+                            numbersGuide
+                        } else if selectedMode == .lanes {
+                            lanesGuide
+                        } else if selectedMode == .criticalScan {
+                            criticalScanGuide
+                        } else if selectedMode == .criticalScanArrows {
+                            criticalScanArrowsGuide
+                        } else {
+                            generalGuide
+                        }
+                    }
+                    
+                    Spacer()
                             }
                             .padding()
-                            .background {
-                                RoundedRectangle(cornerRadius: 15)
-                                    .fill(.ultraThinMaterial)
-                                .opacity(0.7)
-                            }
-                            .padding(.horizontal)
-                        }
-                        // Critical Scan Activities
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Critical Scan Activities")
-                            .font(.subheadline)
-                            .foregroundColor(.white.opacity(0.8))
-                                .padding(.horizontal, 4)
-                                .environment(\.sizeCategory, .large) // Force consistent size
-                        // ... existing code ...
-                        }
-                        .padding(.top, 16)
-                    .padding(.bottom, 30)
-                }
             }
-            .navigationTitle("Activities Guide")
+            .background(
+                LinearGradient(
+                    gradient: Gradient(colors: [
+                        Color(red: 0.05, green: 0.05, blue: 0.1),
+                        Color(red: 0.1, green: 0.1, blue: 0.15)
+                    ]),
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+            )
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -2705,404 +2772,191 @@ struct ActivitiesGuideView: View {
         }
     }
     
-    // Computed properties for mode-specific content
-    private var modeTitle: String {
-        switch selectedMode {
-        case .colors:
-            return "Colors Mode"
-        case .numbers:
-            return "Numbers Mode"
-        case .lanes:
-            return "Lanes Mode"
-        case .criticalScan:
-            return "Critical Scan Numbers"
-        case .colorsNumbers:
-            return "Colors and Numbers Mode"
-        case .colorsArrows:
-            return "Colors and Arrows Mode"
-        case .criticalScanArrows:
-            return "Critical Scan Arrows"
-        }
-    }
-    
-    private var modeSubtitle: String {
-        switch selectedMode {
-        case .colors:
-            return "Basic scanning and color recognition"
-        case .numbers:
-            return "Number recognition and pattern awareness"
-        case .lanes:
-            return "Spatial awareness and zone scanning"
-        case .criticalScan:
-            return "Advanced decision making under pressure"
-        case .colorsNumbers:
-            return "Color and number recognition"
-        case .colorsArrows:
-            return "Color and arrow recognition"
-        case .criticalScanArrows:
-            return "Color and arrow recognition"
-        }
-    }
-    
-    private var selectedActivities: [Activity] {
-        switch selectedMode {
-        case .colors:
-            return colorsActivities
-        case .numbers:
-            return numbersActivities
-        case .lanes:
-            return lanesActivities
-        case .criticalScan:
-            return criticalScanActivities
-        case .colorsNumbers:
-            return colorsNumbersActivities
-        case .colorsArrows:
-            return colorsArrowsActivities
-        case .criticalScanArrows:
-            return criticalScanArrowsActivities
-        }
-    }
-    
-    // Activity data
-    private let colorsActivities = [
-        Activity(
-            title: "Shoulder Check Color ID",
-            description: "Check shoulders and identify the current color",
-            setup: "2-3 colors, 2-second intervals, iPad behind players",
-            progression: "Start with 2 colors, add more, increase speed",
-            duration: "10-15 minutes",
-            focus: "Basic color recognition and shoulder checking"
-        ),
-        Activity(
-            title: "Color Memory Challenge",
-            description: "Remember the last 3-4 color changes",
-            setup: "3-4 colors, 1.5-second intervals",
-            progression: "Increase number of colors to remember",
-            duration: "10-15 minutes",
-            focus: "Visual memory and recall"
-        ),
-        Activity(
-            title: "Alternating Shoulder Scan",
-            description: "Check right shoulder, then left shoulder, alternating",
-            setup: "2-3 colors, 2-second intervals",
-            progression: "Increase speed, add more colors",
-            duration: "10-15 minutes",
-            focus: "Balanced scanning on both sides"
-        ),
-        Activity(
-            title: "Color Pattern Recognition",
-            description: "Identify color patterns (red-blue-green, etc.)",
-            setup: "4-5 colors, 1.5-second intervals",
-            progression: "More complex patterns, faster sequences",
-            duration: "15-20 minutes",
-            focus: "Pattern recognition and scanning intelligence"
-        ),
-        Activity(
-            title: "Speed Color Scanning",
-            description: "Rapid shoulder checking to identify color changes",
-            setup: "3-4 colors, fast intervals (0.5-1.0 seconds)",
-            progression: "Start slow, gradually increase speed",
-            duration: "15-20 minutes",
-            focus: "Scanning speed and reaction time"
-        )
-    ]
-    
-    private let numbersActivities = [
-        Activity(
-            title: "Number Recognition",
-            description: "Check shoulders and identify numbers quickly",
-            setup: "Numbers 1-4, bright colors, 1.5-second intervals",
-            progression: "Add more numbers, increase speed",
-            duration: "10-15 minutes",
-            focus: "Quick number identification"
-        ),
-        Activity(
-            title: "Number Pattern Recognition",
-            description: "Identify number sequences and patterns",
-            setup: "Numbers 1-4, 1.5-second intervals",
-            progression: "More complex patterns, faster sequences",
-            duration: "15-20 minutes",
-            focus: "Pattern recognition and scanning intelligence"
-        ),
-        Activity(
-            title: "Peripheral Vision Training",
-            description: "Scan without directly looking at the screen",
-            setup: "Large numbers, 2-second intervals",
-            progression: "Smaller numbers, faster intervals",
-            duration: "10-15 minutes",
-            focus: "Peripheral vision development"
-        ),
-        Activity(
-            title: "Number Communication",
-            description: "Call out numbers to teammates while scanning",
-            setup: "Numbers 1-4, 1.5-second intervals",
-            progression: "More complex communication sequences",
-            duration: "15-20 minutes",
-            focus: "Communication while scanning"
-        )
-    ]
-    
-    private let lanesActivities = [
-        Activity(
-            title: "Lane Awareness Building",
-            description: "Practice scanning across different zones",
-            setup: "2 lanes, 2-3 colors, medium speed",
-            progression: "Add more lanes, increase speed",
-            duration: "15-20 minutes",
-            focus: "Spatial awareness and zone recognition"
-        ),
-        Activity(
-            title: "Multi-Zone Scanning",
-            description: "Develop awareness of multiple areas",
-            setup: "3 lanes, 3-4 colors, 1.5-second intervals",
-            progression: "Faster scanning between zones",
-            duration: "20-25 minutes",
-            focus: "Multi-zone awareness"
-        ),
-        Activity(
-            title: "Position-Specific Lanes",
-            description: "Focus on lanes relevant to your position",
-            setup: "2-3 lanes, position-specific colors",
-            progression: "More complex zone combinations",
-            duration: "15-20 minutes",
-            focus: "Position-specific awareness"
-        )
-    ]
-    
-    private let criticalScanActivities = [
-        Activity(
-            title: "Decision Making Under Pressure",
-            description: "Practice quick decisions based on action numbers",
-            setup: "Critical Scan mode, iPad behind players",
-            progression: "Faster decision making, more complex scenarios",
-            duration: "20-25 minutes",
-            focus: "Quick decision making under pressure"
-        ),
-        Activity(
-            title: "Scanning Circle Identification",
-            description: "Identify circle colors during normal scan phase",
-            setup: "Critical Scan mode, focus on normal phase",
-            progression: "Faster circle changes, more colors",
-            duration: "15-20 minutes",
-            focus: "Multi-tasking and visual processing"
-        ),
-        Activity(
-            title: "Position-Specific Training",
-            description: "Focus on actions relevant to your position",
-            setup: "Critical Scan mode, position-specific focus",
-            progression: "More complex scenarios, faster execution",
-            duration: "25-30 minutes",
-            focus: "Position-specific decision making"
-        ),
-        Activity(
-            title: "Endurance Training",
-            description: "Extended Critical Scan practice sessions",
-            setup: "Critical Scan mode, longer sessions",
-            progression: "Longer sessions, faster intervals",
-            duration: "30-45 minutes",
-            focus: "Scanning stamina and consistency"
-        ),
-        Activity(
-            title: "Pressure Training",
-            description: "Add physical movement while scanning",
-            setup: "Critical Scan mode, add jogging or ball work",
-            progression: "More intense physical activity",
-            duration: "20-25 minutes",
-            focus: "Scanning under physical stress"
-        )
-    ]
-    
-    private let colorsNumbersActivities = [
-        Activity(
-            title: "Color and Number Recognition",
-            description: "Identify colors and numbers simultaneously",
-            setup: "2-3 colors, 2-second intervals, iPad behind players",
-            progression: "Start with 2 colors and 1 number, add more, increase speed",
-            duration: "10-15 minutes",
-            focus: "Combined color and number recognition"
-        ),
-        Activity(
-            title: "Color Memory Challenge",
-            description: "Remember the last 3-4 color changes",
-            setup: "3-4 colors, 1.5-second intervals",
-            progression: "Increase number of colors to remember",
-            duration: "10-15 minutes",
-            focus: "Visual memory and recall"
-        ),
-        Activity(
-            title: "Alternating Shoulder Scan",
-            description: "Check right shoulder, then left shoulder, alternating",
-            setup: "2-3 colors, 2-second intervals",
-            progression: "Increase speed, add more colors",
-            duration: "10-15 minutes",
-            focus: "Balanced scanning on both sides"
-        ),
-        Activity(
-            title: "Color Pattern Recognition",
-            description: "Identify color patterns (red-blue-green, etc.)",
-            setup: "4-5 colors, 1.5-second intervals",
-            progression: "More complex patterns, faster sequences",
-            duration: "15-20 minutes",
-            focus: "Pattern recognition and scanning intelligence"
-        ),
-        Activity(
-            title: "Speed Color Scanning",
-            description: "Rapid shoulder checking to identify color changes",
-            setup: "3-4 colors, fast intervals (0.5-1.0 seconds)",
-            progression: "Start slow, gradually increase speed",
-            duration: "15-20 minutes",
-            focus: "Scanning speed and reaction time"
-        )
-    ]
-    
-    private let colorsArrowsActivities = [
-        Activity(
-            title: "Color and Arrow Recognition",
-            description: "Identify colors and arrows simultaneously",
-            setup: "2-3 colors, 2-second intervals, iPad behind players",
-            progression: "Start with 2 colors and 1 arrow, add more, increase speed",
-            duration: "10-15 minutes",
-            focus: "Combined color and arrow recognition"
-        ),
-        Activity(
-            title: "Color Memory Challenge",
-            description: "Remember the last 3-4 color changes",
-            setup: "3-4 colors, 1.5-second intervals",
-            progression: "Increase number of colors to remember",
-            duration: "10-15 minutes",
-            focus: "Visual memory and recall"
-        ),
-        Activity(
-            title: "Alternating Shoulder Scan",
-            description: "Check right shoulder, then left shoulder, alternating",
-            setup: "2-3 colors, 2-second intervals",
-            progression: "Increase speed, add more colors",
-            duration: "10-15 minutes",
-            focus: "Balanced scanning on both sides"
-        ),
-        Activity(
-            title: "Color Pattern Recognition",
-            description: "Identify color patterns (red-blue-green, etc.)",
-            setup: "4-5 colors, 1.5-second intervals",
-            progression: "More complex patterns, faster sequences",
-            duration: "15-20 minutes",
-            focus: "Pattern recognition and scanning intelligence"
-        ),
-        Activity(
-            title: "Speed Color Scanning",
-            description: "Rapid shoulder checking to identify color changes",
-            setup: "3-4 colors, fast intervals (0.5-1.0 seconds)",
-            progression: "Start slow, gradually increase speed",
-            duration: "15-20 minutes",
-            focus: "Scanning speed and reaction time"
-        )
-    ]
-    
-    private let criticalScanArrowsActivities = [
-        Activity(
-            title: "Directional Decision Making",
-            description: "Practice quick directional decisions based on arrow prompts",
-            setup: "Critical Scan Arrows mode, iPad behind players",
-            progression: "Faster decision making, more complex arrow combinations",
-            duration: "20-25 minutes",
-            focus: "Quick directional decision making under pressure"
-        ),
-        Activity(
-            title: "Scanning Circle Identification",
-            description: "Identify circle colors during normal scan phase",
-            setup: "Critical Scan Arrows mode, focus on normal phase",
-            progression: "Faster circle changes, more colors",
-            duration: "15-20 minutes",
-            focus: "Multi-tasking and visual processing"
-        ),
-        Activity(
-            title: "Arrow Recognition Training",
-            description: "Focus on recognizing and responding to arrow directions",
-            setup: "Critical Scan Arrows mode, select specific arrows",
-            progression: "More complex arrow combinations, faster execution",
-            duration: "25-30 minutes",
-            focus: "Arrow recognition and response"
-        ),
-        Activity(
-            title: "Endurance Training",
-            description: "Extended Critical Scan Arrows practice sessions",
-            setup: "Critical Scan Arrows mode, longer sessions",
-            progression: "Longer sessions, faster intervals",
-            duration: "30-45 minutes",
-            focus: "Scanning stamina and consistency"
-        ),
-        Activity(
-            title: "Pressure Training",
-            description: "Add physical movement while scanning arrows",
-            setup: "Critical Scan Arrows mode, add jogging or ball work",
-            progression: "More intense physical activity",
-            duration: "20-25 minutes",
-            focus: "Arrow scanning under physical stress"
-        )
-    ]
-}
-
-struct ActivitySection: View {
-    let title: String
-    let subtitle: String
-    let activities: [Activity]
-    
-    var body: some View {
+    private var colorsGuide: some View {
         VStack(alignment: .leading, spacing: 15) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text(title)
+            Text("Colors Training")
+                .font(.title2)
+                .fontWeight(.bold)
+                .foregroundColor(.white)
+            
+            Text("Focus on recognizing different colors quickly and accurately.")
+                .foregroundColor(.white.opacity(0.8))
+            
+            VStack(alignment: .leading, spacing: 8) {
+                Text("• Colors will change randomly")
+                Text("• Focus on the screen center")
+                Text("• React quickly to color changes")
+                Text("• Build visual recognition speed")
+            }
+            .foregroundColor(.white.opacity(0.7))
+        }
+        .padding()
+        .background(Color.blue.opacity(0.2))
+        .cornerRadius(15)
+    }
+    
+    private var colorsNumbersGuide: some View {
+        VStack(alignment: .leading, spacing: 15) {
+            Text("Colors + Numbers Training")
                     .font(.title2)
                     .fontWeight(.bold)
                     .foregroundColor(.white)
                 
-                Text(subtitle)
-                    .font(.subheadline)
+            Text("Combine color recognition with number identification.")
                     .foregroundColor(.white.opacity(0.8))
-            }
             
-            VStack(spacing: 12) {
-                ForEach(activities, id: \.title) { activity in
-                    ActivityCard(activity: activity)
-                }
+            VStack(alignment: .leading, spacing: 8) {
+                Text("• Colors change continuously")
+                Text("• Numbers appear at random intervals")
+                Text("• Focus on both color and number")
+                Text("• Numbers will beep when they appear")
             }
+            .foregroundColor(.white.opacity(0.7))
                             }
                             .padding()
-                            .background {
-                                RoundedRectangle(cornerRadius: 15)
-                                    .fill(.ultraThinMaterial)
-                                    .opacity(0.7)
-                            }
-                            .padding(.horizontal)
+        .background(Color.green.opacity(0.2))
+        .cornerRadius(15)
     }
-}
-
-struct ActivityCard: View {
-    let activity: Activity
     
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(activity.title)
-                                    .font(.headline)
-                .fontWeight(.semibold)
+    private var colorsArrowsGuide: some View {
+        VStack(alignment: .leading, spacing: 15) {
+            Text("Colors + Arrows Training")
+                .font(.title2)
+                .fontWeight(.bold)
                                     .foregroundColor(.white)
                                 
-            Text(activity.description)
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.9))
+            Text("Combine color recognition with directional awareness.")
+                .foregroundColor(.white.opacity(0.8))
             
-            VStack(alignment: .leading, spacing: 4) {
-                DetailRow(label: "Setup:", text: activity.setup)
-                DetailRow(label: "Progression:", text: activity.progression)
-                DetailRow(label: "Duration:", text: activity.duration)
-                DetailRow(label: "Focus:", text: activity.focus)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("• Colors change continuously")
+                Text("• Arrows appear at random intervals")
+                Text("• Focus on both color and direction")
+                Text("• Arrows will beep when they appear")
             }
+            .foregroundColor(.white.opacity(0.7))
                             }
                             .padding()
-                            .background {
-            RoundedRectangle(cornerRadius: 12)
-                                    .fill(.ultraThinMaterial)
-                .opacity(0.5)
+        .background(Color.orange.opacity(0.2))
+        .cornerRadius(15)
         }
+    
+    private var numbersGuide: some View {
+        VStack(alignment: .leading, spacing: 15) {
+            Text("Numbers Training")
+                .font(.title2)
+                .fontWeight(.bold)
+                .foregroundColor(.white)
+            
+            Text("Focus on number recognition and quick identification.")
+                .foregroundColor(.white.opacity(0.8))
+            
+            VStack(alignment: .leading, spacing: 8) {
+                Text("• Numbers appear on colored backgrounds")
+                Text("• Focus on the number in the center")
+                Text("• React quickly to number changes")
+                Text("• Build number recognition speed")
+            }
+            .foregroundColor(.white.opacity(0.7))
+        }
+        .padding()
+        .background(Color.purple.opacity(0.2))
+        .cornerRadius(15)
+    }
+    
+    private var lanesGuide: some View {
+        VStack(alignment: .leading, spacing: 15) {
+            Text("Lanes Training")
+                        .font(.title2)
+                        .fontWeight(.bold)
+                        .foregroundColor(.white)
+            
+            Text("Focus on tracking moving elements across different lanes.")
+                .foregroundColor(.white.opacity(0.8))
+            
+            VStack(alignment: .leading, spacing: 8) {
+                Text("• Colored lanes move up and down")
+                Text("• Focus on the movement patterns")
+                Text("• Track multiple lanes simultaneously")
+                Text("• Build peripheral vision awareness")
+            }
+            .foregroundColor(.white.opacity(0.7))
+                                        }
+                                        .padding()
+        .background(Color.yellow.opacity(0.2))
+        .cornerRadius(15)
+                    }
+                    
+    private var criticalScanGuide: some View {
+        VStack(alignment: .leading, spacing: 15) {
+            Text("Critical Scan Numbers Training")
+                .font(.title2)
+                .fontWeight(.bold)
+                                    .foregroundColor(.white)
+                                
+            Text("High-intensity decision-making under pressure.")
+                .foregroundColor(.white.opacity(0.8))
+            
+            VStack(alignment: .leading, spacing: 8) {
+                Text("• Normal scanning phase (white circles)")
+                Text("• Critical phase (red background + number)")
+                Text("• Execute the action for that number")
+                Text("• Reset phase (blue background)")
+                Text("• Return to normal scanning")
+                            }
+            .foregroundColor(.white.opacity(0.7))
+        }
+                            .padding()
+        .background(Color.red.opacity(0.2))
+        .cornerRadius(15)
+    }
+    
+    private var criticalScanArrowsGuide: some View {
+        VStack(alignment: .leading, spacing: 15) {
+            Text("Critical Scan Arrows Training")
+                .font(.title2)
+                .fontWeight(.bold)
+                .foregroundColor(.white)
+            
+            Text("High-intensity directional decision-making under pressure.")
+                .foregroundColor(.white.opacity(0.8))
+            
+            VStack(alignment: .leading, spacing: 8) {
+                Text("• Normal scanning phase (white circles)")
+                Text("• Critical phase (red background + arrow)")
+                Text("• Move in the direction shown")
+                Text("• Reset phase (blue background)")
+                Text("• Return to normal scanning")
+                    }
+            .foregroundColor(.white.opacity(0.7))
+                            }
+                            .padding()
+        .background(Color.red.opacity(0.2))
+        .cornerRadius(15)
+    }
+    
+    private var generalGuide: some View {
+        VStack(alignment: .leading, spacing: 15) {
+            Text("General Training Tips")
+                .font(.title2)
+                .fontWeight(.bold)
+                                    .foregroundColor(.white)
+            
+            Text("Maximize your scanning training effectiveness.")
+                .foregroundColor(.white.opacity(0.8))
+            
+            VStack(alignment: .leading, spacing: 8) {
+                Text("• Focus on the screen center")
+                Text("• Use your peripheral vision")
+                Text("• React quickly to changes")
+                Text("• Stay consistent with training")
+                Text("• Gradually increase difficulty")
+                    }
+            .foregroundColor(.white.opacity(0.7))
+        }
+        .padding()
+        .background(Color.gray.opacity(0.2))
+        .cornerRadius(15)
     }
 }
 
@@ -3112,146 +2966,54 @@ struct CustomActionSheet: View {
     let selectedActionSet: ActionSet
     let onSave: (String) -> Void
     
+    @State private var customAction: String = ""
     @Environment(\.dismiss) private var dismiss
-    @State private var selectedAction: String
-    @State private var customText: String = ""
-    @State private var isCustom: Bool = false
-    
-    init(actionNumber: Int, currentAction: String, selectedActionSet: ActionSet, onSave: @escaping (String) -> Void) {
-        self.actionNumber = actionNumber
-        self.currentAction = currentAction
-        self.selectedActionSet = selectedActionSet
-        self.onSave = onSave
-        self._selectedAction = State(initialValue: currentAction)
-        self._customText = State(initialValue: currentAction)
-    }
     
     var body: some View {
         NavigationView {
-            ZStack {
-                // Background
-                LinearGradient(
-                    gradient: Gradient(colors: [
-                        Color(red: 0.05, green: 0.05, blue: 0.1),
-                        Color(red: 0.1, green: 0.1, blue: 0.15)
-                    ]),
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea()
-                
                 VStack(spacing: 20) {
-                    Text("Action for Number \(actionNumber)")
+                Text("Custom Action for Number \(actionNumber)")
                         .font(.title2)
                         .fontWeight(.bold)
-                        .foregroundColor(.white)
+                                    .foregroundColor(.white)
                         .padding(.top)
                     
-                    // Preset Actions
                             VStack(alignment: .leading, spacing: 10) {
-                        Text("Preset Actions")
+                    Text("Enter your custom action:")
                                     .font(.headline)
                                     .foregroundColor(.white)
                                 
-                        ScrollView {
-                            VStack(spacing: 8) {
-                                ForEach(selectedActionSet.actions, id: \.self) { action in
-                                        Button(action: {
-                                        selectedAction = action
-                                        isCustom = false
-                                    }) {
-                                        HStack {
-                                            Text(action)
-                                                .foregroundColor(.white)
-                                                .multilineTextAlignment(.leading)
+                    TextField("e.g., Turn left, Sprint forward", text: $customAction)
+                            .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .onAppear {
+                            customAction = currentAction
+                        }
+                }
+                .padding(.horizontal)
                                             
                                             Spacer()
                                             
-                                            if selectedAction == action && !isCustom {
-                                                Image(systemName: "checkmark.circle.fill")
-                                                    .foregroundColor(.green)
-                                            }
-                                        }
-                                        .padding()
-                                    }
-                                    .buttonStyle(PresetActionButtonStyle(isSelected: selectedAction == action && !isCustom))
-                                }
-                            }
-                        }
-                        .frame(maxHeight: 200)
-                    }
-                    
-                    // Custom Action
-                            VStack(alignment: .leading, spacing: 10) {
-                        Text("Custom Action")
-                                    .font(.headline)
-                                    .foregroundColor(.white)
-                                
-                        TextField("Enter custom action...", text: $customText)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                            .onChange(of: customText) { _, newValue in
-                                if !newValue.isEmpty {
-                                    selectedAction = newValue
-                                    isCustom = true
-                                }
-                            }
-                        
-                        Button(action: {
-                            selectedAction = customText
-                            isCustom = true
-                        }) {
-                            HStack {
-                                Image(systemName: "plus.circle")
-                                Text("Use Custom Action")
-                            }
-                            .foregroundColor(.white)
-                            .padding()
-                            .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(CustomActionButtonStyle(isActive: isCustom, isEmpty: customText.isEmpty))
-                        .disabled(customText.isEmpty)
-                    }
-                    
-                    Spacer()
-                            }
-                            .padding()
-            }
-            .navigationTitle("Edit Action")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                HStack(spacing: 20) {
                     Button("Cancel") {
-                        dismiss()
-                    }
-                                    .foregroundColor(.white)
-                }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Save") {
-                        onSave(selectedAction)
                         dismiss()
                     }
                     .foregroundColor(.white)
-                    .disabled(selectedAction.isEmpty)
+                                        .padding()
+                    .background(Color.gray.opacity(0.3))
+                    .cornerRadius(10)
+                    
+                    Button("Save") {
+                        onSave(customAction)
+                        dismiss()
+                    }
+                .foregroundColor(.white)
+                    .padding()
+                    .background(Color.blue)
+                    .cornerRadius(10)
                 }
+                .padding(.bottom)
             }
-        }
-    }
-}
-
-struct ActionListSheet: View {
-    let actionNumber: Int
-    let currentAction: String
-    let basicActions: [String]
-    let onSelect: (String) -> Void
-    
-    @Environment(\.dismiss) private var dismiss
-    @State private var customText: String = ""
-    
-    var body: some View {
-        NavigationView {
-            ZStack {
-                // Background
+            .background(
                 LinearGradient(
                     gradient: Gradient(colors: [
                         Color(red: 0.05, green: 0.05, blue: 0.1),
@@ -3261,110 +3023,12 @@ struct ActionListSheet: View {
                     endPoint: .bottom
                 )
                 .ignoresSafeArea()
-                
-                VStack(spacing: 20) {
-                    Text("Select Action for Number \(actionNumber)")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                                    .foregroundColor(.white)
-                        .padding(.top)
-                    
-                    // Current Action
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Current Action:")
-                            .font(.headline)
-                            .foregroundColor(.white.opacity(0.8))
-                        
-                        Text(currentAction)
-                            .font(.subheadline)
-                            .foregroundColor(.white)
-                        .padding()
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        .background {
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(Color.blue.opacity(0.2))
-                        }
-                    }
-                        
-                    // Custom Action
-                            VStack(alignment: .leading, spacing: 10) {
-                        Text("Custom Action:")
-                                    .font(.headline)
-                                    .foregroundColor(.white)
-                                
-                        TextField("Type your own action...", text: $customText)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                            .foregroundColor(.black)
-                        
-                        Button(action: {
-                            if !customText.isEmpty {
-                                onSelect(customText)
-                                dismiss()
-                            }
-                        }) {
-                            HStack {
-                                Image(systemName: "plus.circle")
-                                Text("Use Custom Action")
-                            }
-                            .foregroundColor(.white)
-                            .padding()
-                            .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(CustomActionButtonStyle(isActive: !customText.isEmpty, isEmpty: customText.isEmpty))
-                        .disabled(customText.isEmpty)
-                        }
-                        
-                    // Preset Actions
-                        VStack(alignment: .leading, spacing: 10) {
-                        Text("Preset Actions:")
-                                .font(.headline)
-                                .foregroundColor(.white)
-                            
-                        ScrollView {
-                            VStack(spacing: 8) {
-                                ForEach(basicActions, id: \.self) { action in
-                        Button(action: {
-                                        onSelect(action)
-                                        dismiss()
-                                    }) {
-                                        HStack {
-                                            Text(action)
-                                .foregroundColor(.white)
-                                                .multilineTextAlignment(.leading)
-                                            
-                                            Spacer()
-                                            
-                                            if currentAction == action {
-                                                Image(systemName: "checkmark.circle.fill")
-                                                    .foregroundColor(.green)
-                                            }
-                                        }
-                                        .padding()
-                                    }
-                                    .buttonStyle(PresetActionButtonStyle(isSelected: currentAction == action))
-                                }
-                            }
-                        }
-                        .frame(maxHeight: 200)
-                    }
-                    
-                    Spacer()
-                }
-                .padding()
-            }
-            .navigationTitle("Select Action")
+            )
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                .foregroundColor(.white)
-        }
-    }
 }
     }
 }
+
 #Preview {
         ContentView()
 }

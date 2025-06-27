@@ -21,104 +21,114 @@ struct ProfileCreationView: View {
                 )
                 .ignoresSafeArea()
                 
-                VStack(spacing: 30) {
-                    // Header
-                    VStack(spacing: 16) {
-                        Image(systemName: "person.circle.fill")
-                            .font(.system(size: 80))
-                            .foregroundColor(.blue)
-                        
-                        Text("Welcome to Infinite Football Scanning Pro")
-                            .font(.largeTitle)
-                            .fontWeight(.bold)
-                            .foregroundColor(.white)
-                            .multilineTextAlignment(.center)
-                        
-                        Text("Create your first athlete profile to start training")
-                            .font(.body)
-                            .foregroundColor(.white.opacity(0.8))
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
-                    }
-                    .padding(.top, 40)
-                    
-                    // Form
-                    VStack(spacing: 20) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Athlete Name")
-                                .font(.headline)
-                                .foregroundColor(.white)
+                ScrollView {
+                    VStack(spacing: 30) {
+                        // Header
+                        VStack(spacing: 16) {
+                            Image(systemName: "person.circle.fill")
+                                .font(.system(size: 60))
+                                .foregroundColor(.blue)
                             
-                            TextField("", text: $name)
-                                .placeholder(when: name.isEmpty) {
-                                    Text("Enter athlete's name")
-                                        .foregroundColor(.gray)
-                                }
-                                .padding()
-                                .background(Color.white)
-                                .foregroundColor(.black)
-                                .cornerRadius(10)
-                                .autocapitalization(.words)
-                        }
-                        
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Email (Optional)")
-                                .font(.headline)
+                            Text("Welcome to")
+                                .font(.title)
+                                .fontWeight(.bold)
                                 .foregroundColor(.white)
+                                .multilineTextAlignment(.center)
                             
-                            TextField("", text: $email)
-                                .placeholder(when: email.isEmpty) {
-                                    Text("Enter email address")
-                                        .foregroundColor(.gray)
-                                }
-                                .padding()
-                                .background(Color.white)
-                                .foregroundColor(.black)
-                                .cornerRadius(10)
-                                .keyboardType(.emailAddress)
-                                .autocapitalization(.none)
+                            Text("Infinite Football Scanning Pro")
+                                .font(.title)
+                                .fontWeight(.bold)
+                                .foregroundColor(.blue)
+                                .multilineTextAlignment(.center)
+                            
+                            Text("Create your first athlete profile to start training")
+                                .font(.body)
+                                .foregroundColor(.white.opacity(0.8))
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal)
                         }
-                    }
-                    .padding(.horizontal)
-                    
-                    // Create Profile Button
-                    Button(action: createProfile) {
-                        HStack {
-                            Image(systemName: "person.badge.plus")
-                            Text("Create Profile")
+                        .padding(.top, 20)
+                        
+                        // Form
+                        VStack(spacing: 20) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Athlete Name")
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                                
+                                TextField("", text: $name)
+                                    .placeholder(when: name.isEmpty) {
+                                        Text("Enter athlete's name")
+                                            .foregroundColor(.gray)
+                                    }
+                                    .padding()
+                                    .background(Color.white)
+                                    .foregroundColor(.black)
+                                    .cornerRadius(10)
+                                    .autocapitalization(.words)
+                            }
+                            
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Email (Optional)")
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                                
+                                TextField("", text: $email)
+                                    .placeholder(when: email.isEmpty) {
+                                        Text("Enter email address")
+                                            .foregroundColor(.gray)
+                                    }
+                                    .padding()
+                                    .background(Color.white)
+                                    .foregroundColor(.black)
+                                    .cornerRadius(10)
+                                    .keyboardType(.emailAddress)
+                                    .autocapitalization(.none)
+                            }
                         }
-                        .font(.headline)
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(name.isEmpty ? Color.gray : Color.blue)
-                        .cornerRadius(15)
-                    }
-                    .disabled(name.isEmpty)
-                    .padding(.horizontal)
-                    
-                    Spacer()
-                    
-                    // Benefits
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("What you'll get:")
+                        .padding(.horizontal)
+                        
+                        // Create Profile Button
+                        Button(action: createProfile) {
+                            HStack {
+                                Image(systemName: "person.badge.plus")
+                                Text("Create Profile")
+                            }
                             .font(.headline)
                             .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(name.isEmpty ? Color.gray : Color.blue)
+                            .cornerRadius(15)
+                        }
+                        .disabled(name.isEmpty)
+                        .padding(.horizontal)
                         
-                        BenefitRow(icon: "chart.line.uptrend.xyaxis", text: "Track training progress")
-                        BenefitRow(icon: "clock", text: "Monitor session durations")
-                        BenefitRow(icon: "gear", text: "Save preferences")
-                        BenefitRow(icon: "calendar", text: "View training history")
-                        BenefitRow(icon: "person.2", text: "Support multiple athletes")
+                        // Benefits
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("What you'll get:")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                            
+                            BenefitRow(icon: "chart.line.uptrend.xyaxis", text: "Track training progress")
+                            BenefitRow(icon: "clock", text: "Monitor session durations")
+                            BenefitRow(icon: "gear", text: "Save preferences")
+                            BenefitRow(icon: "calendar", text: "View training history")
+                            BenefitRow(icon: "person.2", text: "Support multiple athletes")
+                        }
+                        .padding()
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(15)
+                        .padding(.horizontal)
+                        
+                        // Extra space to ensure scrolling works
+                        Spacer(minLength: 200)
                     }
-                    .padding()
-                    .background(.ultraThinMaterial)
-                    .cornerRadius(15)
-                    .padding(.horizontal)
-                    .padding(.bottom, 40)
+                    .frame(minHeight: UIScreen.main.bounds.height + 100)
                 }
             }
             .navigationBarHidden(true)
+            .ignoresSafeArea(.keyboard, edges: .bottom)
         }
         .alert("Profile Creation", isPresented: $showingAlert) {
             Button("OK") { }

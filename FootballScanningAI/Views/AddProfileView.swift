@@ -23,85 +23,109 @@ struct AddProfileView: View {
                 )
                 .ignoresSafeArea()
                 
-                VStack(spacing: 30) {
-                    // Header
-                    VStack(spacing: 15) {
-                        Image(systemName: "person.badge.plus")
-                            .font(.system(size: 60))
-                            .foregroundColor(.blue)
-                        
-                        Text("Add New Athlete")
-                            .font(.largeTitle)
-                            .fontWeight(.bold)
-                            .foregroundColor(.white)
-                        
-                        Text("Create a profile for a new family member")
-                            .font(.body)
-                            .foregroundColor(.white.opacity(0.8))
-                            .multilineTextAlignment(.center)
-                    }
-                    .padding(.top, 40)
-                    
-                    // Form
+                ScrollView {
                     VStack(spacing: 20) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Athlete Name")
-                                .font(.headline)
+                        // Header - More compact for landscape
+                        VStack(spacing: 10) {
+                            Image(systemName: "person.badge.plus")
+                                .font(.system(size: 40))
+                                .foregroundColor(.blue)
+                            
+                            Text("Add New Athlete")
+                                .font(.title)
+                                .fontWeight(.bold)
                                 .foregroundColor(.white)
                             
-                            TextField("Enter athlete's name", text: $name)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .foregroundColor(.black)
-                        }
-                        
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Email (Optional)")
-                                .font(.headline)
-                                .foregroundColor(.white)
-                            
-                            TextField("Enter email address", text: $email)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .foregroundColor(.black)
-                                .keyboardType(.emailAddress)
-                                .autocapitalization(.none)
-                        }
-                    }
-                    .padding(.horizontal)
-                    
-                    Spacer()
-                    
-                    // Action Buttons
-                    VStack(spacing: 15) {
-                        Button(action: createProfile) {
-                            HStack {
-                                Image(systemName: "person.badge.plus")
-                                Text("Create Profile")
-                            }
-                            .font(.title3)
-                            .fontWeight(.bold)
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color.blue)
-                            .cornerRadius(15)
-                        }
-                        .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        
-                        Button(action: { dismiss() }) {
-                            Text("Cancel")
-                                .font(.title3)
+                            Text("Create a profile for a new family member")
+                                .font(.body)
                                 .foregroundColor(.white.opacity(0.8))
+                                .multilineTextAlignment(.center)
+                        }
+                        .padding(.top, 20)
+                        
+                        // Form
+                        VStack(spacing: 15) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Athlete Name")
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                                
+                                ZStack(alignment: .leading) {
+                                    if name.isEmpty {
+                                        Text("Enter athlete's name")
+                                            .foregroundColor(.gray)
+                                            .padding(.horizontal, 16)
+                                            .padding(.vertical, 12)
+                                    }
+                                    TextField("", text: $name)
+                                        .padding()
+                                        .background(Color.white)
+                                        .foregroundColor(.black)
+                                        .cornerRadius(8)
+                                }
+                            }
+                            
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Email (Optional)")
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                                
+                                ZStack(alignment: .leading) {
+                                    if email.isEmpty {
+                                        Text("Enter email address")
+                                            .foregroundColor(.gray)
+                                            .padding(.horizontal, 16)
+                                            .padding(.vertical, 12)
+                                    }
+                                    TextField("", text: $email)
+                                        .padding()
+                                        .background(Color.white)
+                                        .foregroundColor(.black)
+                                        .cornerRadius(8)
+                                        .keyboardType(.emailAddress)
+                                        .autocapitalization(.none)
+                                }
+                            }
+                        }
+                        .padding(.horizontal)
+                        
+                        // Action Buttons
+                        VStack(spacing: 12) {
+                            Button(action: createProfile) {
+                                HStack {
+                                    Image(systemName: "person.badge.plus")
+                                    Text("Create Profile")
+                                }
+                                .font(.title3)
+                                .fontWeight(.bold)
+                                .foregroundColor(.white)
                                 .frame(maxWidth: .infinity)
                                 .padding()
-                                .background(Color.gray.opacity(0.3))
+                                .background(Color.blue)
                                 .cornerRadius(15)
+                            }
+                            .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            
+                            Button(action: { dismiss() }) {
+                                Text("Cancel")
+                                    .font(.title3)
+                                    .foregroundColor(.white.opacity(0.8))
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(Color.gray.opacity(0.3))
+                                    .cornerRadius(15)
+                            }
                         }
+                        .padding(.horizontal)
+                        
+                        // Extra space to ensure scrolling works
+                        Spacer(minLength: 200)
                     }
-                    .padding(.horizontal)
-                    .padding(.bottom, 40)
+                    .frame(minHeight: UIScreen.main.bounds.height + 100)
                 }
             }
             .navigationBarHidden(true)
+            .ignoresSafeArea(.keyboard, edges: .bottom)
             .alert("Profile Creation", isPresented: $showingAlert) {
                 Button("OK") {
                     if alertMessage.contains("successfully") {

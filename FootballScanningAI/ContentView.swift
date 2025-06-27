@@ -883,7 +883,7 @@ struct MainView: View {
                                         .padding(.horizontal, 4)
                                         .environment(\.sizeCategory, .large) // Force consistent size
                                     
-                                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
+                                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
                                         Button(action: {
                                             displayMode = .colors
                                             selectedNumbers.removeAll()
@@ -902,49 +902,17 @@ struct MainView: View {
                                         .buttonStyle(DisplayModeButtonStyle(isSelected: displayMode == .colors, color: .blue))
                                         
                                         Button(action: {
-                                            displayMode = .colorsNumbers
-                                            selectedNumbers.removeAll()
-                                            selectedLanes.removeAll()
-                                            selectedBeepInterval = .medium
-                                            // Keep selectedColors and selectedArrows for session persistence
-                                        }) {
-                                            Text("Colors + Nums")
-                                                .font(.system(size: 13, weight: .semibold))
-                                                .foregroundColor(displayMode == .colorsNumbers ? .white : .white.opacity(0.7))
-                                                .padding(.vertical, 12)
-                                                .padding(.horizontal, 6)
-                                                .frame(maxWidth: .infinity)
-                                        }
-                                        .buttonStyle(DisplayModeButtonStyle(isSelected: displayMode == .colorsNumbers, color: .blue))
-                                        
-                                        Button(action: {
-                                            displayMode = .colorsArrows
-                                            selectedNumbers.removeAll()
-                                            selectedLanes.removeAll()
-                                            selectedBeepInterval = .medium
-                                            // Keep selectedArrows for shared arrow selection between arrow activities
-                                        }) {
-                                            Text("Colors + Arrows")
-                                                .font(.system(size: 13, weight: .semibold))
-                                                .foregroundColor(displayMode == .colorsArrows ? .white : .white.opacity(0.7))
-                                                .padding(.vertical, 12)
-                                                .padding(.horizontal, 6)
-                                                .frame(maxWidth: .infinity)
-                                        }
-                                        .buttonStyle(DisplayModeButtonStyle(isSelected: displayMode == .colorsArrows, color: .blue))
-                                        
-                                        Button(action: {
                                             displayMode = .numbers
                                             selectedNumbers.removeAll()
                                             selectedLanes.removeAll()
                                             selectedBeepInterval = .medium
                                             // Keep selectedColors and selectedArrows for session persistence
                                         }) {
-                                            Text("Nums")
-                                                .font(.system(size: 13, weight: .semibold))
+                                            Text("Numbers")
+                                                .font(.system(size: 12, weight: .semibold))
                                                 .foregroundColor(displayMode == .numbers ? .white : .white.opacity(0.7))
                                                 .padding(.vertical, 12)
-                                                .padding(.horizontal, 6)
+                                                .padding(.horizontal, 4)
                                                 .frame(maxWidth: .infinity)
                                         }
                                         .buttonStyle(DisplayModeButtonStyle(isSelected: displayMode == .numbers, color: .blue))
@@ -965,6 +933,40 @@ struct MainView: View {
                                                 .frame(maxWidth: .infinity)
                                         }
                                         .buttonStyle(DisplayModeButtonStyle(isSelected: displayMode == .lanes, color: .blue))
+                                    }
+                                    
+                                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 2), spacing: 8) {
+                                        Button(action: {
+                                            displayMode = .colorsArrows
+                                            selectedNumbers.removeAll()
+                                            selectedLanes.removeAll()
+                                            selectedBeepInterval = .medium
+                                            // Keep selectedArrows for shared arrow selection between arrow activities
+                                        }) {
+                                            Text("Colors + Arrows")
+                                                .font(.system(size: 11, weight: .semibold))
+                                                .foregroundColor(displayMode == .colorsArrows ? .white : .white.opacity(0.7))
+                                                .padding(.vertical, 12)
+                                                .padding(.horizontal, 4)
+                                                .frame(maxWidth: .infinity)
+                                        }
+                                        .buttonStyle(DisplayModeButtonStyle(isSelected: displayMode == .colorsArrows, color: .blue))
+                                        
+                                        Button(action: {
+                                            displayMode = .colorsNumbers
+                                            selectedNumbers.removeAll()
+                                            selectedLanes.removeAll()
+                                            selectedBeepInterval = .medium
+                                            // Keep selectedColors and selectedArrows for session persistence
+                                        }) {
+                                            Text("Colors + Numbers")
+                                                .font(.system(size: 11, weight: .semibold))
+                                                .foregroundColor(displayMode == .colorsNumbers ? .white : .white.opacity(0.7))
+                                                .padding(.vertical, 12)
+                                                .padding(.horizontal, 4)
+                                                .frame(maxWidth: .infinity)
+                                        }
+                                        .buttonStyle(DisplayModeButtonStyle(isSelected: displayMode == .colorsNumbers, color: .blue))
                                     }
                                 }
                                 
@@ -1157,8 +1159,8 @@ struct MainView: View {
                                 .padding(.horizontal)
                             }
                             
-                            // Beep Interval Selection (for Colors, Colors + Numbers, Colors + Arrows, Numbers, and Lanes modes)
-                            if displayMode == .colors || displayMode == .colorsNumbers || displayMode == .colorsArrows || displayMode == .numbers || displayMode == .lanes {
+                            // Beep Interval Selection (for Colors, Colors + Numbers, Colors + Arrows, Numbers, Lanes, and Critical Scan modes)
+                            if displayMode == .colors || displayMode == .colorsNumbers || displayMode == .colorsArrows || displayMode == .numbers || displayMode == .lanes || displayMode == .criticalScan || displayMode == .criticalScanArrows {
                                 VStack(alignment: .leading, spacing: 10) {
                                     Text("Beep Interval")
                                         .font(.headline)
@@ -2063,7 +2065,7 @@ struct DisplayView: View {
                         
                         VStack {
                     Text("\(currentNumber)")
-                                .font(.system(size: 120, weight: .bold))
+                                .font(.system(size: 300, weight: .bold))
                                     .foregroundColor(numberColor)
                                 .shadow(radius: 10)
                         }
@@ -2087,7 +2089,7 @@ struct DisplayView: View {
                     // Critical Scan display
                     ZStack {
                         // Background color based on phase
-                        if criticalScanPhase == "NORMAL" {
+                        if criticalScanPhase == "NORMAL" || criticalScanPhase == "BEEP" {
                             Color.black
                                 .ignoresSafeArea()
                         } else if criticalScanPhase == "CRITICAL" {
@@ -2102,7 +2104,7 @@ struct DisplayView: View {
                         }
                         
                         VStack(spacing: 20) {
-                            if criticalScanPhase == "NORMAL" {
+                            if criticalScanPhase == "NORMAL" || criticalScanPhase == "BEEP" {
                                 VStack(spacing: 15) {
                                     // Scanning circle (cycles through colors every second)
                                     Circle()
@@ -2163,7 +2165,7 @@ struct DisplayView: View {
                     // Critical Scan Arrows display
                     ZStack {
                         // Background color based on phase
-                        if criticalScanPhase == "NORMAL" {
+                        if criticalScanPhase == "NORMAL" || criticalScanPhase == "BEEP" {
                             Color.black
                                 .ignoresSafeArea()
                         } else if criticalScanPhase == "CRITICAL" {
@@ -2178,7 +2180,7 @@ struct DisplayView: View {
                         }
                         
                         VStack(spacing: 20) {
-                            if criticalScanPhase == "NORMAL" {
+                            if criticalScanPhase == "NORMAL" || criticalScanPhase == "BEEP" {
                                 VStack(spacing: 15) {
                                     // Scanning circle (cycles through colors every second)
                                     Circle()
@@ -2304,6 +2306,17 @@ struct DisplayView: View {
     private func startActivity() {
         print("🎯 Start Activity - Display Mode: \(displayMode)")
         showNumberOrArrow = false // Reset at start
+        
+        // Initialize with random values for immediate display
+        if displayMode == .numbers {
+            if let randomNumber = selectedNumbers.randomElement() {
+                currentNumber = randomNumber
+            }
+            if let randomColor = selectedColors.randomElement() {
+                currentNumberColor = randomColor
+            }
+        }
+        
         startTimer()
         setupAudio()
         
@@ -2535,86 +2548,35 @@ struct DisplayView: View {
             }
             
             // Schedule first critical scan
-            DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: 5...10)) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: selectedBeepInterval.range)) {
                 startCriticalScanPhase()
             }
         }
         
         private func startCriticalScanPhase() {
-                guard isActive else { return }
-                
-            print("🔴 Starting Critical Scan Phase")
-                criticalScanPhase = "CRITICAL"
-            
-            // Select random action number
-                currentActionNumber = selectedCriticalScanNumbers.randomElement() ?? 1
-            
-            // Play critical scan sound
-            if soundEnabled {
-                playCriticalScanSound()
-            }
-            
-            // End critical phase after duration
-                DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanDuration) {
-                startResetPhase()
-            }
-        }
-                    
-        private func startResetPhase() {
             guard isActive else { return }
             
-            print("🔵 Starting Reset Phase")
-                    criticalScanPhase = "RESET"
-                    
-            // End reset phase after reset time
-            DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanResetTime) {
-                startNormalPhase()
-        }
-    }
-    
-        private func startNormalPhase() {
-        guard isActive else { return }
-        
-            print("⚪ Starting Normal Phase")
-            criticalScanPhase = "NORMAL"
+            print("🔴 Starting Critical Scan Phase")
+            criticalScanPhase = "BEEP"
             
-            // Schedule next critical scan
-            DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: 5...10)) {
-                startCriticalScanPhase()
-            }
-        }
-        
-        private func startCriticalScanArrowsSequence() {
-            print("🔍 Starting Critical Scan Arrows Sequence")
-            
-            // Start scanning circle timer
-            scanningCircleTimer = Timer.scheduledTimer(withTimeInterval: changeInterval, repeats: true) { _ in
-                scanningColorIndex = (scanningColorIndex + 1) % selectedColorSet.colors.count
-            }
-            
-            // Schedule first critical scan
-            DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: 5...10)) {
-                startCriticalScanArrowsPhase()
-            }
-        }
-        
-        private func startCriticalScanArrowsPhase() {
-        guard isActive else { return }
-        
-            print("🔴 Starting Critical Scan Arrows Phase")
-            criticalScanPhase = "CRITICAL"
-            
-            // Select random arrow
-            currentArrowDirection = selectedArrows.randomElement() ?? "arrow.up"
-            
-            // Play critical scan sound
+            // Play critical scan sound immediately
             if soundEnabled {
                 playCriticalScanSound()
             }
             
-            // End critical phase after duration
+            // Show critical phase after delay
+            DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanDelay) {
+                guard isActive else { return }
+                
+                criticalScanPhase = "CRITICAL"
+                
+                // Select random action number
+                currentActionNumber = selectedCriticalScanNumbers.randomElement() ?? 1
+                
+                // End critical phase after duration
                 DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanDuration) {
-                startResetPhase()
+                    startResetPhase()
+                }
             }
         }
         
@@ -2629,10 +2591,74 @@ struct DisplayView: View {
                 criticalScanAudioPlayer?.play()
             } catch {
                 print("Could not create critical scan audio player: \(error)")
-                    }
+            }
+        }
+        
+        private func startCriticalScanArrowsSequence() {
+            print("🔍 Starting Critical Scan Arrows Sequence")
+            
+            // Start scanning circle timer
+            scanningCircleTimer = Timer.scheduledTimer(withTimeInterval: changeInterval, repeats: true) { _ in
+                scanningColorIndex = (scanningColorIndex + 1) % selectedColorSet.colors.count
+            }
+            
+            // Schedule first critical scan
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: selectedBeepInterval.range)) {
+                startCriticalScanArrowsPhase()
+            }
+        }
+        
+        private func startCriticalScanArrowsPhase() {
+            guard isActive else { return }
+            
+            print("🔴 Starting Critical Scan Arrows Phase")
+            criticalScanPhase = "BEEP"
+            
+            // Play critical scan sound immediately
+            if soundEnabled {
+                playCriticalScanSound()
+            }
+            
+            // Show critical phase after delay
+            DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanDelay) {
+                guard isActive else { return }
+                
+                criticalScanPhase = "CRITICAL"
+                
+                // Select random arrow
+                currentArrowDirection = selectedArrows.randomElement() ?? "arrow.up"
+                
+                // End critical phase after duration
+                DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanDuration) {
+                    startResetPhase()
                 }
             }
         }
+        
+        private func startResetPhase() {
+            guard isActive else { return }
+            
+            print("🔵 Starting Reset Phase")
+            criticalScanPhase = "RESET"
+            
+            // End reset phase after reset time
+            DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanResetTime) {
+                startNormalPhase()
+            }
+        }
+        
+        private func startNormalPhase() {
+            guard isActive else { return }
+            
+            print("⚪ Starting Normal Phase")
+            criticalScanPhase = "NORMAL"
+            
+            // Schedule next critical scan
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: selectedBeepInterval.range)) {
+                startCriticalScanPhase()
+            }
+        }
+    }
 
 #Preview {
         ContentView()
@@ -2970,34 +2996,34 @@ struct CustomActionSheet: View {
     
     var body: some View {
         NavigationView {
-                VStack(spacing: 20) {
+            VStack(spacing: 20) {
                 Text("Custom Action for Number \(actionNumber)")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                                    .foregroundColor(.white)
-                        .padding(.top)
-                    
-                            VStack(alignment: .leading, spacing: 10) {
+                    .font(.title2)
+                    .fontWeight(.bold)
+                    .foregroundColor(.white)
+                    .padding(.top)
+                
+                VStack(alignment: .leading, spacing: 10) {
                     Text("Enter your custom action:")
-                                    .font(.headline)
-                                    .foregroundColor(.white)
-                                
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    
                     TextField("e.g., Turn left, Sprint forward", text: $customAction)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
                         .onAppear {
                             customAction = currentAction
                         }
                 }
                 .padding(.horizontal)
-                                            
-                                            Spacer()
-                                            
+                
+                Spacer()
+                
                 HStack(spacing: 20) {
                     Button("Cancel") {
                         dismiss()
                     }
                     .foregroundColor(.white)
-                                        .padding()
+                    .padding()
                     .background(Color.gray.opacity(0.3))
                     .cornerRadius(10)
                     
@@ -3005,7 +3031,7 @@ struct CustomActionSheet: View {
                         onSave(customAction)
                         dismiss()
                     }
-                .foregroundColor(.white)
+                    .foregroundColor(.white)
                     .padding()
                     .background(Color.blue)
                     .cornerRadius(10)
@@ -3024,10 +3050,12 @@ struct CustomActionSheet: View {
                 .ignoresSafeArea()
             )
             .navigationBarTitleDisplayMode(.inline)
-}
+        }
     }
 }
 
 #Preview {
         ContentView()
+}
+
 }

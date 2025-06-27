@@ -35,19 +35,28 @@ enum ScanningColorSet: String, Codable, CaseIterable {
 }
 
 enum ActionSet: String, Codable, CaseIterable {
-    case basic = "Basic Actions"
-    case advanced = "Advanced Actions"
-    case defensive = "Defensive Actions"
+    case basic = "Basic Ball Actions"
+    case intermediate = "Intermediate Ball Actions"
+    case advanced = "Advanced Ball Actions"
+    case defensive = "Defensive Ball Actions"
+    case attacking = "Attacking Ball Actions"
+    case midfield = "Midfield Ball Actions"
     case custom = "Custom Actions"
     
     var actions: [String] {
         switch self {
         case .basic:
-            return ["Dribble forward", "Dribble left", "Dribble right", "Dribble back", "Pass left", "Pass right", "Pass forward", "Pass back", "Shoot"]
+            return ["Dribble forward", "Dribble left", "Dribble right", "Dribble back", "Pass left", "Pass right", "Pass forward", "Pass back", "Shoot", "First touch", "Control ball", "Turn with ball"]
+        case .intermediate:
+            return ["Turn left", "Turn right", "Turn", "Man on", "Cross to far post", "Through ball", "Long shot", "One-touch pass", "Lay-off pass", "Wall pass", "Overlap run", "Cut inside"]
         case .advanced:
-            return ["Turn left", "Turn right", "Turn", "Man on", "Cross to far post", "Through ball", "Long shot", "One-touch pass"]
+            return ["Rabona", "Elastico", "Step-over", "Cruyff turn", "Maradona turn", "Outside foot pass", "Chip shot", "Volley", "Half-volley", "Bicycle kick", "Scorpion kick", "Panenka penalty"]
         case .defensive:
-            return ["Tackle", "Intercept", "Mark player", "Clear ball", "Close down", "Cover space"]
+            return ["Tackle", "Intercept", "Mark player", "Clear ball", "Close down", "Cover space", "Slide tackle", "Block shot", "Clear header", "Man-mark", "Zone defense", "Counter-press"]
+        case .attacking:
+            return ["Shoot near post", "Shoot far post", "Chip goalkeeper", "Power shot", "Finesse shot", "Header goal", "Tap-in", "Breakaway", "1v1 finish", "Backheel shot", "Bicycle kick", "Volley finish"]
+        case .midfield:
+            return ["Switch play", "Through ball", "Cross-field pass", "Long diagonal", "Short triangle", "Give and go", "Overlap", "Underlap", "Box-to-box run", "Deep-lying playmaker", "Regista pass", "Trequartista"]
         case .custom:
             return ["Custom Action 1", "Custom Action 2", "Custom Action 3", "Custom Action 4"]
         }

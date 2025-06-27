@@ -114,18 +114,16 @@ struct ProfileView: View {
                                     .cornerRadius(10)
                                 }
                                 
-                                if profileManager.hasMultipleProfiles() {
-                                    Button(action: { showingAddProfile = true }) {
-                                        HStack {
-                                            Image(systemName: "person.badge.plus")
-                                            Text("Add New Athlete")
-                                        }
-                                        .foregroundColor(.white)
-                                        .frame(maxWidth: .infinity)
-                                        .padding()
-                                        .background(Color.green)
-                                        .cornerRadius(10)
+                                Button(action: { showingAddProfile = true }) {
+                                    HStack {
+                                        Image(systemName: "person.badge.plus")
+                                        Text("Add New Athlete")
                                     }
+                                    .foregroundColor(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(Color.green)
+                                    .cornerRadius(10)
                                 }
                                 
                                 Button(action: { showingDeleteAlert = true }) {

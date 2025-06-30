@@ -869,19 +869,12 @@ struct MainView: View {
                                 
                             // Normal Scan Activities
                                 VStack(alignment: .leading, spacing: 8) {
-                                Text("Normal Scan Activities")
-                                    .font(.subheadline)
-                                    .foregroundColor(.white.opacity(0.8))
-                                    .padding(.horizontal, 4)
-                                    .environment(\.sizeCategory, .large) // Force consistent size
+                                 Text("Normal Scan Activities")
+                                     .font(.subheadline)
+                                     .foregroundColor(.white.opacity(0.8))
+                                     .padding(.horizontal, 4)
+                                     .environment(\.sizeCategory, .large) // Force consistent size
                                 
-                                // Normal Scan Activities
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Text("Normal Scan Activities")
-                                        .font(.subheadline)
-                                        .foregroundColor(.white.opacity(0.8))
-                                        .padding(.horizontal, 4)
-                                        .environment(\.sizeCategory, .large) // Force consistent size
                                     
                                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
                                         Button(action: {
@@ -968,11 +961,11 @@ struct MainView: View {
                                         }
                                         .buttonStyle(DisplayModeButtonStyle(isSelected: displayMode == .colorsNumbers, color: .blue))
                                     }
-                                }
+                                
                                 
                                 // Critical Scan Modes
                                 VStack(alignment: .leading, spacing: 8) {
-                                    Text("Critical Scan Activites")
+                                    Text("Critical Scan Activities")
                                     .font(.subheadline)
                                     .foregroundColor(.white.opacity(0.8))
                                         .padding(.horizontal, 4)
@@ -1768,6 +1761,7 @@ struct MainView: View {
                         }
                     )
                 }
+                
             }
         }
     }
@@ -1852,7 +1846,7 @@ struct MainView: View {
         .black,
         Color(red: 1.0, green: 0.4, blue: 0.8)
     ]
-    
+}
 
 struct ColorButton: View {
     let color: Color
@@ -2239,13 +2233,21 @@ struct DisplayView: View {
                 VStack {
                     HStack {
                         Spacer()
-                        Image(systemName: "hand.tap.fill")
-                            .font(.system(size: 20))
-                            .foregroundColor(.white.opacity(0.5))
-                            .padding(8)
-                            .background(.regularMaterial)
-                            .clipShape(Circle())
-                            .padding()
+                        VStack(spacing: 4) {
+                            Image(systemName: "hand.tap.fill")
+                                .font(.system(size: 20))
+                                .foregroundColor(.white.opacity(0.5))
+                                .padding(8)
+                                .background(.regularMaterial)
+                                .clipShape(Circle())
+                            
+                            Text("Double tap anywhere on the screen to end training")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.7))
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 8)
+                        }
+                        .padding()
                     }
                     Spacer()
                 }
@@ -2274,18 +2276,9 @@ struct DisplayView: View {
                 }
         }
         .onTapGesture(count: 2) {
-            if !isCountingDown {
-                isActive = false
-                    
-                    // End session tracking
-                    if let startTime = sessionStartTime {
-                        sessionDuration = Date().timeIntervalSince(startTime)
-                        endTrainingSession()
-                    }
-                    
-                    showDisplay = false
-            }
+            endTrainingSessionAndReturn()
         }
+        .navigationBarBackButtonHidden(true)
     }
     
     private func startCountdown() {
@@ -2426,15 +2419,11 @@ struct DisplayView: View {
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: changeInterval, repeats: true) { _ in
             if displayMode == .colors || displayMode == .colorsNumbers || displayMode == .colorsArrows {
-                if let randomColor = selectedColors.randomElement() {
-                    currentColor = randomColor
-                }
+                currentColor = getRandomColor(excluding: currentColor, from: selectedColors)
             } else if displayMode == .numbers {
                 if let randomNumber = selectedNumbers.randomElement() {
                     currentNumber = randomNumber
-                    if let randomColor = selectedColors.randomElement() {
-                        currentNumberColor = randomColor
-                    }
+                    currentNumberColor = getRandomColor(excluding: currentNumberColor, from: selectedColors)
                 }
             } else if displayMode == .lanes {
                 assignColorsToLanes()
@@ -2658,7 +2647,28 @@ struct DisplayView: View {
                 startCriticalScanPhase()
             }
         }
+    
+    private func getRandomColor(excluding currentColor: Color, from availableColors: [Color]) -> Color {
+        let filteredColors = availableColors.filter { $0 != currentColor }
+        return filteredColors.randomElement() ?? availableColors.randomElement() ?? .red
     }
+    
+    // MARK: - Helper Functions
+    
+    private func endTrainingSessionAndReturn() {
+        if !isCountingDown {
+            isActive = false
+            
+            // End session tracking
+            if let startTime = sessionStartTime {
+                sessionDuration = Date().timeIntervalSince(startTime)
+                endTrainingSession()
+            }
+            
+            showDisplay = false
+        }
+    }
+}
 
 #Preview {
         ContentView()
@@ -3054,8 +3064,4 @@ struct CustomActionSheet: View {
     }
 }
 
-#Preview {
-        ContentView()
-}
 
-}

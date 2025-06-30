@@ -363,7 +363,7 @@ struct IntroView: View {
             VStack(spacing: 30) {
                 // Header
                 VStack(spacing: 10) {
-                Text("The Art of Scanning")
+                Text("Infinite Football Scanning Pro")
                     .font(.system(size: 40, weight: .bold))
                     .foregroundColor(.white)
                     
@@ -1036,7 +1036,7 @@ struct MainView: View {
                             }
                             .padding(.horizontal)
                             
-                            // Number Color Selection (only for modes that use numbers)
+                            // Number Color Selection (for modes that use numbers)
                             if displayMode == .numbers || displayMode == .colorsNumbers || displayMode == .criticalScan {
                                 VStack(alignment: .leading, spacing: 10) {
                                     Text("Number Color")
@@ -1062,7 +1062,7 @@ struct MainView: View {
                                             .padding(.horizontal, 16)
                                             .frame(maxWidth: .infinity)
                                         }
-                                        .buttonStyle(NumberColorButtonStyle(isSelected: numberColor == .white, color: .white))
+                                        .buttonStyle(DisplayModeButtonStyle(isSelected: numberColor == .white, color: .blue))
                                         
                                         Button(action: {
                                             numberColor = .black
@@ -1076,13 +1076,13 @@ struct MainView: View {
                                                             .stroke(numberColor == .black ? .blue : .gray, lineWidth: 3)
                                                     )
                                                 Text("Black")
-                                                    .foregroundColor(.black)
+                                                    .foregroundColor(.white)
                                             }
                                             .padding(.vertical, 12)
                                             .padding(.horizontal, 16)
                                             .frame(maxWidth: .infinity)
                                         }
-                                        .buttonStyle(NumberColorButtonStyle(isSelected: numberColor == .black, color: .black))
+                                        .buttonStyle(DisplayModeButtonStyle(isSelected: numberColor == .black, color: .blue))
                                     }
                                 }
                                 .padding()
@@ -1120,7 +1120,7 @@ struct MainView: View {
                                             .padding(.horizontal, 16)
                                             .frame(maxWidth: .infinity)
                                         }
-                                        .buttonStyle(NumberColorButtonStyle(isSelected: arrowColor == .white, color: .white))
+                                        .buttonStyle(DisplayModeButtonStyle(isSelected: arrowColor == .white, color: .blue))
                                         
                                         Button(action: {
                                             arrowColor = .black
@@ -1134,13 +1134,13 @@ struct MainView: View {
                                                             .stroke(arrowColor == .black ? .blue : .gray, lineWidth: 3)
                                                     )
                                                 Text("Black")
-                                                    .foregroundColor(.black)
+                                                    .foregroundColor(.white)
                                             }
                                             .padding(.vertical, 12)
                                             .padding(.horizontal, 16)
                                             .frame(maxWidth: .infinity)
                                         }
-                                        .buttonStyle(NumberColorButtonStyle(isSelected: arrowColor == .black, color: .black))
+                                        .buttonStyle(DisplayModeButtonStyle(isSelected: arrowColor == .black, color: .blue))
                                     }
                                 }
                                 .padding()
@@ -1158,6 +1158,10 @@ struct MainView: View {
                                     Text("Beep Interval")
                                         .font(.headline)
                                         .foregroundColor(.white)
+                                    
+                                    Text("Controls how often beep sounds occur during training to signal actions")
+                                        .font(.caption)
+                                        .foregroundColor(.white.opacity(0.7))
                                     
                                     HStack(spacing: 8) {
                                         ForEach(BeepInterval.allCases, id: \.self) { interval in
@@ -1220,7 +1224,7 @@ struct MainView: View {
                                 
                                 // Color Selection for Lanes
                                 VStack(alignment: .leading, spacing: 10) {
-                                    Text("Select Colors (\(selectedLanes.count) colors max)")
+                                    Text(selectedLanes.isEmpty ? "Select Colors" : "Select Colors (\(selectedLanes.count) colors max)")
                                         .font(.headline)
                                         .foregroundColor(.white)
                                     
@@ -1433,6 +1437,10 @@ struct MainView: View {
                                         .font(.headline)
                                         .foregroundColor(.white)
                                     
+                                    Text("Controls how fast the colored lanes move up and down the screen")
+                                        .font(.caption)
+                                        .foregroundColor(.white.opacity(0.7))
+                                    
                                     Slider(value: $laneSpeed, in: 2.0...10.0, step: 0.5)
                                         .accentColor(.blue)
                                 }
@@ -1451,6 +1459,10 @@ struct MainView: View {
                                     Text(displayMode == .colors || displayMode == .colorsNumbers || displayMode == .colorsArrows || displayMode == .lanes ? "Color Changing Time Interval: \(String(format: "%.1f", changeInterval))s" : displayMode == .numbers ? "Color and Number Changing Time Interval: \(String(format: "%.1f", changeInterval))s" : "Time Interval: \(String(format: "%.1f", changeInterval))s")
                                         .font(.headline)
                                         .foregroundColor(.white)
+                                    
+                                    Text(displayMode == .numbers ? "Controls how often the colors and numbers change on the screen" : "Controls how often colors change on the screen")
+                                        .font(.caption)
+                                        .foregroundColor(.white.opacity(0.7))
                                     
                                     Slider(value: $changeInterval, in: 0.5...3.0, step: 0.1)
                                         .accentColor(.blue)
@@ -1471,6 +1483,10 @@ struct MainView: View {
                                         .font(.headline)
                                         .foregroundColor(.white)
                                     
+                                    Text("Controls how fast the scanning circles change color")
+                                        .font(.caption)
+                                        .foregroundColor(.white.opacity(0.7))
+                                    
                                     Slider(value: $changeInterval, in: 0.5...3.0, step: 0.1)
                                         .accentColor(.blue)
                                 }
@@ -1489,6 +1505,10 @@ struct MainView: View {
                                     Text("Critical Scan Delay: \(String(format: "%.1f", settingsViewModel.criticalScanDelay))s")
                                         .font(.headline)
                                         .foregroundColor(.white)
+                                    
+                                    Text("Time between the initial beep sound and when the red screen and the action appear on screen")
+                                        .font(.caption)
+                                        .foregroundColor(.white.opacity(0.7))
                                     
                                     Slider(value: $settingsViewModel.criticalScanDelay, in: 0.5...3.0, step: 0.1)
                                         .accentColor(.red)
@@ -1509,6 +1529,10 @@ struct MainView: View {
                                         .font(.headline)
                                         .foregroundColor(.white)
                                     
+                                    Text("How long the red screen and the action stay visible on screen during the critical scan")
+                                        .font(.caption)
+                                        .foregroundColor(.white.opacity(0.7))
+                                    
                                     Slider(value: $settingsViewModel.criticalScanDuration, in: 0.5...2.0, step: 0.1)
                                         .accentColor(.orange)
                                 }
@@ -1527,6 +1551,10 @@ struct MainView: View {
                                     Text("Reset Time: \(String(format: "%.0f", settingsViewModel.criticalScanResetTime))s")
                                         .font(.headline)
                                         .foregroundColor(.white)
+                                    
+                                    Text("Time you have to complete the action and return back to the training area before the next scan begins")
+                                        .font(.caption)
+                                        .foregroundColor(.white.opacity(0.7))
                                     
                                     Slider(value: $settingsViewModel.criticalScanResetTime, in: 1.0...10.0, step: 1.0)
                                         .accentColor(.purple)

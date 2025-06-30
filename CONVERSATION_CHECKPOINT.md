@@ -1,9 +1,11 @@
-# FootballScanningAI - Conversation Checkpoint
+# Infinite Football Scanning Pro - Conversation Checkpoint
 
 ## Project Overview
-**App Name:** Infinite Football Scanning Pro  
-**Platform:** iOS SwiftUI  
-**Purpose:** Football training app focused on scanning exercises and drills
+This is a SwiftUI-based iOS app for football scanning training. The app helps players develop their scanning skills through various training modes and exercises.
+
+## Key Files
+- `ContentView.swift` - Main app interface and training logic
+- `FootballScanningAIApp.swift` - Main app entry point
 
 ## Current App Structure
 

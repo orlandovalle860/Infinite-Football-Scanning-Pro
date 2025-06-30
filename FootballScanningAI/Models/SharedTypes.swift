@@ -46,13 +46,13 @@ enum ActionSet: String, Codable, CaseIterable {
     var actions: [String] {
         switch self {
         case .basic:
-            return ["Dribble forward", "Dribble left", "Dribble right", "Dribble back", "Pass left", "Pass right", "Pass forward", "Pass back", "Shoot", "First touch", "Control ball", "Turn with ball"]
+            return ["Dribble forward", "Dribble left", "Dribble right", "Dribble back", "Pass left", "Pass right", "Pass forward", "Pass back", "Shoot", "First touch left", "First touch right", "First touch forward", "First touch backward", "Control ball"]
         case .intermediate:
             return ["Turn left", "Turn right", "Turn", "Man on", "Cross to far post", "Through ball", "Long shot", "One-touch pass", "Lay-off pass", "Wall pass", "Overlap run", "Cut inside"]
         case .advanced:
-            return ["Rabona", "Elastico", "Step-over", "Cruyff turn", "Maradona turn", "Outside foot pass", "Chip shot", "Volley", "Half-volley", "Bicycle kick", "Scorpion kick", "Panenka penalty"]
+            return ["Elastico", "Step-over", "Cruyff turn", "Maradona turn", "Scissor"]
         case .defensive:
-            return ["Tackle", "Intercept", "Mark player", "Clear ball", "Close down", "Cover space", "Slide tackle", "Block shot", "Clear header", "Man-mark", "Zone defense", "Counter-press"]
+            return ["Tackle", "Intercept", "Mark player", "Clear ball", "Close down", "Cover space", "Block shot", "Clear header"]
         case .attacking:
             return ["Shoot near post", "Shoot far post", "Chip goalkeeper", "Power shot", "Finesse shot", "Header goal", "Tap-in", "Breakaway", "1v1 finish", "Backheel shot", "Bicycle kick", "Volley finish"]
         case .midfield:

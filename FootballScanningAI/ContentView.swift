@@ -334,7 +334,7 @@ struct MainAppView: View {
         TabView(selection: $selectedTab) {
             // Training Tab
             NavigationStack {
-                IntroView(profileManager: profileManager)
+                IntroView(profileManager: profileManager, settingsViewModel: settingsViewModel)
             }
             .tabItem {
                 Image(systemName: "figure.soccer")
@@ -356,6 +356,7 @@ struct MainAppView: View {
 
 struct IntroView: View {
     @ObservedObject var profileManager: UserProfileManager
+    @ObservedObject var settingsViewModel: SettingsViewModel
     @State private var navigateToMain = false
     
     var body: some View {
@@ -410,7 +411,7 @@ struct IntroView: View {
                         BenefitRow(icon: "eye.fill", text: "Better Decision Making")
                         BenefitRow(icon: "brain.head.profile", text: "Improved Spatial Awareness")
                         BenefitRow(icon: "figure.soccer", text: "Enhanced Game Intelligence")
-                        BenefitRow(icon: "bolt.fill", text: "Faster Reaction Time")
+                        BenefitRow(icon: "bolt.fill", text: "Faster Decision Making")
                     }
                 }
                 .padding()
@@ -600,7 +601,7 @@ struct IntroView: View {
                 )
                 
                 // Start Training Button
-                NavigationLink(destination: MainView(profileManager: profileManager)) {
+                NavigationLink(destination: MainView(settingsViewModel: settingsViewModel, profileManager: profileManager)) {
                     HStack {
                         Image(systemName: "figure.soccer")
                         if profileManager.hasMultipleProfiles(), let currentProfile = profileManager.currentProfile {
@@ -683,7 +684,7 @@ struct PlayerExample: View {
 }
 
 struct MainView: View {
-    @StateObject private var settingsViewModel = SettingsViewModel()
+    @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
     
     @State private var selectedColors: [Color] = []
@@ -766,9 +767,15 @@ struct MainView: View {
     // Screen protection timer for outdoor use
     @State private var screenProtectionTimer: Timer?
     
+    // Scanning Game state variables
+    @State private var selectedUserTeamColor: TeamColor = .blue
+    @State private var selectedOpponentColor: TeamColor = .red
+    @State private var selectedPlayerGender: PlayerGender = .male
+    
     let availableLanes = ["Left", "Center", "Right"]
     
-    init(profileManager: UserProfileManager, selectedColors: [Color] = [], displayMode: DisplayMode = .colors, changeInterval: Double = 1.5, selectedNumbers: Set<Int> = []) {
+    init(settingsViewModel: SettingsViewModel, profileManager: UserProfileManager, selectedColors: [Color] = [], displayMode: DisplayMode = .colors, changeInterval: Double = 1.5, selectedNumbers: Set<Int> = []) {
+        self.settingsViewModel = settingsViewModel
         self.profileManager = profileManager
         self.selectedColors = selectedColors
         self.displayMode = displayMode
@@ -801,11 +808,15 @@ struct MainView: View {
                 screenProtectionEnabled: settingsViewModel.screenProtectionEnabled,
                 numberColor: numberColor,
                 arrowColor: arrowColor,
+                userTeamColor: selectedUserTeamColor,
+                opponentColor: selectedOpponentColor,
+                playerGender: selectedPlayerGender,
                 showDisplay: $showDisplay,
                 profileManager: profileManager
             )
             .ignoresSafeArea()
             .background(Color.black.ignoresSafeArea())
+            .navigationBarHidden(true)
         } else {
             // Configuration View
         ZStack {
@@ -1004,6 +1015,22 @@ struct MainView: View {
                                         }
                                         .buttonStyle(DisplayModeButtonStyle(isSelected: displayMode == .criticalScanArrows, color: .red))
                                     }
+                                    
+                                    // Scanning Game Mode
+                                    Button(action: {
+                                        displayMode = .scanningGame
+                                        selectedNumbers.removeAll()
+                                        selectedLanes.removeAll()
+                                        selectedBeepInterval = .medium
+                                    }) {
+                                        Text("Dribble or Pass")
+                                            .font(.system(size: 14, weight: .semibold))
+                                            .foregroundColor(displayMode == .scanningGame ? .white : .white.opacity(0.7))
+                                            .padding(.vertical, 12)
+                                            .padding(.horizontal, 8)
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(DisplayModeButtonStyle(isSelected: displayMode == .scanningGame, color: .green))
                                 }
                             }
                                 .padding()
@@ -1152,8 +1179,8 @@ struct MainView: View {
                                 .padding(.horizontal)
                             }
                             
-                            // Beep Interval Selection (for Colors, Colors + Numbers, Colors + Arrows, Numbers, Lanes, and Critical Scan modes)
-                            if displayMode == .colors || displayMode == .colorsNumbers || displayMode == .colorsArrows || displayMode == .numbers || displayMode == .lanes || displayMode == .criticalScan || displayMode == .criticalScanArrows {
+                            // Beep Interval Selection (for Colors, Colors + Numbers, Colors + Arrows, Numbers, Lanes, Critical Scan modes, and Scanning Game)
+                            if displayMode == .colors || displayMode == .colorsNumbers || displayMode == .colorsArrows || displayMode == .numbers || displayMode == .lanes || displayMode == .criticalScan || displayMode == .criticalScanArrows || displayMode == .scanningGame {
                                 VStack(alignment: .leading, spacing: 10) {
                                     Text("Beep Interval")
                                         .font(.headline)
@@ -1377,15 +1404,34 @@ struct MainView: View {
                                 .padding(.horizontal)
                             }
                             
-                            // Number Range Slider (only for Colors + Numbers mode)
+                            // Number Selection (only for Colors + Numbers mode)
                             if displayMode == .colorsNumbers {
                                 VStack(alignment: .leading, spacing: 10) {
-                                    Text("Number Range: 1-\(Int(numberRange))")
+                                    Text("Select Numbers (1-10)")
                                         .font(.headline)
                                         .foregroundColor(.white)
                                     
-                                    Slider(value: $numberRange, in: 1...10, step: 1)
-                                        .accentColor(.green)
+                                    Text("Choose which numbers can appear during training")
+                                        .font(.caption)
+                                        .foregroundColor(.white.opacity(0.7))
+                                    
+                                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 40))], spacing: 8) {
+                                        ForEach(1...10, id: \.self) { number in
+                                            Button(action: {
+                                                if selectedNumbers.contains(number) {
+                                                    selectedNumbers.remove(number)
+                                                } else {
+                                                    selectedNumbers.insert(number)
+                                                }
+                                            }) {
+                                                Text("\(number)")
+                                                    .font(.system(size: 18, weight: .bold))
+                                                    .foregroundColor(.white)
+                                                    .frame(width: 40, height: 40)
+                                            }
+                                            .buttonStyle(SquareButtonStyle(isSelected: selectedNumbers.contains(number), color: .green))
+                                        }
+                                    }
                                 }
                                 .padding()
                                 .background {
@@ -1454,7 +1500,7 @@ struct MainView: View {
                             }
                             
                             // Time Interval Slider (only show for modes that use it)
-                            if displayMode != .criticalScan && displayMode != .criticalScanArrows {
+                            if displayMode != .criticalScan && displayMode != .criticalScanArrows && displayMode != .scanningGame {
                                 VStack(alignment: .leading, spacing: 10) {
                                     Text(displayMode == .colors || displayMode == .colorsNumbers || displayMode == .colorsArrows || displayMode == .lanes ? "Color Changing Time Interval: \(String(format: "%.1f", changeInterval))s" : displayMode == .numbers ? "Color and Number Changing Time Interval: \(String(format: "%.1f", changeInterval))s" : "Time Interval: \(String(format: "%.1f", changeInterval))s")
                                         .font(.headline)
@@ -1476,8 +1522,8 @@ struct MainView: View {
                                 .padding(.horizontal)
                             }
                             
-                            // Scanning Circle Time Interval (only for Critical Scan modes)
-                            if displayMode == .criticalScan || displayMode == .criticalScanArrows {
+                            // Scanning Circle Time Interval (only for Critical Scan modes and Scanning Game)
+                            if displayMode == .criticalScan || displayMode == .criticalScanArrows || displayMode == .scanningGame {
                                 VStack(alignment: .leading, spacing: 10) {
                                     Text("Scanning Circle Time Interval: \(String(format: "%.1f", changeInterval))s")
                                         .font(.headline)
@@ -1499,8 +1545,8 @@ struct MainView: View {
                                 .padding(.horizontal)
                             }
                             
-                            // Critical Scan Delay Slider (only for Critical Scan mode)
-                            if displayMode == .criticalScan || displayMode == .criticalScanArrows {
+                            // Critical Scan Delay Slider (only for Critical Scan mode and Scanning Game)
+                            if displayMode == .criticalScan || displayMode == .criticalScanArrows || displayMode == .scanningGame {
                                 VStack(alignment: .leading, spacing: 10) {
                                     Text("Critical Scan Delay: \(String(format: "%.1f", settingsViewModel.criticalScanDelay))s")
                                         .font(.headline)
@@ -1522,8 +1568,8 @@ struct MainView: View {
                                 .padding(.horizontal)
                             }
                             
-                            // Critical Scan Duration Slider (only for Critical Scan mode)
-                            if displayMode == .criticalScan || displayMode == .criticalScanArrows {
+                            // Critical Scan Duration Slider (only for Critical Scan mode and Scanning Game)
+                            if displayMode == .criticalScan || displayMode == .criticalScanArrows || displayMode == .scanningGame {
                                 VStack(alignment: .leading, spacing: 10) {
                                     Text("Critical Scan Duration: \(String(format: "%.1f", settingsViewModel.criticalScanDuration))s")
                                         .font(.headline)
@@ -1545,8 +1591,8 @@ struct MainView: View {
                                 .padding(.horizontal)
                             }
                             
-                            // Critical Scan Reset Time Slider (only for Critical Scan mode)
-                            if displayMode == .criticalScan || displayMode == .criticalScanArrows {
+                            // Critical Scan Reset Time Slider (only for Critical Scan mode and Scanning Game)
+                            if displayMode == .criticalScan || displayMode == .criticalScanArrows || displayMode == .scanningGame {
                                 VStack(alignment: .leading, spacing: 10) {
                                     Text("Reset Time: \(String(format: "%.0f", settingsViewModel.criticalScanResetTime))s")
                                         .font(.headline)
@@ -1568,8 +1614,8 @@ struct MainView: View {
                                 .padding(.horizontal)
                             }
                             
-                            // Scanning Circle Colors (only for Critical Scan mode)
-                            if displayMode == .criticalScan || displayMode == .criticalScanArrows {
+                            // Scanning Circle Colors (only for Critical Scan mode and Scanning Game)
+                            if displayMode == .criticalScan || displayMode == .criticalScanArrows || displayMode == .scanningGame {
                                 VStack(alignment: .leading, spacing: 10) {
                                     Text("Scanning Circle Colors")
                                         .font(.headline)
@@ -1708,6 +1754,117 @@ struct MainView: View {
                                 .padding(.horizontal)
                             }
                             
+                            // Scanning Game Controls (only for Scanning Game mode)
+                            if displayMode == .scanningGame {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text("Team Colors")
+                                        .font(.headline)
+                                        .foregroundColor(.white)
+                                    
+                                    Text("Select your team color and opponent color")
+                                        .font(.caption)
+                                        .foregroundColor(.white.opacity(0.7))
+                                    
+                                    HStack(spacing: 10) {
+                                        VStack(alignment: .leading, spacing: 5) {
+                                            Text("Your Team")
+                                                .font(.caption)
+                                                .foregroundColor(.white.opacity(0.8))
+                                            
+                                            Picker("Your Team", selection: $selectedUserTeamColor) {
+                                                ForEach(TeamColor.allCases.filter { $0 != selectedOpponentColor }, id: \.self) { color in
+                                                    HStack {
+                                                        Circle()
+                                                            .fill(color.color)
+                                                            .frame(width: 20, height: 20)
+                                                        Text(color.rawValue)
+                                                    }
+                                                    .tag(color)
+                                                }
+                                            }
+                                            .pickerStyle(MenuPickerStyle())
+                                            .accentColor(.white)
+                                        }
+                                        
+                                        VStack(alignment: .leading, spacing: 5) {
+                                            Text("Opponent")
+                                                .font(.caption)
+                                                .foregroundColor(.white.opacity(0.8))
+                                            
+                                            Picker("Opponent", selection: $selectedOpponentColor) {
+                                                ForEach(TeamColor.allCases.filter { $0 != selectedUserTeamColor }, id: \.self) { color in
+                                                    HStack {
+                                                        Circle()
+                                                            .fill(color.color)
+                                                            .frame(width: 20, height: 20)
+                                                        Text(color.rawValue)
+                                                    }
+                                                    .tag(color)
+                                                }
+                                            }
+                                            .pickerStyle(MenuPickerStyle())
+                                            .accentColor(.white)
+                                        }
+                                    }
+                                }
+                                .padding()
+                                .background {
+                                    RoundedRectangle(cornerRadius: 15)
+                                        .fill(.ultraThinMaterial)
+                                        .opacity(0.7)
+                                }
+                                .padding(.horizontal)
+                                
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text("Player Gender")
+                                        .font(.headline)
+                                        .foregroundColor(.white)
+                                    
+                                    Text("Choose male or female player silhouettes")
+                                        .font(.caption)
+                                        .foregroundColor(.white.opacity(0.7))
+                                    
+                                    HStack(spacing: 15) {
+                                        Button(action: {
+                                            selectedPlayerGender = .male
+                                        }) {
+                                            HStack {
+                                                Image(systemName: "person.fill")
+                                                    .foregroundColor(.white)
+                                                Text("Male")
+                                                    .foregroundColor(.white)
+                                            }
+                                            .padding(.vertical, 12)
+                                            .padding(.horizontal, 16)
+                                            .frame(maxWidth: .infinity)
+                                        }
+                                        .buttonStyle(DisplayModeButtonStyle(isSelected: selectedPlayerGender == .male, color: .blue))
+                                        
+                                        Button(action: {
+                                            selectedPlayerGender = .female
+                                        }) {
+                                            HStack {
+                                                Image(systemName: "person.fill")
+                                                    .foregroundColor(.white)
+                                                Text("Female")
+                                                    .foregroundColor(.white)
+                                            }
+                                            .padding(.vertical, 12)
+                                            .padding(.horizontal, 16)
+                                            .frame(maxWidth: .infinity)
+                                        }
+                                        .buttonStyle(DisplayModeButtonStyle(isSelected: selectedPlayerGender == .female, color: .blue))
+                                    }
+                                }
+                                .padding()
+                                .background {
+                                    RoundedRectangle(cornerRadius: 15)
+                                        .fill(.ultraThinMaterial)
+                                        .opacity(0.7)
+                                }
+                                .padding(.horizontal)
+                            }
+                            
                             // Start Button
                             Button(action: {
                                 if isStartEnabled {
@@ -1800,8 +1957,8 @@ struct MainView: View {
             // Require at least one color for basic colors activity
             return !selectedColors.isEmpty
         case .colorsNumbers:
-            // Require at least one color (number range is handled by slider)
-            return !selectedColors.isEmpty
+            // Require at least one color and one number
+            return !selectedColors.isEmpty && !selectedNumbers.isEmpty
         case .colorsArrows:
             // Require at least one color and one arrow
             return !selectedColors.isEmpty && !selectedArrows.isEmpty
@@ -1817,6 +1974,9 @@ struct MainView: View {
         case .criticalScanArrows:
             // Require at least one arrow direction
             return !selectedArrows.isEmpty
+        case .scanningGame:
+            // Require different team colors and player gender selected
+            return selectedUserTeamColor != selectedOpponentColor
         }
     }
     
@@ -1827,8 +1987,12 @@ struct MainView: View {
                 return "Please select at least one color to start training"
             }
         case .colorsNumbers:
-            if selectedColors.isEmpty {
-                return "Please select at least one color to start training"
+            if selectedColors.isEmpty && selectedNumbers.isEmpty {
+                return "Please select at least one color and one number"
+            } else if selectedColors.isEmpty {
+                return "Please select at least one color"
+            } else if selectedNumbers.isEmpty {
+                return "Please select at least one number"
             }
         case .colorsArrows:
             if selectedColors.isEmpty && selectedArrows.isEmpty {
@@ -1859,6 +2023,10 @@ struct MainView: View {
         case .criticalScanArrows:
             if selectedArrows.isEmpty {
                 return "Please select at least one arrow direction"
+            }
+        case .scanningGame:
+            if selectedUserTeamColor == selectedOpponentColor {
+                return "Please select different colors for your team and opponent"
             }
         }
         return ""
@@ -1937,6 +2105,9 @@ struct DisplayView: View {
         let screenProtectionEnabled: Bool
         let numberColor: Color
         let arrowColor: Color
+    let userTeamColor: TeamColor
+    let opponentColor: TeamColor
+    let playerGender: PlayerGender
         @Binding var showDisplay: Bool
         @ObservedObject var profileManager: UserProfileManager
     
@@ -1986,13 +2157,19 @@ struct DisplayView: View {
     @State private var countdown: Int = 3
     @State private var isCountingDown: Bool = true
     @Environment(\.dismiss) private var dismiss
-        
-        // Screen protection timer for outdoor use
-        @State private var screenProtectionTimer: Timer?
+    
+    // Screen protection timer for outdoor use
+    @State private var screenProtectionTimer: Timer?
+    
+    // Scanning Game state variables
+    @State private var scanningGamePhase: String = "NORMAL"
+    @State private var activePlayers: [GamePlayer] = []
+    @State private var playersVisible: Bool = false
+    @State private var scanningGameTimer: Timer?
     
     let availableLanes = ["Left", "Center", "Right"]
     
-        init(selectedColors: [Color], displayMode: DisplayMode, changeInterval: Double, selectedNumbers: [Int], soundEnabled: Bool, laneSpeed: Double, numberRange: Double, selectedArrows: [String], selectedBeepInterval: BeepInterval, criticalScanDelay: Double, criticalScanDuration: Double, criticalScanResetTime: Double, selectedColorSet: ScanningColorSet, selectedActionSet: ActionSet, customActions: [CustomAction], selectedCriticalScanNumbers: [Int], screenProtectionEnabled: Bool, numberColor: Color, arrowColor: Color, showDisplay: Binding<Bool>, profileManager: UserProfileManager) {
+        init(selectedColors: [Color], displayMode: DisplayMode, changeInterval: Double, selectedNumbers: [Int], soundEnabled: Bool, laneSpeed: Double, numberRange: Double, selectedArrows: [String], selectedBeepInterval: BeepInterval, criticalScanDelay: Double, criticalScanDuration: Double, criticalScanResetTime: Double, selectedColorSet: ScanningColorSet, selectedActionSet: ActionSet, customActions: [CustomAction], selectedCriticalScanNumbers: [Int], screenProtectionEnabled: Bool, numberColor: Color, arrowColor: Color, userTeamColor: TeamColor, opponentColor: TeamColor, playerGender: PlayerGender, showDisplay: Binding<Bool>, profileManager: UserProfileManager) {
             self.profileManager = profileManager
         self.selectedColors = selectedColors
         self.displayMode = displayMode
@@ -2016,6 +2193,9 @@ struct DisplayView: View {
             self.screenProtectionEnabled = screenProtectionEnabled
             self.numberColor = numberColor
             self.arrowColor = arrowColor
+            self.userTeamColor = userTeamColor
+            self.opponentColor = opponentColor
+            self.playerGender = playerGender
     }
     
     var body: some View {
@@ -2253,32 +2433,98 @@ struct DisplayView: View {
                             }
                         }
                     }
+                } else if displayMode == .scanningGame {
+                    // Scanning Game display
+                    ZStack {
+                        // Background color based on phase
+                        if scanningGamePhase == "NORMAL" || scanningGamePhase == "BEEP" {
+                            Color.black
+                                .ignoresSafeArea()
+                        } else if scanningGamePhase == "SCANNING" {
+                            Color.black
+                                .ignoresSafeArea()
+                        } else if scanningGamePhase == "RESET" {
+                            Color.blue
+                                .ignoresSafeArea()
+                        } else {
+                            Color.black
+                                .ignoresSafeArea()
+                        }
+                        
+                        VStack(spacing: 20) {
+                            if scanningGamePhase == "NORMAL" || scanningGamePhase == "BEEP" {
+                                VStack(spacing: 15) {
+                                    // Scanning circle (cycles through colors every second)
+                                    Circle()
+                                        .fill(selectedColorSet.colors[scanningColorIndex])
+                                            .frame(width: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.6, height: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.6)
+                                        .background(Color.black)
+                                        .clipShape(Circle())
+                                        .overlay(
+                                            Circle()
+                                                .stroke(Color.white, lineWidth: 4)
+                                        )
+                                    
+                                    Text("SCAN & IDENTIFY")
+                                        .font(.system(size: 40, weight: .bold))
+                                        .foregroundColor(.white)
+                                        .shadow(radius: 5)
+                                }
+                            } else if scanningGamePhase == "SCANNING" {
+                                // Display sliding players
+                                ZStack {
+                                    // Sliding players positioned at different screen locations
+                                    ForEach(activePlayers) { player in
+                                        PlayerView(player: player, isVisible: playersVisible)
+                                            .position(getPlayerPosition(for: player.direction))
+                                            .onAppear {
+                                                print("🎮 PlayerView ForEach appeared for: \(player.imageName) at \(player.direction.rawValue)")
+                                            }
+                                    }
+                                }
+                            } else if scanningGamePhase == "RESET" {
+                                VStack(spacing: 15) {
+                                    Text("RESET")
+                                        .font(.system(size: 60, weight: .bold))
+                                        .foregroundColor(.white)
+                                        .shadow(radius: 10)
+                                    
+                                    Text("Prepare for Next Play")
+                                        .font(.system(size: 40, weight: .semibold))
+                                        .foregroundColor(.white)
+                                        .shadow(radius: 5)
+                                    
+                                    Text("Get in position • Focus • Ready")
+                                        .font(.system(size: 25, weight: .medium))
+                                        .foregroundColor(.white.opacity(0.8))
+                                        .multilineTextAlignment(.center)
+                                        .padding()
+                                }
+                            }
+                        }
+                    }
                 }
             }
             
             // Double tap indicator (only show after countdown)
             if !isCountingDown {
-                VStack {
-                    HStack {
-                        Spacer()
-                        VStack(spacing: 4) {
-                            Image(systemName: "hand.tap.fill")
-                                .font(.system(size: 20))
-                                .foregroundColor(.white.opacity(0.5))
-                                .padding(8)
-                                .background(.regularMaterial)
-                                .clipShape(Circle())
-                            
-                            Text("Double tap anywhere on the screen to end training")
-                                .font(.caption)
-                                .foregroundColor(.white.opacity(0.7))
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal, 8)
-                        }
-                        .padding()
-                    }
-                    Spacer()
+                VStack(spacing: 4) {
+                    Image(systemName: "hand.tap.fill")
+                        .font(.system(size: 20))
+                        .foregroundColor(.white.opacity(0.5))
+                        .padding(8)
+                        .background(.regularMaterial)
+                        .clipShape(Circle())
+                    
+                    Text("Double tap anywhere on the screen to end training")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.7))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 8)
                 }
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .frame(maxHeight: .infinity, alignment: .top)
             }
         }
         .ignoresSafeArea()
@@ -2306,7 +2552,10 @@ struct DisplayView: View {
         .onTapGesture(count: 2) {
             endTrainingSessionAndReturn()
         }
+        .navigationBarHidden(true)
         .navigationBarBackButtonHidden(true)
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
     }
     
     private func startCountdown() {
@@ -2350,7 +2599,7 @@ struct DisplayView: View {
         
         if displayMode == .colors || displayMode == .colorsNumbers || displayMode == .colorsArrows || displayMode == .numbers || displayMode == .lanes {
             startBeepTimer()
-        } else if displayMode != .criticalScan && displayMode != .criticalScanArrows {
+        } else if displayMode != .criticalScan && displayMode != .criticalScanArrows && displayMode != .scanningGame {
             scheduleRandomBeep()
         }
         
@@ -2363,6 +2612,9 @@ struct DisplayView: View {
         } else if displayMode == .criticalScanArrows {
             print("🔍 Starting Critical Scan Arrows Mode")
             startCriticalScanArrowsSequence()
+        } else if displayMode == .scanningGame {
+            print("🎮 Starting Scanning Game Mode")
+            startScanningGameSequence()
         } else if displayMode == .colors || displayMode == .colorsNumbers || displayMode == .colorsArrows {
             print("🎨 Starting \(displayMode) Mode")
             // These modes use the standard timer + beep timer
@@ -3088,6 +3340,207 @@ struct CustomActionSheet: View {
                 .ignoresSafeArea()
             )
             .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+}
+
+struct PlayerView: View {
+    let player: GamePlayer
+    let isVisible: Bool
+    
+    var body: some View {
+        ZStack {
+            // Try to load the image, fallback to colored circle if not found
+            Image(player.imageName)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(width: UIScreen.main.bounds.width * 0.25, height: UIScreen.main.bounds.width * 0.25)
+                .opacity(isVisible ? 1 : 0)
+                .animation(.easeInOut(duration: 0.8), value: isVisible)
+
+            
+            // Fallback colored circle
+            Circle()
+                .fill(player.teamColor.color)
+                .frame(width: UIScreen.main.bounds.width * 0.25, height: UIScreen.main.bounds.width * 0.25)
+                .opacity(isVisible ? 0.3 : 0)
+                .animation(.easeInOut(duration: 0.8), value: isVisible)
+        }
+    }
+}
+
+// MARK: - Scanning Game Logic Extension
+extension DisplayView {
+    
+    private func startScanningGameSequence() {
+        print("🎮 Starting Scanning Game Sequence")
+        
+        // Start scanning circle timer
+        scanningCircleTimer = Timer.scheduledTimer(withTimeInterval: changeInterval, repeats: true) { _ in
+            scanningColorIndex = (scanningColorIndex + 1) % selectedColorSet.colors.count
+        }
+        
+        // Schedule first scanning round
+        DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: selectedBeepInterval.range)) {
+            startScanningGameRound()
+        }
+    }
+    
+    private func startScanningGameRound() {
+        guard isActive else { return }
+        
+        print("🔴 Starting Scanning Game Round")
+        scanningGamePhase = "BEEP"
+        
+        // Play beep sound
+        if soundEnabled {
+            playCriticalScanSound()
+        }
+        
+        // Show scanning phase after delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanDelay) {
+            guard isActive else { return }
+            
+            scanningGamePhase = "SCANNING"
+            generatePlayers()
+            slideInPlayers()
+            
+            // End scanning phase after duration (give more time for scanning game)
+            let scanningDuration = displayMode == .scanningGame ? max(criticalScanDuration, 3.0) : criticalScanDuration
+            DispatchQueue.main.asyncAfter(deadline: .now() + scanningDuration) {
+                startScanningGameResetPhase()
+            }
+        }
+    }
+    
+    private func generatePlayers() {
+        activePlayers.removeAll()
+        
+        // All four directions
+        let allDirections = Direction.allCases
+        
+        // NEW LOGIC: Always have at least 2 opponents, maximum 3 opponents
+        let minOpponents = 2
+        let maxOpponents = 3
+        let maxPlayers = 4
+        
+        // Randomly decide total number of players (2-4, since we need at least 2 opponents)
+        let totalPlayers = Int.random(in: minOpponents...maxPlayers)
+        
+        // Randomly select which directions get players (remaining positions will be empty)
+        let playerDirections = allDirections.shuffled().prefix(totalPlayers)
+        
+        // NEW LOGIC: Create team assignments ensuring 2-3 opponents
+        var teamAssignments: [Bool] = []
+        
+        // Calculate how many additional players we need beyond the minimum 2 opponents
+        let additionalPlayers = totalPlayers - minOpponents
+        
+        // For additional positions, randomly assign teammate or opponent, but ensure we don't exceed maxOpponents
+        var currentOpponents = 0
+        for _ in 0..<additionalPlayers {
+            // If we already have maxOpponents, force teammate
+            if currentOpponents >= maxOpponents - minOpponents {
+                teamAssignments.append(true) // teammate
+            } else {
+                // 60% chance of opponent, 40% chance of teammate for more realistic pressure
+                let randomValue = Double.random(in: 0...1)
+                let isOpponent = randomValue < 0.6
+                teamAssignments.append(!isOpponent) // true = teammate, false = opponent
+                if isOpponent {
+                    currentOpponents += 1
+                }
+            }
+        }
+        
+        // Now add the minimum 2 opponents
+        for _ in 0..<minOpponents {
+            teamAssignments.append(false) // opponent
+        }
+        
+        // Shuffle the assignments to randomize positions
+        teamAssignments.shuffle()
+        
+        // Create players
+        for (index, direction) in playerDirections.enumerated() {
+            let isTeammate = teamAssignments[index]
+            let teamColor = isTeammate ? userTeamColor : opponentColor
+            
+            let player = GamePlayer(
+                teamColor: teamColor,
+                direction: direction,
+                isTeammate: isTeammate,
+                gender: playerGender
+            )
+            
+            activePlayers.append(player)
+        }
+    }
+    
+    private func slideInPlayers() {
+        playersVisible = false
+        
+        // Make players visible immediately
+        withAnimation(.easeInOut(duration: 0.8)) {
+            playersVisible = true
+        }
+    }
+    
+    private func startScanningGameResetPhase() {
+        guard isActive else { return }
+        
+        print("🔵 Starting Scanning Game Reset Phase")
+        scanningGamePhase = "RESET"
+        playersVisible = false
+        
+        // End reset phase after reset time
+        DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanResetTime) {
+            startScanningGameNormalPhase()
+        }
+    }
+    
+    private func startScanningGameNormalPhase() {
+        guard isActive else { return }
+        
+        print("⚪ Starting Scanning Game Normal Phase")
+        scanningGamePhase = "NORMAL"
+        
+        // Schedule next scanning round
+        DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: selectedBeepInterval.range)) {
+            startScanningGameRound()
+        }
+    }
+    
+    private func getPlayerPosition(for direction: Direction) -> CGPoint {
+        let screenWidth = UIScreen.main.bounds.width
+        let screenHeight = UIScreen.main.bounds.height
+        
+        // Get safe area insets to avoid status bar and notch (iOS 15+ compatible)
+        let safeAreaTop: CGFloat
+        let safeAreaBottom: CGFloat
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let window = windowScene.windows.first {
+            safeAreaTop = window.safeAreaInsets.top
+            safeAreaBottom = window.safeAreaInsets.bottom
+        } else {
+            safeAreaTop = 0
+            safeAreaBottom = 0
+        }
+        
+        // Calculate image size (25% of screen width)
+        let imageSize = screenWidth * 0.25
+        let halfImageSize = imageSize / 2
+        
+        switch direction {
+        case .top:
+            return CGPoint(x: screenWidth / 2, y: safeAreaTop + halfImageSize + 20) // Top with image fully visible
+        case .bottom:
+            return CGPoint(x: screenWidth / 2, y: screenHeight - safeAreaBottom - halfImageSize - 20) // Bottom with image fully visible
+        case .left:
+            return CGPoint(x: halfImageSize + 20, y: screenHeight / 2) // Left with image fully visible
+        case .right:
+            return CGPoint(x: screenWidth - halfImageSize - 20, y: screenHeight / 2) // Right with image fully visible
         }
     }
 }

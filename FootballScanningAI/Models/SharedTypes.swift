@@ -85,6 +85,7 @@ enum DisplayMode: String, Codable, CaseIterable {
     case lanes = "Lanes"
     case criticalScan = "Critical Scan"
     case criticalScanArrows = "Critical Scan Arrows"
+    case scanningGame = "Dribble or Pass"
 }
 
 // MARK: - Color Conversion Helpers
@@ -105,5 +106,76 @@ extension Color {
         uiColor.getRed(&r, green: &g, blue: &b, alpha: &a)
         let rgb = (Int(r * 255) << 16) | (Int(g * 255) << 8) | Int(b * 255)
         return String(format: "#%06X", rgb)
+    }
+}
+
+// MARK: - Scanning Game Types
+
+enum PlayerGender: String, Codable, CaseIterable {
+    case male = "Male"
+    case female = "Female"
+}
+
+enum TeamColor: String, Codable, CaseIterable {
+    case red = "Red"
+    case blue = "Blue"
+    case green = "Green"
+    case white = "White"
+    case black = "Black"
+    
+    var color: Color {
+        switch self {
+        case .red: return .red
+        case .blue: return .blue
+        case .green: return .green
+        case .white: return .white
+        case .black: return .black
+        }
+    }
+}
+
+enum Direction: String, Codable, CaseIterable {
+    case top = "Top"
+    case bottom = "Bottom"
+    case left = "Left"
+    case right = "Right"
+}
+
+enum Action: String, Codable {
+    case pass = "Pass"
+    case dribble = "Dribble"
+}
+
+struct GamePlayer: Identifiable, Codable {
+    let id: UUID
+    let teamColor: TeamColor
+    let direction: Direction
+    let isTeammate: Bool
+    let gender: PlayerGender
+    
+    var imageName: String {
+        return "player_\(gender.rawValue.lowercased())_\(teamColor.rawValue.lowercased())_jersey"
+    }
+    
+    init(teamColor: TeamColor, direction: Direction, isTeammate: Bool, gender: PlayerGender) {
+        self.id = UUID()
+        self.teamColor = teamColor
+        self.direction = direction
+        self.isTeammate = isTeammate
+        self.gender = gender
+    }
+}
+
+struct GamePosition: Identifiable, Codable {
+    let id: UUID
+    let direction: Direction
+    let hasPlayer: Bool
+    let player: GamePlayer?
+    
+    init(direction: Direction, player: GamePlayer? = nil) {
+        self.id = UUID()
+        self.direction = direction
+        self.hasPlayer = player != nil
+        self.player = player
     }
 } 

@@ -3517,6 +3517,23 @@ struct PlayerView: View {
     let player: GamePlayer
     let isVisible: Bool
     
+    // Calculate responsive image size based on device
+    private var imageSize: CGFloat {
+        let screenWidth = UIScreen.main.bounds.width
+        let screenHeight = UIScreen.main.bounds.height
+        
+        // Determine if this is an iPad (aspect ratio check)
+        let isIPad = screenWidth / screenHeight < 0.75 // iPad aspect ratio is typically wider
+        
+        if isIPad {
+            // For iPad: Use larger size (30-35% of screen width)
+            return screenWidth * 0.32
+        } else {
+            // For iPhone: Use moderate size (28-30% of screen width)
+            return screenWidth * 0.29
+        }
+    }
+    
     var body: some View {
         ZStack {
             // Try to load the image, fallback to colored circle if not found
@@ -3524,7 +3541,7 @@ struct PlayerView: View {
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .frame(width: UIScreen.main.bounds.width * 0.25, height: UIScreen.main.bounds.width * 0.25)
+                .frame(width: imageSize, height: imageSize)
                 .opacity(isVisible ? 1 : 0)
                 .animation(.easeInOut(duration: 0.8), value: isVisible)
 
@@ -3532,7 +3549,7 @@ struct PlayerView: View {
             // Fallback colored circle
             Circle()
                 .fill(player.teamColor.color)
-                .frame(width: UIScreen.main.bounds.width * 0.25, height: UIScreen.main.bounds.width * 0.25)
+                .frame(width: imageSize, height: imageSize)
                 .opacity(isVisible ? 0.3 : 0)
                 .animation(.easeInOut(duration: 0.8), value: isVisible)
         }
@@ -3670,6 +3687,23 @@ extension DisplayView {
         }
     }
     
+    // Calculate responsive image size based on device
+    private func getResponsiveImageSize() -> CGFloat {
+        let screenWidth = UIScreen.main.bounds.width
+        let screenHeight = UIScreen.main.bounds.height
+        
+        // Determine if this is an iPad (aspect ratio check)
+        let isIPad = screenWidth / screenHeight < 0.75 // iPad aspect ratio is typically wider
+        
+        if isIPad {
+            // For iPad: Use larger size (30-35% of screen width)
+            return screenWidth * 0.32
+        } else {
+            // For iPhone: Use moderate size (28-30% of screen width)
+            return screenWidth * 0.29
+        }
+    }
+    
     private func getPlayerPosition(for direction: Direction) -> CGPoint {
         let screenWidth = UIScreen.main.bounds.width
         let screenHeight = UIScreen.main.bounds.height
@@ -3686,8 +3720,8 @@ extension DisplayView {
             safeAreaBottom = 0
         }
         
-        // Calculate image size (25% of screen width)
-        let imageSize = screenWidth * 0.25
+        // Calculate responsive image size
+        let imageSize = getResponsiveImageSize()
         let halfImageSize = imageSize / 2
         
         switch direction {

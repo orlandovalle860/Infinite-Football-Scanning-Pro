@@ -772,6 +772,11 @@ struct MainView: View {
     @State private var selectedOpponentColor: TeamColor = .red
     @State private var selectedPlayerGender: PlayerGender = .male
     
+    // Team composition settings for scanning game
+    @State private var numberOfOpponents: Int = 2
+    @State private var numberOfTeammates: Int = 1
+    @State private var numberOfOpenSpaces: Int = 1
+    
     let availableLanes = ["Left", "Center", "Right"]
     
     init(settingsViewModel: SettingsViewModel, profileManager: UserProfileManager, selectedColors: [Color] = [], displayMode: DisplayMode = .colors, changeInterval: Double = 1.5, selectedNumbers: Set<Int> = []) {
@@ -811,6 +816,9 @@ struct MainView: View {
                 userTeamColor: selectedUserTeamColor,
                 opponentColor: selectedOpponentColor,
                 playerGender: selectedPlayerGender,
+                numberOfOpponents: numberOfOpponents,
+                numberOfTeammates: numberOfTeammates,
+                numberOfOpenSpaces: numberOfOpenSpaces,
                 showDisplay: $showDisplay,
                 profileManager: profileManager
             )
@@ -1863,6 +1871,154 @@ struct MainView: View {
                                         .opacity(0.7)
                                 }
                                 .padding(.horizontal)
+                                
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text("Team Composition")
+                                        .font(.headline)
+                                        .foregroundColor(.white)
+                                    
+                                    Text("Configure the number of players for different skill levels")
+                                        .font(.caption)
+                                        .foregroundColor(.white.opacity(0.7))
+                                    
+                                    VStack(spacing: 15) {
+                                        // Opponents
+                                        HStack {
+                                            VStack(alignment: .leading, spacing: 5) {
+                                                Text("Opponents")
+                                                    .font(.subheadline)
+                                                    .foregroundColor(.white.opacity(0.9))
+                                                Text("More opponents = harder")
+                                                    .font(.caption2)
+                                                    .foregroundColor(.white.opacity(0.6))
+                                            }
+                                            Spacer()
+                                            HStack(spacing: 10) {
+                                                Button(action: {
+                                                    if numberOfOpponents > 1 {
+                                                        numberOfOpponents -= 1
+                                                    }
+                                                }) {
+                                                    Image(systemName: "minus.circle.fill")
+                                                        .font(.title2)
+                                                        .foregroundColor(.red)
+                                                }
+                                                
+                                                Text("\(numberOfOpponents)")
+                                                    .font(.title3)
+                                                    .fontWeight(.bold)
+                                                    .foregroundColor(.white)
+                                                    .frame(minWidth: 30)
+                                                
+                                                Button(action: {
+                                                    if numberOfOpponents < 4 {
+                                                        numberOfOpponents += 1
+                                                    }
+                                                }) {
+                                                    Image(systemName: "plus.circle.fill")
+                                                        .font(.title2)
+                                                        .foregroundColor(.green)
+                                                }
+                                            }
+                                        }
+                                        
+                                        // Teammates
+                                        HStack {
+                                            VStack(alignment: .leading, spacing: 5) {
+                                                Text("Teammates")
+                                                    .font(.subheadline)
+                                                    .foregroundColor(.white.opacity(0.9))
+                                                Text("More teammates = easier")
+                                                    .font(.caption2)
+                                                    .foregroundColor(.white.opacity(0.6))
+                                            }
+                                            Spacer()
+                                            HStack(spacing: 10) {
+                                                Button(action: {
+                                                    if numberOfTeammates > 0 {
+                                                        numberOfTeammates -= 1
+                                                    }
+                                                }) {
+                                                    Image(systemName: "minus.circle.fill")
+                                                        .font(.title2)
+                                                        .foregroundColor(.red)
+                                                }
+                                                
+                                                Text("\(numberOfTeammates)")
+                                                    .font(.title3)
+                                                    .fontWeight(.bold)
+                                                    .foregroundColor(.white)
+                                                    .frame(minWidth: 30)
+                                                
+                                                Button(action: {
+                                                    if numberOfTeammates < 3 {
+                                                        numberOfTeammates += 1
+                                                    }
+                                                }) {
+                                                    Image(systemName: "plus.circle.fill")
+                                                        .font(.title2)
+                                                        .foregroundColor(.green)
+                                                }
+                                            }
+                                        }
+                                        
+                                        // Open Spaces
+                                        HStack {
+                                            VStack(alignment: .leading, spacing: 5) {
+                                                Text("Open Spaces")
+                                                    .font(.subheadline)
+                                                    .foregroundColor(.white.opacity(0.9))
+                                                Text("Empty positions to scan")
+                                                    .font(.caption2)
+                                                    .foregroundColor(.white.opacity(0.6))
+                                            }
+                                            Spacer()
+                                            HStack(spacing: 10) {
+                                                Button(action: {
+                                                    if numberOfOpenSpaces > 0 {
+                                                        numberOfOpenSpaces -= 1
+                                                    }
+                                                }) {
+                                                    Image(systemName: "minus.circle.fill")
+                                                        .font(.title2)
+                                                        .foregroundColor(.red)
+                                                }
+                                                
+                                                Text("\(numberOfOpenSpaces)")
+                                                    .font(.title3)
+                                                    .fontWeight(.bold)
+                                                    .foregroundColor(.white)
+                                                    .frame(minWidth: 30)
+                                                
+                                                Button(action: {
+                                                    if numberOfOpenSpaces < 2 {
+                                                        numberOfOpenSpaces += 1
+                                                    }
+                                                }) {
+                                                    Image(systemName: "plus.circle.fill")
+                                                        .font(.title2)
+                                                        .foregroundColor(.green)
+                                                }
+                                            }
+                                        }
+                                        
+                                        // Total validation
+                                        let totalPositions = numberOfOpponents + numberOfTeammates + numberOfOpenSpaces
+                                        if totalPositions != 4 {
+                                            Text("Total positions must equal 4 (currently \(totalPositions))")
+                                                .font(.caption)
+                                                .foregroundColor(.orange)
+                                                .multilineTextAlignment(.center)
+                                        }
+                                    }
+                                }
+                                .padding()
+                                .background {
+                                    RoundedRectangle(cornerRadius: 15)
+                                        .fill(.ultraThinMaterial)
+                                        .opacity(0.7)
+                                }
+                                .padding(.horizontal)
                             }
                             
                             // Start Button
@@ -1975,8 +2131,9 @@ struct MainView: View {
             // Require at least one arrow direction
             return !selectedArrows.isEmpty
         case .scanningGame:
-            // Require different team colors and player gender selected
-            return selectedUserTeamColor != selectedOpponentColor
+            // Require different team colors and valid team composition
+            let totalPositions = numberOfOpponents + numberOfTeammates + numberOfOpenSpaces
+            return selectedUserTeamColor != selectedOpponentColor && totalPositions == 4
         }
     }
     
@@ -2027,6 +2184,10 @@ struct MainView: View {
         case .scanningGame:
             if selectedUserTeamColor == selectedOpponentColor {
                 return "Please select different colors for your team and opponent"
+            }
+            let totalPositions = numberOfOpponents + numberOfTeammates + numberOfOpenSpaces
+            if totalPositions != 4 {
+                return "Team composition must equal exactly 4 positions (currently \(totalPositions))"
             }
         }
         return ""
@@ -2108,6 +2269,9 @@ struct DisplayView: View {
     let userTeamColor: TeamColor
     let opponentColor: TeamColor
     let playerGender: PlayerGender
+    let numberOfOpponents: Int
+    let numberOfTeammates: Int
+    let numberOfOpenSpaces: Int
         @Binding var showDisplay: Bool
         @ObservedObject var profileManager: UserProfileManager
     
@@ -2167,9 +2331,11 @@ struct DisplayView: View {
     @State private var playersVisible: Bool = false
     @State private var scanningGameTimer: Timer?
     
+
+    
     let availableLanes = ["Left", "Center", "Right"]
     
-        init(selectedColors: [Color], displayMode: DisplayMode, changeInterval: Double, selectedNumbers: [Int], soundEnabled: Bool, laneSpeed: Double, numberRange: Double, selectedArrows: [String], selectedBeepInterval: BeepInterval, criticalScanDelay: Double, criticalScanDuration: Double, criticalScanResetTime: Double, selectedColorSet: ScanningColorSet, selectedActionSet: ActionSet, customActions: [CustomAction], selectedCriticalScanNumbers: [Int], screenProtectionEnabled: Bool, numberColor: Color, arrowColor: Color, userTeamColor: TeamColor, opponentColor: TeamColor, playerGender: PlayerGender, showDisplay: Binding<Bool>, profileManager: UserProfileManager) {
+        init(selectedColors: [Color], displayMode: DisplayMode, changeInterval: Double, selectedNumbers: [Int], soundEnabled: Bool, laneSpeed: Double, numberRange: Double, selectedArrows: [String], selectedBeepInterval: BeepInterval, criticalScanDelay: Double, criticalScanDuration: Double, criticalScanResetTime: Double, selectedColorSet: ScanningColorSet, selectedActionSet: ActionSet, customActions: [CustomAction], selectedCriticalScanNumbers: [Int], screenProtectionEnabled: Bool, numberColor: Color, arrowColor: Color, userTeamColor: TeamColor, opponentColor: TeamColor, playerGender: PlayerGender, numberOfOpponents: Int, numberOfTeammates: Int, numberOfOpenSpaces: Int, showDisplay: Binding<Bool>, profileManager: UserProfileManager) {
             self.profileManager = profileManager
         self.selectedColors = selectedColors
         self.displayMode = displayMode
@@ -2196,6 +2362,9 @@ struct DisplayView: View {
             self.userTeamColor = userTeamColor
             self.opponentColor = opponentColor
             self.playerGender = playerGender
+            self.numberOfOpponents = numberOfOpponents
+            self.numberOfTeammates = numberOfTeammates
+            self.numberOfOpenSpaces = numberOfOpenSpaces
     }
     
     var body: some View {
@@ -3420,47 +3589,34 @@ extension DisplayView {
         // All four directions
         let allDirections = Direction.allCases
         
-        // NEW LOGIC: Always have at least 2 opponents, maximum 3 opponents
-        let minOpponents = 2
-        let maxOpponents = 3
-        let maxPlayers = 4
+        // Use the configurable team composition settings
+        let totalPlayers = numberOfOpponents + numberOfTeammates
+        let totalPositions = totalPlayers + numberOfOpenSpaces
         
-        // Randomly decide total number of players (2-4, since we need at least 2 opponents)
-        let totalPlayers = Int.random(in: minOpponents...maxPlayers)
-        
-        // Randomly select which directions get players (remaining positions will be empty)
-        let playerDirections = allDirections.shuffled().prefix(totalPlayers)
-        
-        // NEW LOGIC: Create team assignments ensuring 2-3 opponents
-        var teamAssignments: [Bool] = []
-        
-        // Calculate how many additional players we need beyond the minimum 2 opponents
-        let additionalPlayers = totalPlayers - minOpponents
-        
-        // For additional positions, randomly assign teammate or opponent, but ensure we don't exceed maxOpponents
-        var currentOpponents = 0
-        for _ in 0..<additionalPlayers {
-            // If we already have maxOpponents, force teammate
-            if currentOpponents >= maxOpponents - minOpponents {
-                teamAssignments.append(true) // teammate
-            } else {
-                // 60% chance of opponent, 40% chance of teammate for more realistic pressure
-                let randomValue = Double.random(in: 0...1)
-                let isOpponent = randomValue < 0.6
-                teamAssignments.append(!isOpponent) // true = teammate, false = opponent
-                if isOpponent {
-                    currentOpponents += 1
-                }
-            }
+        // Validate that we have exactly 4 positions
+        guard totalPositions == 4 else {
+            print("⚠️ Invalid team composition: \(totalPositions) positions (must be 4)")
+            return
         }
         
-        // Now add the minimum 2 opponents
-        for _ in 0..<minOpponents {
-            teamAssignments.append(false) // opponent
+        // Create team assignments based on user settings
+        var teamAssignments: [Bool] = []
+        
+        // Add opponents (false = opponent)
+        for _ in 0..<numberOfOpponents {
+            teamAssignments.append(false)
+        }
+        
+        // Add teammates (true = teammate)
+        for _ in 0..<numberOfTeammates {
+            teamAssignments.append(true)
         }
         
         // Shuffle the assignments to randomize positions
         teamAssignments.shuffle()
+        
+        // Randomly select which directions get players (remaining will be empty)
+        let playerDirections = allDirections.shuffled().prefix(totalPlayers)
         
         // Create players
         for (index, direction) in playerDirections.enumerated() {
@@ -3476,6 +3632,8 @@ extension DisplayView {
             
             activePlayers.append(player)
         }
+        
+        print("🎮 Generated \(activePlayers.count) players: \(numberOfOpponents) opponents, \(numberOfTeammates) teammates, \(numberOfOpenSpaces) open spaces")
     }
     
     private func slideInPlayers() {

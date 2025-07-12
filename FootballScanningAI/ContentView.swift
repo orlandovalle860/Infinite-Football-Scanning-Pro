@@ -3529,10 +3529,14 @@ struct PlayerView: View {
         let isLandscape = screenWidth > screenHeight
         
         if isIPad {
-            // Use a fixed size approach for all iPads to ensure consistency
-            // This ensures 12.9" and 13" iPad Pro have the same image size
-            let fixedIPadSize: CGFloat = 160 // Fixed size for all iPads
-            return fixedIPadSize
+            // Use orientation-aware sizing for iPads
+            if isLandscape {
+                // For iPad landscape: Use height to prevent overlap
+                return screenHeight * 0.30
+            } else {
+                // For iPad portrait: Use width for consistent sizing
+                return screenWidth * 0.30
+            }
         } else {
             if isLandscape {
                 // For iPhone landscape: Use smaller dimension (height) to prevent overlap
@@ -3709,14 +3713,18 @@ extension DisplayView {
         let isLandscape = screenWidth > screenHeight
         
         if isIPad {
-            // Use a fixed size approach for all iPads to ensure consistency
-            // This ensures 12.9" and 13" iPad Pro have the same image size
-            let fixedIPadSize: CGFloat = 160 // Fixed size for all iPads
-            return fixedIPadSize
+            // Use orientation-aware sizing for iPads
+            if isLandscape {
+                // For iPad landscape: Use height to prevent overlap
+                return screenHeight * 0.30
+            } else {
+                // For iPad portrait: Use width for consistent sizing
+                return screenWidth * 0.30
+            }
         } else {
             if isLandscape {
                 // For iPhone landscape: Use smaller dimension (height) to prevent overlap
-                return screenHeight * 0.22
+                return screenHeight * 0.20
             } else {
                 // For iPhone portrait: Use moderate size
                 return screenWidth * 0.29

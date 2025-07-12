@@ -1,0 +1,27 @@
+This directory contains placeholder images for the Infinite Football website.
+
+Required images:
+- logo.png (Infinite Football logo)
+- app-preview.png (App screenshot/mockup)
+- app-screens.png (Multiple app screenshots)
+- app-mockup.png (App mockup for app page)
+- app-store-badge.png (App Store download badge)
+- training-hero.png (Training session image)
+- individual-training.png (Individual training illustration)
+- group-training.png (Group training illustration)
+- coaching-program.png (Coaching program illustration)
+- player1.png (Testimonial player photo)
+- player2.png (Testimonial player photo)
+- coach1.png (Testimonial coach photo)
+- merchandise-hero.png (Merchandise hero image)
+- tshirt-black.png (Black t-shirt product image)
+- hoodie-navy.png (Navy hoodie product image)
+- training-jacket.png (Training jacket product image)
+- hat-black.png (Black hat product image)
+- water-bottle.png (Water bottle product image)
+- training-bag.png (Training bag product image)
+- training-collection.png (Training collection image)
+- casual-collection.png (Casual collection image)
+- accessories-collection.png (Accessories collection image)
+
+Note: These are placeholder references. You'll need to add actual images to make the website fully functional. 

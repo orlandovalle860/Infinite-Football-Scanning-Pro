@@ -3522,20 +3522,17 @@ struct PlayerView: View {
         let screenWidth = UIScreen.main.bounds.width
         let screenHeight = UIScreen.main.bounds.height
         
-        // Determine if this is an iPad (aspect ratio check)
-        let isIPad = screenWidth / screenHeight < 0.75 // iPad aspect ratio is typically wider
+        // More reliable iPad detection using screen size
+        let isIPad = UIDevice.current.userInterfaceIdiom == .pad
         
         // Determine orientation and use appropriate sizing
         let isLandscape = screenWidth > screenHeight
         
         if isIPad {
-            if isLandscape {
-                // For iPad landscape: Use smaller dimension (height) to prevent overlap
-                return screenHeight * 0.25
-            } else {
-                // For iPad portrait: Use larger size
-                return screenWidth * 0.32
-            }
+            // Use a fixed size approach for all iPads to ensure consistency
+            // This ensures 12.9" and 13" iPad Pro have the same image size
+            let fixedIPadSize: CGFloat = 160 // Fixed size for all iPads
+            return fixedIPadSize
         } else {
             if isLandscape {
                 // For iPhone landscape: Use smaller dimension (height) to prevent overlap
@@ -3705,20 +3702,17 @@ extension DisplayView {
         let screenWidth = UIScreen.main.bounds.width
         let screenHeight = UIScreen.main.bounds.height
         
-        // Determine if this is an iPad (aspect ratio check)
-        let isIPad = screenWidth / screenHeight < 0.75 // iPad aspect ratio is typically wider
+        // More reliable iPad detection using screen size
+        let isIPad = UIDevice.current.userInterfaceIdiom == .pad
         
         // Determine orientation and use appropriate sizing
         let isLandscape = screenWidth > screenHeight
         
         if isIPad {
-            if isLandscape {
-                // For iPad landscape: Use smaller dimension (height) to prevent overlap
-                return screenHeight * 0.25
-            } else {
-                // For iPad portrait: Use larger size
-                return screenWidth * 0.32
-            }
+            // Use a fixed size approach for all iPads to ensure consistency
+            // This ensures 12.9" and 13" iPad Pro have the same image size
+            let fixedIPadSize: CGFloat = 160 // Fixed size for all iPads
+            return fixedIPadSize
         } else {
             if isLandscape {
                 // For iPhone landscape: Use smaller dimension (height) to prevent overlap
@@ -3734,21 +3728,30 @@ extension DisplayView {
         let screenWidth = UIScreen.main.bounds.width
         let screenHeight = UIScreen.main.bounds.height
         
-        // Get safe area insets to avoid status bar and notch (iOS 15+ compatible)
+        // Get safe area insets to avoid status bar, notch, and Dynamic Island (iOS 15+ compatible)
         let safeAreaTop: CGFloat
         let safeAreaBottom: CGFloat
+        let safeAreaLeft: CGFloat
+        let safeAreaRight: CGFloat
         if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
            let window = windowScene.windows.first {
             safeAreaTop = window.safeAreaInsets.top
             safeAreaBottom = window.safeAreaInsets.bottom
+            safeAreaLeft = window.safeAreaInsets.left
+            safeAreaRight = window.safeAreaInsets.right
         } else {
             safeAreaTop = 0
             safeAreaBottom = 0
+            safeAreaLeft = 0
+            safeAreaRight = 0
         }
         
         // Calculate responsive image size
         let imageSize = getResponsiveImageSize()
         let halfImageSize = imageSize / 2
+        
+        // Determine orientation
+        let isLandscape = screenWidth > screenHeight
         
         switch direction {
         case .top:
@@ -3756,9 +3759,21 @@ extension DisplayView {
         case .bottom:
             return CGPoint(x: screenWidth / 2, y: screenHeight - safeAreaBottom - halfImageSize - 20) // Bottom with image fully visible
         case .left:
-            return CGPoint(x: halfImageSize + 20, y: screenHeight / 2) // Left with image fully visible
+            if isLandscape {
+                // In landscape, account for Dynamic Island on the left
+                let leftPosition = max(safeAreaLeft + halfImageSize + 20, halfImageSize + 40)
+                return CGPoint(x: leftPosition, y: screenHeight / 2)
+            } else {
+                return CGPoint(x: halfImageSize + 20, y: screenHeight / 2) // Left with image fully visible
+            }
         case .right:
-            return CGPoint(x: screenWidth - halfImageSize - 20, y: screenHeight / 2) // Right with image fully visible
+            if isLandscape {
+                // In landscape, account for any right-side safe areas
+                let rightPosition = min(screenWidth - safeAreaRight - halfImageSize - 20, screenWidth - halfImageSize - 20)
+                return CGPoint(x: rightPosition, y: screenHeight / 2)
+            } else {
+                return CGPoint(x: screenWidth - halfImageSize - 20, y: screenHeight / 2) // Right with image fully visible
+            }
         }
     }
 }

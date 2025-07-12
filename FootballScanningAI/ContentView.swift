@@ -3517,7 +3517,7 @@ struct PlayerView: View {
     let player: GamePlayer
     let isVisible: Bool
     
-    // Calculate responsive image size based on device
+    // Calculate responsive image size based on device and orientation
     private var imageSize: CGFloat {
         let screenWidth = UIScreen.main.bounds.width
         let screenHeight = UIScreen.main.bounds.height
@@ -3525,12 +3525,25 @@ struct PlayerView: View {
         // Determine if this is an iPad (aspect ratio check)
         let isIPad = screenWidth / screenHeight < 0.75 // iPad aspect ratio is typically wider
         
+        // Determine orientation and use appropriate sizing
+        let isLandscape = screenWidth > screenHeight
+        
         if isIPad {
-            // For iPad: Use larger size (30-35% of screen width)
-            return screenWidth * 0.32
+            if isLandscape {
+                // For iPad landscape: Use smaller dimension (height) to prevent overlap
+                return screenHeight * 0.25
+            } else {
+                // For iPad portrait: Use larger size
+                return screenWidth * 0.32
+            }
         } else {
-            // For iPhone: Use moderate size (28-30% of screen width)
-            return screenWidth * 0.29
+            if isLandscape {
+                // For iPhone landscape: Use smaller dimension (height) to prevent overlap
+                return screenHeight * 0.22
+            } else {
+                // For iPhone portrait: Use moderate size
+                return screenWidth * 0.29
+            }
         }
     }
     
@@ -3687,7 +3700,7 @@ extension DisplayView {
         }
     }
     
-    // Calculate responsive image size based on device
+    // Calculate responsive image size based on device and orientation
     private func getResponsiveImageSize() -> CGFloat {
         let screenWidth = UIScreen.main.bounds.width
         let screenHeight = UIScreen.main.bounds.height
@@ -3695,12 +3708,25 @@ extension DisplayView {
         // Determine if this is an iPad (aspect ratio check)
         let isIPad = screenWidth / screenHeight < 0.75 // iPad aspect ratio is typically wider
         
+        // Determine orientation and use appropriate sizing
+        let isLandscape = screenWidth > screenHeight
+        
         if isIPad {
-            // For iPad: Use larger size (30-35% of screen width)
-            return screenWidth * 0.32
+            if isLandscape {
+                // For iPad landscape: Use smaller dimension (height) to prevent overlap
+                return screenHeight * 0.25
+            } else {
+                // For iPad portrait: Use larger size
+                return screenWidth * 0.32
+            }
         } else {
-            // For iPhone: Use moderate size (28-30% of screen width)
-            return screenWidth * 0.29
+            if isLandscape {
+                // For iPhone landscape: Use smaller dimension (height) to prevent overlap
+                return screenHeight * 0.22
+            } else {
+                // For iPhone portrait: Use moderate size
+                return screenWidth * 0.29
+            }
         }
     }
     

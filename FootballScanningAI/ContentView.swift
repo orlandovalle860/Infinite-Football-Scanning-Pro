@@ -3091,9 +3091,13 @@ struct DisplayView: View {
             print("⚪ Starting Normal Phase")
             criticalScanPhase = "NORMAL"
             
-            // Schedule next critical scan
+            // Schedule next critical scan based on display mode
             DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: selectedBeepInterval.range)) {
-                startCriticalScanPhase()
+                if displayMode == .criticalScanArrows {
+                    startCriticalScanArrowsPhase()
+                } else {
+                    startCriticalScanPhase()
+                }
             }
         }
     
@@ -3130,6 +3134,8 @@ struct ActionListSheet: View {
     let onSelect: (String) -> Void
     
     @Environment(\.dismiss) private var dismiss
+    @State private var customActionText: String = ""
+    @State private var showingCustomInput: Bool = false
     
     var body: some View {
         NavigationView {
@@ -3140,31 +3146,76 @@ struct ActionListSheet: View {
                     .foregroundColor(.white)
                     .padding(.top)
                 
-                ScrollView {
-                    LazyVGrid(columns: [GridItem(.flexible())], spacing: 12) {
-                        ForEach(basicActions, id: \.self) { action in
-                            Button(action: {
-                                onSelect(action)
-                                dismiss()
-                            }) {
-                                HStack {
-                                    Text(action)
-                                        .font(.body)
-                                        .foregroundColor(.white)
-                                    Spacer()
-                                    if action == currentAction {
-                                        Image(systemName: "checkmark")
-                .foregroundColor(.green)
-                                    }
-                                }
-                                .padding()
-                                .background(Color.gray.opacity(0.2))
-                                .cornerRadius(10)
+                // Custom Action Input Section
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Custom Action")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    
+                    HStack {
+                        TextField("Type your custom action...", text: $customActionText)
+                            .textFieldStyle(RoundedBorderTextFieldStyle())
+                            .onAppear {
+                                customActionText = currentAction
                             }
-                            .buttonStyle(PlainButtonStyle())
+                        
+                        Button(action: {
+                            if !customActionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                onSelect(customActionText.trimmingCharacters(in: .whitespacesAndNewlines))
+                                dismiss()
+                            }
+                        }) {
+                            Text("Save")
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                                .background(Color.blue)
+                                .cornerRadius(8)
                         }
+                        .disabled(customActionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
+                }
+                .padding(.horizontal)
+                
+                // Divider
+                Rectangle()
+                    .fill(Color.white.opacity(0.3))
+                    .frame(height: 1)
                     .padding(.horizontal)
+                
+                // Predefined Actions Section
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Predefined Actions")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .padding(.horizontal)
+                    
+                    ScrollView {
+                        LazyVGrid(columns: [GridItem(.flexible())], spacing: 12) {
+                            ForEach(basicActions, id: \.self) { action in
+                                Button(action: {
+                                    onSelect(action)
+                                    dismiss()
+                                }) {
+                                    HStack {
+                                        Text(action)
+                                            .font(.body)
+                                            .foregroundColor(.white)
+                                        Spacer()
+                                        if action == currentAction {
+                                            Image(systemName: "checkmark")
+                                                .foregroundColor(.green)
+                                        }
+                                    }
+                                    .padding()
+                                    .background(Color.gray.opacity(0.2))
+                                    .cornerRadius(10)
+                                }
+                                .buttonStyle(PlainButtonStyle())
+                            }
+                        }
+                        .padding(.horizontal)
+                    }
                 }
                 
                 Spacer()

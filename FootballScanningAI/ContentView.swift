@@ -2371,7 +2371,10 @@ struct MainView: View {
     }
     
     private func playTimerEndSound() {
-        guard let soundURL = Bundle.main.url(forResource: "short-beep-351721", withExtension: "mp3") else {
+        // Only play sound if sound is enabled
+        guard settingsViewModel.soundEnabled else { return }
+        
+        guard let soundURL = Bundle.main.url(forResource: "critical scan beep", withExtension: "wav") else {
             print("Could not find timer end sound file")
             return
         }

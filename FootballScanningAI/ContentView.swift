@@ -717,6 +717,8 @@ struct MainView: View {
     @State private var numberRange: Double = 2.0 // 1-2 range for Colors + Numbers mode
     @State private var selectedArrows: Set<String> = [] // Selected arrows for Colors + Arrows mode
     @State private var selectedBeepInterval: BeepInterval = .medium // Default to medium
+    @State private var beepMode: BeepMode = .range // Default to range mode
+    @State private var fixedBeepInterval: Double = 3.0 // Default fixed interval in seconds
     // Critical scan settings now managed by ViewModel
     @State private var selectedColorSet: ScanningColorSet = .standard // Default to standard colors
     @State private var selectedActionSet: ActionSet = .basic // Default to basic actions
@@ -803,6 +805,8 @@ struct MainView: View {
                 numberRange: numberRange,
                 selectedArrows: Array(selectedArrows),
                 selectedBeepInterval: selectedBeepInterval,
+                beepMode: beepMode,
+                fixedBeepInterval: fixedBeepInterval,
                 criticalScanDelay: settingsViewModel.criticalScanDelay,
                 criticalScanDuration: settingsViewModel.criticalScanDuration,
                 criticalScanResetTime: settingsViewModel.criticalScanResetTime,
@@ -1198,19 +1202,58 @@ struct MainView: View {
                                         .font(.caption)
                                         .foregroundColor(.white.opacity(0.7))
                                     
+                                    // Beep Mode Toggle
                                     HStack(spacing: 8) {
-                                        ForEach(BeepInterval.allCases, id: \.self) { interval in
+                                        ForEach(BeepMode.allCases, id: \.self) { mode in
                                             Button(action: {
-                                                selectedBeepInterval = interval
+                                                beepMode = mode
                                             }) {
-                                                Text(interval.rawValue)
+                                                Text(mode.rawValue)
                                                     .font(.system(size: 14, weight: .semibold))
-                                                    .foregroundColor(selectedBeepInterval == interval ? .white : .white.opacity(0.7))
+                                                    .foregroundColor(beepMode == mode ? .white : .white.opacity(0.7))
                                                     .padding(.vertical, 12)
                                                     .padding(.horizontal, 8)
                                                     .frame(maxWidth: .infinity)
                                             }
-                                            .buttonStyle(DisplayModeButtonStyle(isSelected: selectedBeepInterval == interval, color: .orange))
+                                            .buttonStyle(DisplayModeButtonStyle(isSelected: beepMode == mode, color: .purple))
+                                        }
+                                    }
+                                    
+                                    // Range Mode Options
+                                    if beepMode == .range {
+                                        HStack(spacing: 8) {
+                                            ForEach(BeepInterval.allCases, id: \.self) { interval in
+                                                Button(action: {
+                                                    selectedBeepInterval = interval
+                                                }) {
+                                                    Text(interval.rawValue)
+                                                        .font(.system(size: 14, weight: .semibold))
+                                                        .foregroundColor(selectedBeepInterval == interval ? .white : .white.opacity(0.7))
+                                                        .padding(.vertical, 12)
+                                                        .padding(.horizontal, 8)
+                                                        .frame(maxWidth: .infinity)
+                                                }
+                                                .buttonStyle(DisplayModeButtonStyle(isSelected: selectedBeepInterval == interval, color: .orange))
+                                            }
+                                        }
+                                    }
+                                    
+                                    // Fixed Mode Options
+                                    if beepMode == .fixed {
+                                        VStack(alignment: .leading, spacing: 8) {
+                                            Text("Fixed Interval")
+                                                .font(.subheadline)
+                                                .foregroundColor(.white.opacity(0.8))
+                                            
+                                            HStack {
+                                                Slider(value: $fixedBeepInterval, in: 0.5...15.0, step: 0.5)
+                                                    .accentColor(.orange)
+                                                
+                                                Text("\(fixedBeepInterval, specifier: "%.1f")s")
+                                                    .font(.system(size: 16, weight: .semibold))
+                                                    .foregroundColor(.white)
+                                                    .frame(minWidth: 50)
+                                            }
                                         }
                                     }
                                 }
@@ -2258,6 +2301,8 @@ struct DisplayView: View {
     let numberRange: Double
     let selectedArrows: [String]
     let selectedBeepInterval: BeepInterval
+    let beepMode: BeepMode
+    let fixedBeepInterval: Double
     let criticalScanDelay: Double
     let criticalScanDuration: Double
         let criticalScanResetTime: Double
@@ -2337,7 +2382,7 @@ struct DisplayView: View {
     
     let availableLanes = ["Left", "Center", "Right"]
     
-        init(selectedColors: [Color], displayMode: DisplayMode, changeInterval: Double, selectedNumbers: [Int], soundEnabled: Bool, laneSpeed: Double, numberRange: Double, selectedArrows: [String], selectedBeepInterval: BeepInterval, criticalScanDelay: Double, criticalScanDuration: Double, criticalScanResetTime: Double, selectedColorSet: ScanningColorSet, selectedActionSet: ActionSet, customActions: [CustomAction], selectedCriticalScanNumbers: [Int], screenProtectionEnabled: Bool, numberColor: Color, arrowColor: Color, userTeamColor: TeamColor, opponentColor: TeamColor, playerGender: PlayerGender, numberOfOpponents: Int, numberOfTeammates: Int, numberOfOpenSpaces: Int, showDisplay: Binding<Bool>, profileManager: UserProfileManager) {
+        init(selectedColors: [Color], displayMode: DisplayMode, changeInterval: Double, selectedNumbers: [Int], soundEnabled: Bool, laneSpeed: Double, numberRange: Double, selectedArrows: [String], selectedBeepInterval: BeepInterval, beepMode: BeepMode, fixedBeepInterval: Double, criticalScanDelay: Double, criticalScanDuration: Double, criticalScanResetTime: Double, selectedColorSet: ScanningColorSet, selectedActionSet: ActionSet, customActions: [CustomAction], selectedCriticalScanNumbers: [Int], screenProtectionEnabled: Bool, numberColor: Color, arrowColor: Color, userTeamColor: TeamColor, opponentColor: TeamColor, playerGender: PlayerGender, numberOfOpponents: Int, numberOfTeammates: Int, numberOfOpenSpaces: Int, showDisplay: Binding<Bool>, profileManager: UserProfileManager) {
             self.profileManager = profileManager
         self.selectedColors = selectedColors
         self.displayMode = displayMode
@@ -2348,6 +2393,8 @@ struct DisplayView: View {
         self.numberRange = numberRange
         self.selectedArrows = selectedArrows
         self.selectedBeepInterval = selectedBeepInterval
+        self.beepMode = beepMode
+        self.fixedBeepInterval = fixedBeepInterval
         self.criticalScanDelay = criticalScanDelay
         self.criticalScanDuration = criticalScanDuration
             self.criticalScanResetTime = criticalScanResetTime
@@ -2367,6 +2414,17 @@ struct DisplayView: View {
             self.numberOfOpponents = numberOfOpponents
             self.numberOfTeammates = numberOfTeammates
             self.numberOfOpenSpaces = numberOfOpenSpaces
+    }
+    
+    // MARK: - Helper Functions
+    
+    private func getBeepInterval() -> Double {
+        switch beepMode {
+        case .range:
+            return Double.random(in: selectedBeepInterval.range)
+        case .fixed:
+            return fixedBeepInterval
+        }
     }
     
     var body: some View {
@@ -2903,7 +2961,7 @@ struct DisplayView: View {
     private func scheduleNextBeep() {
         guard isActive && (displayMode == .colors || displayMode == .colorsNumbers || displayMode == .colorsArrows || displayMode == .numbers || displayMode == .lanes) else { return }
         
-        let randomInterval = Double.random(in: selectedBeepInterval.range)
+        let randomInterval = getBeepInterval()
         
         
         DispatchQueue.main.asyncAfter(deadline: .now() + randomInterval) {
@@ -2988,7 +3046,7 @@ struct DisplayView: View {
             }
             
             // Schedule first critical scan
-            DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: selectedBeepInterval.range)) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + getBeepInterval()) {
                 startCriticalScanPhase()
             }
         }
@@ -3043,7 +3101,7 @@ struct DisplayView: View {
             }
             
             // Schedule first critical scan
-            DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: selectedBeepInterval.range)) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + getBeepInterval()) {
                 startCriticalScanArrowsPhase()
             }
         }
@@ -3094,7 +3152,7 @@ struct DisplayView: View {
             criticalScanPhase = "NORMAL"
             
             // Schedule next critical scan based on display mode
-            DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: selectedBeepInterval.range)) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + getBeepInterval()) {
                 if displayMode == .criticalScanArrows {
                     startCriticalScanArrowsPhase()
                 } else {
@@ -3635,7 +3693,7 @@ extension DisplayView {
         }
         
         // Schedule first scanning round
-        DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: selectedBeepInterval.range)) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + getBeepInterval()) {
             startScanningGameRound()
         }
     }
@@ -3749,7 +3807,7 @@ extension DisplayView {
         scanningGamePhase = "NORMAL"
         
         // Schedule next scanning round
-        DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: selectedBeepInterval.range)) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + getBeepInterval()) {
             startScanningGameRound()
         }
     }

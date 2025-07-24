@@ -3,6 +3,11 @@ import SwiftUI
 
 // MARK: - Shared Types
 
+enum BeepMode: String, Codable, CaseIterable {
+    case range = "Range"
+    case fixed = "Fixed"
+}
+
 enum BeepInterval: String, Codable, CaseIterable {
     case fast = "Fast (2-4s)"
     case medium = "Medium (5-7s)" 

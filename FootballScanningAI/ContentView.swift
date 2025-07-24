@@ -714,6 +714,7 @@ struct MainView: View {
     @State private var currentArrowDirection: String = "arrow.up"
     @State private var showNumberOrArrow: Bool = false
     @State private var beepTimer: Timer?
+    @State private var isBeepScheduled: Bool = false // Prevent multiple concurrent beep schedules
     @State private var numberRange: Double = 2.0 // 1-2 range for Colors + Numbers mode
     @State private var selectedArrows: Set<String> = [] // Selected arrows for Colors + Arrows mode
     @State private var selectedBeepInterval: BeepInterval = .medium // Default to medium
@@ -2974,7 +2975,7 @@ struct DisplayView: View {
     }
     
     private func startBeepTimer() {
-        beepTimer?.invalidate()
+        stopBeepTimer() // Ensure any existing timers are stopped
         
         // Schedule first beep immediately
         scheduleNextBeep()
@@ -2983,11 +2984,17 @@ struct DisplayView: View {
     private func scheduleNextBeep() {
         guard isActive && (displayMode == .colors || displayMode == .colorsNumbers || displayMode == .colorsArrows || displayMode == .numbers || displayMode == .lanes) else { return }
         
+        // Prevent multiple concurrent schedules
+        guard !isBeepScheduled else { return }
+        isBeepScheduled = true
+        
         let randomInterval = getBeepInterval()
         
-        
         DispatchQueue.main.asyncAfter(deadline: .now() + randomInterval) {
-            guard isActive && (displayMode == .colors || displayMode == .colorsNumbers || displayMode == .colorsArrows || displayMode == .numbers || displayMode == .lanes) else { return }
+            guard isActive && (displayMode == .colors || displayMode == .colorsNumbers || displayMode == .colorsArrows || displayMode == .numbers || displayMode == .lanes) else { 
+                isBeepScheduled = false
+                return 
+            }
             
             // Play beep
             if soundEnabled {
@@ -3005,16 +3012,17 @@ struct DisplayView: View {
                 }
             } else if displayMode == .colorsArrows {
                 currentArrowDirection = selectedArrows.randomElement() ?? "arrow.up"
-            showNumberOrArrow = true
-            
-            // Hide after 1 second
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                showNumberOrArrow = false
-            }
+                showNumberOrArrow = true
+                
+                // Hide after 1 second
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    showNumberOrArrow = false
+                }
             }
             // For regular colors, numbers, and lanes modes, just play the beep without showing additional elements
             
-            // Schedule next beep
+            // Reset flag and schedule next beep
+            isBeepScheduled = false
             scheduleNextBeep()
         }
     }
@@ -3022,6 +3030,7 @@ struct DisplayView: View {
     private func stopBeepTimer() {
         beepTimer?.invalidate()
         beepTimer = nil
+        isBeepScheduled = false
     }
     
     private func scheduleRandomBeep() {

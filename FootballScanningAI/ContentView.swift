@@ -2555,7 +2555,7 @@ struct DisplayView: View {
                                 }
                             } else if criticalScanPhase == "CRITICAL" {
                                 ZStack {
-                                    // "You are here" indicator in the center
+                                    // "You are here" indicator in the center (only for dribble/pass activity)
                                     VStack(spacing: 10) {
                                         ZStack {
                                             Circle()
@@ -2653,39 +2653,16 @@ struct DisplayView: View {
                                         .shadow(radius: 5)
                                 }
                             } else if criticalScanPhase == "CRITICAL" {
-                                ZStack {
-                                    // "You are here" indicator in the center
-                                    VStack(spacing: 10) {
-                                        ZStack {
-                                            Circle()
-                                                .fill(Color.white)
-                                                .frame(width: 120, height: 120)
-                                                .shadow(radius: 10)
-                                            
-                                            Text("X")
-                                                .font(.system(size: 80, weight: .bold))
-                                                .foregroundColor(.black)
-                                        }
-                                        
-                                        Text("YOU ARE HERE")
-                                            .font(.system(size: 24, weight: .bold))
-                                            .foregroundColor(.white)
-                                            .shadow(radius: 5)
-                                    }
-                                    .position(x: UIScreen.main.bounds.width / 2, y: UIScreen.main.bounds.height / 2)
+                                VStack(spacing: 15) {
+                                    Image(systemName: currentArrowDirection)
+                                            .font(.system(size: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.35, weight: .black))
+                                            .foregroundColor(arrowColor)
+                                        .shadow(radius: 10)
                                     
-                                    // Arrow and text at the top
-                                    VStack(spacing: 15) {
-                                        Image(systemName: currentArrowDirection)
-                                                .font(.system(size: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.35, weight: .black))
-                                                .foregroundColor(arrowColor)
-                                            .shadow(radius: 10)
-                                        
-                                        Text("CRITICAL SCAN")
-                                            .font(.system(size: 50, weight: .bold))
-                                            .foregroundColor(.white)
-                                            .shadow(radius: 5)
-                                    }
+                                    Text("CRITICAL SCAN")
+                                        .font(.system(size: 50, weight: .bold))
+                                        .foregroundColor(.white)
+                                        .shadow(radius: 5)
                                 }
                             } else if criticalScanPhase == "RESET" {
                                 VStack(spacing: 15) {

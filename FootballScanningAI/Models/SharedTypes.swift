@@ -5,13 +5,13 @@ import SwiftUI
 
 enum BeepInterval: String, Codable, CaseIterable {
     case fast = "Fast (2-4s)"
-    case medium = "Medium (4-6s)" 
+    case medium = "Medium (5-7s)" 
     case slow = "Slow (8-10s)"
     
     var range: ClosedRange<Double> {
         switch self {
         case .fast: return 2.0...4.0
-        case .medium: return 4.0...6.0
+        case .medium: return 5.0...7.0
         case .slow: return 8.0...10.0
         }
     }

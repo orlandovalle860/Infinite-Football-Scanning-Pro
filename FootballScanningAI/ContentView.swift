@@ -777,6 +777,14 @@ struct MainView: View {
     @State private var numberOfTeammates: Int = 1
     @State private var numberOfOpenSpaces: Int = 1
     
+    // Timer state variables
+    @State private var timerMinutes: Int = 5
+    @State private var timerSeconds: Int = 0
+    @State private var isTimerRunning: Bool = false
+    @State private var remainingTime: TimeInterval = 0
+    @State private var timer: Timer?
+    @State private var showingTimer: Bool = false
+    
     let availableLanes = ["Left", "Center", "Right"]
     
     init(settingsViewModel: SettingsViewModel, profileManager: UserProfileManager, selectedColors: [Color] = [], displayMode: DisplayMode = .colors, changeInterval: Double = 1.5, selectedNumbers: Set<Int> = []) {
@@ -879,8 +887,115 @@ struct MainView: View {
                         }
                         .padding(.horizontal)
                         
-                            // Mode Selection
-                            VStack(alignment: .leading, spacing: 10) {
+                        // Timer Section
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Timer")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                            
+                            VStack(alignment: .leading, spacing: 12) {
+                                // Timer Display
+                                HStack {
+                                    Spacer()
+                                    VStack(spacing: 4) {
+                                        Text("\(timerMinutes):\(String(format: "%02d", timerSeconds))")
+                                            .font(.system(size: 32, weight: .bold))
+                                            .foregroundColor(.white)
+                                        Text("Set Time")
+                                            .font(.caption)
+                                            .foregroundColor(.white.opacity(0.7))
+                                    }
+                                    Spacer()
+                                }
+                                .padding(.vertical, 8)
+                                
+                                // Time Picker
+                                HStack(spacing: 20) {
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        Text("Minutes")
+                                            .font(.subheadline)
+                                            .foregroundColor(.white.opacity(0.8))
+                                        
+                                        Picker("Minutes", selection: $timerMinutes) {
+                                            ForEach(0...59, id: \.self) { minute in
+                                                Text("\(minute)").tag(minute)
+                                            }
+                                        }
+                                        .pickerStyle(WheelPickerStyle())
+                                        .frame(width: 80, height: 100)
+                                        .clipped()
+                                    }
+                                    
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        Text("Seconds")
+                                            .font(.subheadline)
+                                            .foregroundColor(.white.opacity(0.8))
+                                        
+                                        Picker("Seconds", selection: $timerSeconds) {
+                                            ForEach(0...59, id: \.self) { second in
+                                                Text("\(second)").tag(second)
+                                            }
+                                        }
+                                        .pickerStyle(WheelPickerStyle())
+                                        .frame(width: 80, height: 100)
+                                        .clipped()
+                                    }
+                                }
+                                .padding(.horizontal)
+                                
+                                // Timer Controls
+                                HStack(spacing: 15) {
+                                    Button(action: {
+                                        if isTimerRunning {
+                                            stopTimer()
+                                        } else {
+                                            startTimer()
+                                        }
+                                    }) {
+                                        HStack {
+                                            Image(systemName: isTimerRunning ? "stop.fill" : "play.fill")
+                                                .font(.system(size: 16, weight: .semibold))
+                                            Text(isTimerRunning ? "Stop" : "Start")
+                                                .font(.system(size: 16, weight: .semibold))
+                                        }
+                                        .foregroundColor(.white)
+                                        .padding(.vertical, 12)
+                                        .padding(.horizontal, 20)
+                                        .frame(maxWidth: .infinity)
+                                        .background(isTimerRunning ? Color.red : Color.green)
+                                        .cornerRadius(10)
+                                    }
+                                    
+                                    Button(action: {
+                                        resetTimer()
+                                    }) {
+                                        HStack {
+                                            Image(systemName: "arrow.clockwise")
+                                                .font(.system(size: 16, weight: .semibold))
+                                            Text("Reset")
+                                                .font(.system(size: 16, weight: .semibold))
+                                        }
+                                        .foregroundColor(.white)
+                                        .padding(.vertical, 12)
+                                        .padding(.horizontal, 20)
+                                        .frame(maxWidth: .infinity)
+                                        .background(Color.blue)
+                                        .cornerRadius(10)
+                                    }
+                                }
+                                .disabled(timerMinutes == 0 && timerSeconds == 0)
+                            }
+                        }
+                        .padding()
+                        .background {
+                            RoundedRectangle(cornerRadius: 15)
+                                .fill(.ultraThinMaterial)
+                                .opacity(0.7)
+                        }
+                        .padding(.horizontal)
+                        
+                        // Mode Selection
+                        VStack(alignment: .leading, spacing: 10) {
                             Text("Scanning Activities")
                                     .font(.headline)
                         .foregroundColor(.white)
@@ -2102,6 +2217,15 @@ struct MainView: View {
                         }
                     )
                 }
+                .fullScreenCover(isPresented: $isTimerRunning) {
+                    TimerDisplayView(
+                        minutes: timerMinutes,
+                        seconds: timerSeconds,
+                        onStop: {
+                            stopTimer()
+                        }
+                    )
+                }
                 
             }
         }
@@ -2203,6 +2327,62 @@ struct MainView: View {
         .black,
         Color(red: 1.0, green: 0.4, blue: 0.8)
     ]
+    
+    // MARK: - Timer Functions
+    
+    private func startTimer() {
+        guard timerMinutes > 0 || timerSeconds > 0 else { return }
+        
+        // Calculate total time in seconds
+        let totalTime = TimeInterval(timerMinutes * 60 + timerSeconds)
+        remainingTime = totalTime
+        
+        isTimerRunning = true
+        
+        // Start the timer
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            if remainingTime > 0 {
+                remainingTime -= 1
+                
+                // Update the display
+                let minutes = Int(remainingTime) / 60
+                let seconds = Int(remainingTime) % 60
+                timerMinutes = minutes
+                timerSeconds = seconds
+            } else {
+                // Timer finished
+                stopTimer()
+                playTimerEndSound()
+            }
+        }
+    }
+    
+    private func stopTimer() {
+        isTimerRunning = false
+        timer?.invalidate()
+        timer = nil
+    }
+    
+    private func resetTimer() {
+        stopTimer()
+        // Reset to the original set time
+        let totalTime = TimeInterval(timerMinutes * 60 + timerSeconds)
+        remainingTime = totalTime
+    }
+    
+    private func playTimerEndSound() {
+        guard let soundURL = Bundle.main.url(forResource: "short-beep-351721", withExtension: "mp3") else {
+            print("Could not find timer end sound file")
+            return
+        }
+        
+        do {
+            let audioPlayer = try AVAudioPlayer(contentsOf: soundURL)
+            audioPlayer.play()
+        } catch {
+            print("Could not create timer end audio player: \(error)")
+        }
+    }
 }
 
 struct ColorButton: View {
@@ -2243,6 +2423,75 @@ struct NumberButton: View {
 struct ContentView_Previews: PreviewProvider {
     static var previews: some View {
         ContentView()
+    }
+}
+
+struct TimerDisplayView: View {
+    let minutes: Int
+    let seconds: Int
+    let onStop: () -> Void
+    
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        ZStack {
+            // Background
+            Color.black
+                .ignoresSafeArea()
+            
+            VStack(spacing: 40) {
+                Spacer()
+                
+                // Timer Display
+                VStack(spacing: 20) {
+                    Text("TIMER")
+                        .font(.system(size: 40, weight: .bold))
+                        .foregroundColor(.white)
+                        .shadow(radius: 10)
+                    
+                    Text("\(minutes):\(String(format: "%02d", seconds))")
+                        .font(.system(size: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.3, weight: .black))
+                        .foregroundColor(.white)
+                        .shadow(radius: 15)
+                        .monospacedDigit()
+                    
+                    if minutes == 0 && seconds == 0 {
+                        Text("TIME'S UP!")
+                            .font(.system(size: 50, weight: .bold))
+                            .foregroundColor(.red)
+                            .shadow(radius: 10)
+                    }
+                }
+                
+                Spacer()
+                
+                // Stop Button
+                Button(action: {
+                    onStop()
+                    dismiss()
+                }) {
+                    HStack {
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 24, weight: .semibold))
+                        Text("Stop Timer")
+                            .font(.system(size: 24, weight: .semibold))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.vertical, 16)
+                    .padding(.horizontal, 32)
+                    .background(Color.red)
+                    .cornerRadius(15)
+                    .shadow(radius: 10)
+                }
+                
+                Spacer()
+            }
+            .padding()
+        }
+        .navigationBarHidden(true)
+        .navigationBarBackButtonHidden(true)
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -3517,7 +3766,7 @@ struct CustomActionSheet: View {
                     Text("Enter your custom action:")
                         .font(.headline)
                         .foregroundColor(.white)
-                    
+         
                     TextField("e.g., Turn left, Sprint forward", text: $customAction)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                         .onAppear {

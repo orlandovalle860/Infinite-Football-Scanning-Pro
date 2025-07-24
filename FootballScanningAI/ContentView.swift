@@ -714,7 +714,6 @@ struct MainView: View {
     @State private var currentArrowDirection: String = "arrow.up"
     @State private var showNumberOrArrow: Bool = false
     @State private var beepTimer: Timer?
-    @State private var isBeepScheduled: Bool = false // Prevent multiple concurrent beep schedules
     @State private var numberRange: Double = 2.0 // 1-2 range for Colors + Numbers mode
     @State private var selectedArrows: Set<String> = [] // Selected arrows for Colors + Arrows mode
     @State private var selectedBeepInterval: BeepInterval = .medium // Default to medium
@@ -2339,6 +2338,7 @@ struct DisplayView: View {
     @State private var currentArrowDirection: String = "arrow.up"
     @State private var showNumberOrArrow: Bool = false
     @State private var beepTimer: Timer?
+    @State private var isBeepScheduled: Bool = false // Prevent multiple concurrent beep schedules
         
         // Session tracking
         @State private var sessionStartTime: Date?

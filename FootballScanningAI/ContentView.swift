@@ -2554,51 +2554,22 @@ struct DisplayView: View {
                                         .shadow(radius: 5)
                                 }
                             } else if criticalScanPhase == "CRITICAL" {
-                                ZStack {
-                                    // Get current action text
-                                    let currentAction = customActions.first { $0.number == currentActionNumber }?.action ?? ""
-                                    let isDribbleOrPass = currentAction.lowercased().contains("dribble") || currentAction.lowercased().contains("pass")
+                                VStack(spacing: 15) {
+                                    Text("\(currentActionNumber)")
+                                            .font(.system(size: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.4, weight: .bold))
+                                            .foregroundColor(numberColor)
+                                        .shadow(radius: 10)
                                     
-                                    // "You are here" indicator in the center (only for dribble/pass activity)
-                                    if isDribbleOrPass {
-                                        VStack(spacing: 10) {
-                                            ZStack {
-                                                Circle()
-                                                    .fill(Color.white)
-                                                    .frame(width: 120, height: 120)
-                                                    .shadow(radius: 10)
-                                                
-                                                Text("X")
-                                                    .font(.system(size: 80, weight: .bold))
-                                                    .foregroundColor(.black)
-                                            }
-                                            
-                                            Text("YOU ARE HERE")
-                                                .font(.system(size: 24, weight: .bold))
-                                                .foregroundColor(.white)
-                                                .shadow(radius: 5)
-                                        }
-                                        .position(x: UIScreen.main.bounds.width / 2, y: UIScreen.main.bounds.height / 2)
-                                    }
+                                    Text("CRITICAL SCAN")
+                                        .font(.system(size: 50, weight: .bold))
+                                        .foregroundColor(.white)
+                                        .shadow(radius: 5)
                                     
-                                    // Action number and text at the top
-                                    VStack(spacing: 15) {
-                                        Text("\(currentActionNumber)")
-                                                .font(.system(size: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.4, weight: .bold))
-                                                .foregroundColor(numberColor)
-                                            .shadow(radius: 10)
-                                        
-                                        Text("CRITICAL SCAN")
-                                            .font(.system(size: 50, weight: .bold))
-                                            .foregroundColor(.white)
-                                            .shadow(radius: 5)
-                                        
-                                        Text(currentAction)
-                                                .font(.system(size: 60, weight: .medium))
-                                            .foregroundColor(.white.opacity(0.8))
-                                            .multilineTextAlignment(.center)
-                                            .padding()
-                                    }
+                                    Text(customActions.first { $0.number == currentActionNumber }?.action ?? "")
+                                            .font(.system(size: 60, weight: .medium))
+                                        .foregroundColor(.white.opacity(0.8))
+                                        .multilineTextAlignment(.center)
+                                        .padding()
                                 }
                             } else if criticalScanPhase == "RESET" {
                                 VStack(spacing: 15) {
@@ -2731,6 +2702,26 @@ struct DisplayView: View {
                             } else if scanningGamePhase == "SCANNING" {
                                 // Display sliding players
                                 ZStack {
+                                    // "You are here" indicator in the center (only for dribble/pass activity)
+                                    VStack(spacing: 10) {
+                                        ZStack {
+                                            Circle()
+                                                .fill(Color.white)
+                                                .frame(width: 120, height: 120)
+                                                .shadow(radius: 10)
+                                            
+                                            Text("X")
+                                                .font(.system(size: 80, weight: .bold))
+                                                .foregroundColor(.black)
+                                        }
+                                        
+                                        Text("YOU ARE HERE")
+                                            .font(.system(size: 24, weight: .bold))
+                                            .foregroundColor(.white)
+                                            .shadow(radius: 5)
+                                    }
+                                    .position(x: UIScreen.main.bounds.width / 2, y: UIScreen.main.bounds.height / 2)
+                                    
                                     // Sliding players positioned at different screen locations
                                     ForEach(activePlayers) { player in
                                         PlayerView(player: player, isVisible: playersVisible)

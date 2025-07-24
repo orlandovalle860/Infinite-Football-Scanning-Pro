@@ -2555,25 +2555,31 @@ struct DisplayView: View {
                                 }
                             } else if criticalScanPhase == "CRITICAL" {
                                 ZStack {
+                                    // Get current action text
+                                    let currentAction = customActions.first { $0.number == currentActionNumber }?.action ?? ""
+                                    let isDribbleOrPass = currentAction.lowercased().contains("dribble") || currentAction.lowercased().contains("pass")
+                                    
                                     // "You are here" indicator in the center (only for dribble/pass activity)
-                                    VStack(spacing: 10) {
-                                        ZStack {
-                                            Circle()
-                                                .fill(Color.white)
-                                                .frame(width: 120, height: 120)
-                                                .shadow(radius: 10)
+                                    if isDribbleOrPass {
+                                        VStack(spacing: 10) {
+                                            ZStack {
+                                                Circle()
+                                                    .fill(Color.white)
+                                                    .frame(width: 120, height: 120)
+                                                    .shadow(radius: 10)
+                                                
+                                                Text("X")
+                                                    .font(.system(size: 80, weight: .bold))
+                                                    .foregroundColor(.black)
+                                            }
                                             
-                                            Text("X")
-                                                .font(.system(size: 80, weight: .bold))
-                                                .foregroundColor(.black)
+                                            Text("YOU ARE HERE")
+                                                .font(.system(size: 24, weight: .bold))
+                                                .foregroundColor(.white)
+                                                .shadow(radius: 5)
                                         }
-                                        
-                                        Text("YOU ARE HERE")
-                                            .font(.system(size: 24, weight: .bold))
-                                            .foregroundColor(.white)
-                                            .shadow(radius: 5)
+                                        .position(x: UIScreen.main.bounds.width / 2, y: UIScreen.main.bounds.height / 2)
                                     }
-                                    .position(x: UIScreen.main.bounds.width / 2, y: UIScreen.main.bounds.height / 2)
                                     
                                     // Action number and text at the top
                                     VStack(spacing: 15) {
@@ -2587,7 +2593,7 @@ struct DisplayView: View {
                                             .foregroundColor(.white)
                                             .shadow(radius: 5)
                                         
-                                        Text(customActions.first { $0.number == currentActionNumber }?.action ?? "")
+                                        Text(currentAction)
                                                 .font(.system(size: 60, weight: .medium))
                                             .foregroundColor(.white.opacity(0.8))
                                             .multilineTextAlignment(.center)

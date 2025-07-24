@@ -782,7 +782,7 @@ struct MainView: View {
     @State private var timerSeconds: Int = 0
     @State private var isTimerRunning: Bool = false
     @State private var remainingTime: TimeInterval = 0
-    @State private var timer: Timer?
+    @State private var countdownTimer: Timer?
     @State private var showingTimer: Bool = false
     
     let availableLanes = ["Left", "Center", "Right"]
@@ -2340,7 +2340,7 @@ struct MainView: View {
         isTimerRunning = true
         
         // Start the timer
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+        countdownTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
             if remainingTime > 0 {
                 remainingTime -= 1
                 
@@ -2359,8 +2359,8 @@ struct MainView: View {
     
     private func stopTimer() {
         isTimerRunning = false
-        timer?.invalidate()
-        timer = nil
+        countdownTimer?.invalidate()
+        countdownTimer = nil
     }
     
     private func resetTimer() {

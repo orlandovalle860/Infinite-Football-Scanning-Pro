@@ -2721,6 +2721,8 @@ struct DisplayView: View {
                                             .shadow(radius: 5)
                                     }
                                     .position(x: UIScreen.main.bounds.width / 2, y: UIScreen.main.bounds.height / 2)
+                                    .opacity(playersVisible ? 1.0 : 0.0)
+                                    .animation(.easeInOut(duration: 0.8), value: playersVisible)
                                     
                                     // Sliding players positioned at different screen locations
                                     ForEach(activePlayers) { player in

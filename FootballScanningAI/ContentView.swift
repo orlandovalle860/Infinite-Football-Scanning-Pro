@@ -714,7 +714,7 @@ struct MainView: View {
     @State private var currentArrowDirection: String = "arrow.up"
     @State private var showNumberOrArrow: Bool = false
     @State private var beepTimer: Timer?
-    @State private var numberRange: Double = 2.0 // 1-2 range for Colors + Numbers mode
+    @State private var numberRange: Double = 2.0 // Legacy variable - now uses selectedNumbers instead
     @State private var selectedArrows: Set<String> = [] // Selected arrows for Colors + Arrows mode
     @State private var selectedBeepInterval: BeepInterval = .medium // Default to medium
     @State private var beepMode: BeepMode = .range // Default to range mode
@@ -3003,7 +3003,9 @@ struct DisplayView: View {
             
             // Show number or arrow for specific modes
             if displayMode == .colorsNumbers {
-                currentNumber = Int.random(in: 1...Int(numberRange))
+                if let randomNumber = selectedNumbers.randomElement() {
+                    currentNumber = randomNumber
+                }
                 showNumberOrArrow = true
                 
                 // Hide after 1 second

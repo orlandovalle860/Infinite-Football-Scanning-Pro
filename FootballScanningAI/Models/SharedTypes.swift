@@ -91,6 +91,8 @@ enum DisplayMode: String, Codable, CaseIterable {
     case criticalScan = "Critical Scan"
     case criticalScanArrows = "Critical Scan Arrows"
     case scanningGame = "Dribble or Pass"
+    case pressureResponse = "Playing Away from Pressure"
+    case oneTouchPassing = "One-Touch Passing"
 }
 
 // MARK: - Color Conversion Helpers
@@ -182,5 +184,81 @@ struct GamePosition: Identifiable, Codable {
         self.direction = direction
         self.hasPlayer = player != nil
         self.player = player
+    }
+}
+
+// MARK: - Pressure Response Activity Types
+
+enum PressureDirection: String, Codable, CaseIterable {
+    case left = "Left"
+    case right = "Right"
+    
+    var oppositeDirection: PressureDirection {
+        switch self {
+        case .left: return .right
+        case .right: return .left
+        }
+    }
+}
+
+struct PressureResponsePlayer: Identifiable, Codable {
+    let id: UUID
+    let isUser: Bool
+    let teamColor: TeamColor
+    let gender: PlayerGender
+    let position: PressureDirection?
+    
+    var imageName: String {
+        return "player_\(gender.rawValue.lowercased())_\(teamColor.rawValue.lowercased())_jersey"
+    }
+    
+    init(isUser: Bool, teamColor: TeamColor, gender: PlayerGender, position: PressureDirection? = nil) {
+        self.id = UUID()
+        self.isUser = isUser
+        self.teamColor = teamColor
+        self.gender = gender
+        self.position = position
+    }
+}
+
+// MARK: - One-Touch Passing Activity Types
+
+enum PassDirection: String, Codable, CaseIterable {
+    case upLeft = "Up Left"
+    case upRight = "Up Right"
+    case left = "Left"
+    case right = "Right"
+    case downLeft = "Down Left"
+    case downRight = "Down Right"
+    
+    var description: String {
+        switch self {
+        case .upLeft: return "Up and to the left"
+        case .upRight: return "Up and to the right"
+        case .left: return "Direct movement to the left"
+        case .right: return "Direct movement to the right"
+        case .downLeft: return "Down and to the left"
+        case .downRight: return "Down and to the right"
+        }
+    }
+}
+
+struct OneTouchPlayer: Identifiable, Codable {
+    let id: UUID
+    let isUser: Bool
+    let isTeammate: Bool
+    let teamColor: TeamColor
+    let gender: PlayerGender
+    
+    var imageName: String {
+        return "player_\(gender.rawValue.lowercased())_\(teamColor.rawValue.lowercased())_jersey"
+    }
+    
+    init(isUser: Bool, isTeammate: Bool, teamColor: TeamColor, gender: PlayerGender) {
+        self.id = UUID()
+        self.isUser = isUser
+        self.isTeammate = isTeammate
+        self.teamColor = teamColor
+        self.gender = gender
     }
 } 

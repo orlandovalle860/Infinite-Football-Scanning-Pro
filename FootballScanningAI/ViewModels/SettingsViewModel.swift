@@ -5,10 +5,37 @@ class SettingsViewModel: ObservableObject {
     @AppStorage("criticalScanDelay") var criticalScanDelay: Double = 0.5
     @AppStorage("criticalScanDuration") var criticalScanDuration: Double = 1.0
     @AppStorage("criticalScanResetTime") var criticalScanResetTime: Double = 5.0
+    @AppStorage("teammateSpeedLevel") var teammateSpeedLevel: String = "medium"
+    @AppStorage("opponentSpeedLevel") var opponentSpeedLevel: String = "medium"
+    @AppStorage("trainingPerspective") var trainingPerspective: String = "back"
     @AppStorage("screenProtectionEnabled") var screenProtectionEnabled: Bool = true
     @AppStorage("soundEnabled") var soundEnabled: Bool = true
     @AppStorage("selectedActionSet") var selectedActionSetRaw: String = "basic"
     @AppStorage("selectedColorSet") var selectedColorSetRaw: String = "standard"
+    
+    // Computed property to get the actual duration based on speed level
+    var teammateMovementDuration: Double {
+        switch teammateSpeedLevel {
+        case "slow":
+            return 1.5 // Current speed (slower)
+        case "fast":
+            return 0.75 // Faster than medium
+        default: // medium
+            return 1.0 // Current speed
+        }
+    }
+    
+    // Computed property to get the opponent movement duration based on speed level
+    var opponentMovementDuration: Double {
+        switch opponentSpeedLevel {
+        case "slow":
+            return 2.0 // Slower movement
+        case "fast":
+            return 1.0 // Faster movement
+        default: // medium
+            return 1.5 // Current speed
+        }
+    }
     
     var selectedActionSet: ActionSet {
         get { ActionSet(rawValue: selectedActionSetRaw) ?? .basic }
@@ -74,6 +101,8 @@ class SettingsViewModel: ObservableObject {
         criticalScanDelay = 0.5
         criticalScanDuration = 1.0
         criticalScanResetTime = 5.0
+        teammateSpeedLevel = "medium"
+        opponentSpeedLevel = "medium"
         screenProtectionEnabled = true
         soundEnabled = true
         selectedActionSet = .basic

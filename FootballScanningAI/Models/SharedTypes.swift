@@ -93,6 +93,7 @@ enum DisplayMode: String, Codable, CaseIterable {
     case scanningGame = "Dribble or Pass"
     case pressureResponse = "Playing Away from Pressure"
     case oneTouchPassing = "One-Touch Passing"
+    case fourGoalGame = "4-Goal Game"
 }
 
 // MARK: - Color Conversion Helpers
@@ -146,6 +147,22 @@ enum Direction: String, Codable, CaseIterable {
     case bottom = "Bottom"
     case left = "Left"
     case right = "Right"
+}
+
+enum GoalCorner: String, Codable, CaseIterable {
+    case topLeft = "Top Left"
+    case topRight = "Top Right"
+    case bottomLeft = "Bottom Left"
+    case bottomRight = "Bottom Right"
+}
+
+enum ImagePosition: String, Codable {
+    case middleLeft = "Middle Left"
+    case middleRight = "Middle Right"
+    case topLeft = "Top Left"
+    case topRight = "Top Right"
+    case bottomLeft = "Bottom Left"
+    case bottomRight = "Bottom Right"
 }
 
 enum Action: String, Codable {

@@ -41,6 +41,7 @@ struct FootballScanningAIApp: App {
         WindowGroup {
             ContentView()
                 .preferredColorScheme(.dark)
+                .environment(\.colorScheme, .dark)
                 .onAppear {
                     // Ensure protection is active when app appears
                     UIApplication.shared.isIdleTimerDisabled = true

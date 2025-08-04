@@ -738,7 +738,7 @@ struct MainView: View {
     @State private var selectedColors: [Color] = []
     @State private var selectedNumbers: Set<Int> = []
     @State private var selectedLanes: Set<String> = []
-    @State private var displayMode: DisplayMode = .colors
+    @State private var displayMode: DisplayMode = .criticalScan
     @State private var changeInterval: Double = 1.5
     @State private var laneSpeed: Double = 4.0
     @State private var showDisplay: Bool = false

@@ -4300,27 +4300,45 @@ struct DisplayView: View {
         print("🧭 Starting Direction Scanning Sequence")
         
         // Initialize image position to center of screen
-        let screenWidth = UIScreen.main.bounds.width
-        let screenHeight = UIScreen.main.bounds.height
-        directionScanningImagePosition = CGPoint(x: screenWidth / 2, y: screenHeight / 2)
-        
-        // Start movement timer
-        startDirectionScanningMovement()
+        DispatchQueue.main.async {
+            let screenWidth = UIScreen.main.bounds.width
+            let screenHeight = UIScreen.main.bounds.height
+            self.directionScanningImagePosition = CGPoint(x: screenWidth / 2, y: screenHeight / 2)
+            
+            // Start movement timer
+            self.startDirectionScanningMovement()
+        }
     }
     
     private func startDirectionScanningMovement() {
         guard isActive else { return }
         
+        // Stop any existing timer first
+        directionScanningTimer?.invalidate()
+        directionScanningTimer = nil
+        
         // Calculate movement interval based on speed (faster speed = shorter interval)
-        let movementInterval = 1.0 / directionScanningSpeed
+        let movementInterval = max(0.1, 1.0 / directionScanningSpeed) // Ensure minimum interval
         
         directionScanningTimer = Timer.scheduledTimer(withTimeInterval: movementInterval, repeats: true) { _ in
-            guard isActive else { return }
-            updateDirectionScanningPosition()
+            DispatchQueue.main.async {
+                guard self.isActive else { 
+                    self.directionScanningTimer?.invalidate()
+                    self.directionScanningTimer = nil
+                    return 
+                }
+                self.updateDirectionScanningPosition()
+            }
         }
     }
     
     private func updateDirectionScanningPosition() {
+        // Safety check for screen bounds
+        guard UIScreen.main.bounds.width > 0 && UIScreen.main.bounds.height > 0 else {
+            print("⚠️ Screen bounds not available yet")
+            return
+        }
+        
         let screenWidth = UIScreen.main.bounds.width
         let screenHeight = UIScreen.main.bounds.height
         let imageSize = min(screenWidth, screenHeight) * 0.2

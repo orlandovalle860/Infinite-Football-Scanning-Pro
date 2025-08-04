@@ -726,6 +726,14 @@ struct MainView: View {
     @State private var fourGoalRightColor: Color = .white
     @State private var selectedCriticalScanColor: Color = .blue
     
+    // Direction Scanning state variables
+    @State private var directionScanningImagePosition: CGPoint = CGPoint(x: 200, y: 400)
+    @State private var directionScanningCurrentDirection: MovementDirection = .right
+    @State private var directionScanningSpeed: Double = 2.0
+    @State private var directionScanningTimer: Timer?
+    @State private var directionScanningImageColor: TeamColor = .blue
+    @State private var directionScanningImageGender: PlayerGender = .male
+    
     // Helper function to get color names for the picker
     private func colorName(for color: Color) -> String {
         if color == Color(red: 0.8, green: 0.0, blue: 0.0) { return "Red" }
@@ -845,6 +853,9 @@ struct MainView: View {
                 numberOfOpenSpaces: numberOfOpenSpaces,
                 fourGoalLeftColor: fourGoalLeftColor,
                 fourGoalRightColor: fourGoalRightColor,
+                directionScanningImageColor: directionScanningImageColor,
+                directionScanningImageGender: directionScanningImageGender,
+                directionScanningSpeed: directionScanningSpeed,
                 showDisplay: $showDisplay,
                 profileManager: profileManager
             )
@@ -1119,6 +1130,22 @@ struct MainView: View {
                                     }
                                     .buttonStyle(DisplayModeButtonStyle(isSelected: displayMode == .fourGoalGame, color: .yellow))
                                     
+                                    // Direction Scanning Mode
+                                    Button(action: {
+                                        displayMode = .directionScanning
+                                        selectedNumbers.removeAll()
+                                        selectedLanes.removeAll()
+                                        selectedBeepInterval = .medium
+                                    }) {
+                                        Text("Direction Scanning")
+                                            .font(.system(size: 14, weight: .semibold))
+                                            .foregroundColor(displayMode == .directionScanning ? .white : .white.opacity(0.7))
+                                            .padding(.vertical, 12)
+                                            .padding(.horizontal, 8)
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(DisplayModeButtonStyle(isSelected: displayMode == .directionScanning, color: .orange))
+                                    
                                     // Scanning Game Mode
                                     Button(action: {
                                         displayMode = .scanningGame
@@ -1388,6 +1415,90 @@ struct MainView: View {
                                             }
                                             .pickerStyle(MenuPickerStyle())
                                             .accentColor(.white)
+                                        }
+                                    }
+                                }
+                                .padding()
+                                .background {
+                                    RoundedRectangle(cornerRadius: 15)
+                                        .fill(.ultraThinMaterial)
+                                        .opacity(0.7)
+                                }
+                                .padding(.horizontal)
+                            }
+                            
+                            // Direction Scanning Settings (only for Direction Scanning mode)
+                            if displayMode == .directionScanning {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text("Direction Scanning Settings")
+                                        .font(.headline)
+                                        .foregroundColor(.white)
+                                    
+                                    Text("Configure the moving image and speed for direction scanning practice.")
+                                        .font(.caption)
+                                        .foregroundColor(.white.opacity(0.7))
+                                    
+                                    VStack(spacing: 15) {
+                                        // Image Color Selection
+                                        HStack {
+                                            Text("Image Color")
+                                                .font(.caption)
+                                                .foregroundColor(.white.opacity(0.8))
+                                                .frame(width: 80, alignment: .leading)
+                                            
+                                            Picker("Image Color", selection: $directionScanningImageColor) {
+                                                ForEach(TeamColor.allCases, id: \.self) { color in
+                                                    HStack {
+                                                        Circle()
+                                                            .fill(color.color)
+                                                            .frame(width: 20, height: 20)
+                                                        Text(color.rawValue)
+                                                    }
+                                                    .tag(color)
+                                                }
+                                            }
+                                            .pickerStyle(MenuPickerStyle())
+                                            .accentColor(.white)
+                                        }
+                                        
+                                        // Image Gender Selection
+                                        HStack {
+                                            Text("Image Gender")
+                                                .font(.caption)
+                                                .foregroundColor(.white.opacity(0.8))
+                                                .frame(width: 80, alignment: .leading)
+                                            
+                                            Picker("Image Gender", selection: $directionScanningImageGender) {
+                                                ForEach(PlayerGender.allCases, id: \.self) { gender in
+                                                    Text(gender.rawValue).tag(gender)
+                                                }
+                                            }
+                                            .pickerStyle(MenuPickerStyle())
+                                            .accentColor(.white)
+                                        }
+                                        
+                                        // Speed Control
+                                        VStack(alignment: .leading, spacing: 5) {
+                                            Text("Movement Speed")
+                                                .font(.caption)
+                                                .foregroundColor(.white.opacity(0.8))
+                                            
+                                            HStack {
+                                                Text("Slow")
+                                                    .font(.caption2)
+                                                    .foregroundColor(.white.opacity(0.6))
+                                                
+                                                Slider(value: $directionScanningSpeed, in: 0.5...5.0, step: 0.1)
+                                                    .accentColor(.orange)
+                                                
+                                                Text("Fast")
+                                                    .font(.caption2)
+                                                    .foregroundColor(.white.opacity(0.6))
+                                            }
+                                            
+                                            Text("Speed: \(String(format: "%.1f", directionScanningSpeed))x")
+                                                .font(.caption2)
+                                                .foregroundColor(.white.opacity(0.7))
                                         }
                                     }
                                 }
@@ -2607,6 +2718,9 @@ struct MainView: View {
         case .fourGoalGame:
             // 4-Goal Game works with default values
             return true
+        case .directionScanning:
+            // Direction Scanning works with default values
+            return true
         }
     }
     
@@ -2672,6 +2786,8 @@ struct MainView: View {
             }
         case .fourGoalGame:
             return "" // 4-Goal Game works with defaults
+        case .directionScanning:
+            return "" // Direction Scanning works with defaults
         }
         return ""
     }
@@ -2764,6 +2880,11 @@ struct DisplayView: View {
     let numberOfOpenSpaces: Int
     let fourGoalLeftColor: Color
     let fourGoalRightColor: Color
+    
+    // Direction Scanning parameters
+    let directionScanningImageColor: TeamColor
+    let directionScanningImageGender: PlayerGender
+    let directionScanningSpeed: Double
         @Binding var showDisplay: Bool
         @ObservedObject var profileManager: UserProfileManager
     
@@ -2848,11 +2969,17 @@ struct DisplayView: View {
     @State private var imageMovementTimer: Timer?
     @State private var selectedCriticalScanColor: Color = .blue
     
+    // Direction Scanning state variables
+    @State private var directionScanningImagePosition: CGPoint = CGPoint(x: 200, y: 400)
+    @State private var directionScanningCurrentDirection: MovementDirection = .right
+    @State private var directionScanningTimer: Timer?
+    @State private var screenSize: CGSize = CGSize(width: 400, height: 800)
+    
 
     
     let availableLanes = ["Left", "Center", "Right"]
     
-        init(selectedColors: [Color], displayMode: DisplayMode, changeInterval: Double, selectedNumbers: [Int], soundEnabled: Bool, laneSpeed: Double, numberRange: Double, selectedArrows: [String], selectedBeepInterval: BeepInterval, beepMode: BeepMode, fixedBeepInterval: Double, criticalScanDelay: Double, criticalScanDuration: Double, criticalScanResetTime: Double, teammateMovementDuration: Double, opponentMovementDuration: Double, trainingPerspective: String, selectedColorSet: ScanningColorSet, selectedActionSet: ActionSet, customActions: [CustomAction], selectedCriticalScanNumbers: [Int], screenProtectionEnabled: Bool, numberColor: Color, arrowColor: Color, userTeamColor: TeamColor, opponentColor: TeamColor, playerGender: PlayerGender, numberOfOpponents: Int, numberOfTeammates: Int, numberOfOpenSpaces: Int, fourGoalLeftColor: Color, fourGoalRightColor: Color, showDisplay: Binding<Bool>, profileManager: UserProfileManager) {
+        init(selectedColors: [Color], displayMode: DisplayMode, changeInterval: Double, selectedNumbers: [Int], soundEnabled: Bool, laneSpeed: Double, numberRange: Double, selectedArrows: [String], selectedBeepInterval: BeepInterval, beepMode: BeepMode, fixedBeepInterval: Double, criticalScanDelay: Double, criticalScanDuration: Double, criticalScanResetTime: Double, teammateMovementDuration: Double, opponentMovementDuration: Double, trainingPerspective: String, selectedColorSet: ScanningColorSet, selectedActionSet: ActionSet, customActions: [CustomAction], selectedCriticalScanNumbers: [Int], screenProtectionEnabled: Bool, numberColor: Color, arrowColor: Color, userTeamColor: TeamColor, opponentColor: TeamColor, playerGender: PlayerGender, numberOfOpponents: Int, numberOfTeammates: Int, numberOfOpenSpaces: Int, fourGoalLeftColor: Color, fourGoalRightColor: Color, directionScanningImageColor: TeamColor, directionScanningImageGender: PlayerGender, directionScanningSpeed: Double, showDisplay: Binding<Bool>, profileManager: UserProfileManager) {
             self.profileManager = profileManager
         self.selectedColors = selectedColors
         self.displayMode = displayMode
@@ -2889,6 +3016,9 @@ struct DisplayView: View {
             self.numberOfOpenSpaces = numberOfOpenSpaces
             self.fourGoalLeftColor = fourGoalLeftColor
             self.fourGoalRightColor = fourGoalRightColor
+            self.directionScanningImageColor = directionScanningImageColor
+            self.directionScanningImageGender = directionScanningImageGender
+            self.directionScanningSpeed = directionScanningSpeed
     }
     
     // MARK: - Helper Functions
@@ -3572,6 +3702,36 @@ struct DisplayView: View {
                             }
                         }
                     }
+                } else if displayMode == .directionScanning {
+                    // Direction Scanning display
+                    ZStack {
+                        Color.black
+                            .ignoresSafeArea()
+                        
+                        // Moving image
+                        Image("player_\(directionScanningImageGender.rawValue.lowercased())_\(directionScanningImageColor.rawValue.lowercased())_jersey")
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.2, height: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.2)
+                            .shadow(radius: 10)
+                            .position(directionScanningImagePosition)
+                            .animation(.linear(duration: 0.1), value: directionScanningImagePosition)
+                        
+                        // Instructions
+                        VStack(spacing: 10) {
+                            Text("DIRECTION SCANNING")
+                                .font(.system(size: 40, weight: .bold))
+                                .foregroundColor(.white)
+                                .shadow(radius: 5)
+                            
+                            Text("Call out the direction the image is moving")
+                                .font(.system(size: 20, weight: .medium))
+                                .foregroundColor(.white.opacity(0.8))
+                                .multilineTextAlignment(.center)
+                                .padding()
+                        }
+                        .position(x: UIScreen.main.bounds.width / 2, y: UIScreen.main.bounds.height * 0.85)
+                    }
                 }
             }
             
@@ -3693,6 +3853,9 @@ struct DisplayView: View {
         } else if displayMode == .fourGoalGame {
             print("⚽ Starting 4-Goal Game Mode")
             startFourGoalGameSequence()
+        } else if displayMode == .directionScanning {
+            print("🧭 Starting Direction Scanning Mode")
+            startDirectionScanningSequence()
         } else if displayMode == .colors || displayMode == .colorsNumbers || displayMode == .colorsArrows {
             print("🎨 Starting \(displayMode) Mode")
             // These modes use the standard timer + beep timer
@@ -3880,6 +4043,10 @@ struct DisplayView: View {
         timer?.invalidate()
         timer = nil
         stopBeepTimer()
+        
+        // Stop Direction Scanning timer
+        directionScanningTimer?.invalidate()
+        directionScanningTimer = nil
     }
     
         private func startScreenProtectionTimer() {
@@ -4126,6 +4293,66 @@ struct DisplayView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanDuration) {
                 startResetPhase()
             }
+        }
+    }
+    
+    private func startDirectionScanningSequence() {
+        print("🧭 Starting Direction Scanning Sequence")
+        
+        // Initialize image position to center of screen
+        let screenWidth = UIScreen.main.bounds.width
+        let screenHeight = UIScreen.main.bounds.height
+        directionScanningImagePosition = CGPoint(x: screenWidth / 2, y: screenHeight / 2)
+        
+        // Start movement timer
+        startDirectionScanningMovement()
+    }
+    
+    private func startDirectionScanningMovement() {
+        guard isActive else { return }
+        
+        // Calculate movement interval based on speed (faster speed = shorter interval)
+        let movementInterval = 1.0 / directionScanningSpeed
+        
+        directionScanningTimer = Timer.scheduledTimer(withTimeInterval: movementInterval, repeats: true) { _ in
+            guard isActive else { return }
+            updateDirectionScanningPosition()
+        }
+    }
+    
+    private func updateDirectionScanningPosition() {
+        let screenWidth = UIScreen.main.bounds.width
+        let screenHeight = UIScreen.main.bounds.height
+        let imageSize = min(screenWidth, screenHeight) * 0.2
+        let margin: CGFloat = imageSize / 2
+        
+        // Get current direction vector
+        let vector = directionScanningCurrentDirection.vector
+        let moveDistance: CGFloat = 10.0 // Pixels per movement
+        
+        // Calculate new position
+        let newX = directionScanningImagePosition.x + CGFloat(vector.x) * moveDistance
+        let newY = directionScanningImagePosition.y + CGFloat(vector.y) * moveDistance
+        
+        // Check if image would go outside screen bounds
+        if newX < margin || newX > screenWidth - margin || newY < margin || newY > screenHeight - margin {
+            // Change direction to a random new direction
+            let newDirections = MovementDirection.allCases.filter { $0 != directionScanningCurrentDirection }
+            directionScanningCurrentDirection = newDirections.randomElement() ?? .right
+            
+            // Calculate new position with new direction
+            let newVector = directionScanningCurrentDirection.vector
+            let correctedX = directionScanningImagePosition.x + CGFloat(newVector.x) * moveDistance
+            let correctedY = directionScanningImagePosition.y + CGFloat(newVector.y) * moveDistance
+            
+            // Ensure position stays within bounds
+            directionScanningImagePosition = CGPoint(
+                x: max(margin, min(screenWidth - margin, correctedX)),
+                y: max(margin, min(screenHeight - margin, correctedY))
+            )
+        } else {
+            // Move to new position
+            directionScanningImagePosition = CGPoint(x: newX, y: newY)
         }
     }
     

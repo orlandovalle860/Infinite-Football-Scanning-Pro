@@ -13,6 +13,7 @@ struct TrainingHistoryView: View {
         case lanes = "Lanes"
         case criticalScan = "Critical Scan"
         case fourGoalGame = "4-Goal Game"
+        case directionScanning = "Direction Scanning"
     }
     
     var filteredSessions: [TrainingSession] {
@@ -34,6 +35,8 @@ struct TrainingHistoryView: View {
                 return session.displayMode == .criticalScan
             case .fourGoalGame:
                 return session.displayMode == .fourGoalGame
+            case .directionScanning:
+                return session.displayMode == .directionScanning
             }
         }
         

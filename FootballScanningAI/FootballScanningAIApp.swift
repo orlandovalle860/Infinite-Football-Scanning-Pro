@@ -39,7 +39,7 @@ struct FootballScanningAIApp: App {
     
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            SplashScreen()
                 .preferredColorScheme(.dark)
                 .environment(\.colorScheme, .dark)
                 .onAppear {

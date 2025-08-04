@@ -281,24 +281,72 @@ struct VideoPlayerView: View {
 
 struct SplashScreen: View {
     @State private var isActive = false
+    @State private var logoScale: CGFloat = 0.8
+    @State private var logoOpacity: Double = 0.0
+    @State private var textOpacity: Double = 0.0
     
     var body: some View {
         if isActive {
             ContentView()
         } else {
             ZStack {
-                Color.white
-                    .ignoresSafeArea()
+                // Background gradient
+                LinearGradient(
+                    gradient: Gradient(colors: [
+                        Color(red: 0.05, green: 0.05, blue: 0.1),
+                        Color(red: 0.1, green: 0.1, blue: 0.15)
+                    ]),
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
                 
-                Image("SplashLogo") // Change this to match your renamed image set
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 300)
-                    .padding()
+                VStack(spacing: 30) {
+                    // Logo
+                    Image("SplashLogo")
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 200, height: 200)
+                        .scaleEffect(logoScale)
+                        .opacity(logoOpacity)
+                        .shadow(color: .blue.opacity(0.3), radius: 20, x: 0, y: 10)
+                    
+                    // App name
+                    Text("Infinite Football")
+                        .font(.system(size: 32, weight: .bold, design: .rounded))
+                        .foregroundColor(.white)
+                        .opacity(textOpacity)
+                    
+                    // Tagline
+                    Text("Scanning Pro")
+                        .font(.system(size: 18, weight: .medium, design: .rounded))
+                        .foregroundColor(.blue)
+                        .opacity(textOpacity)
+                    
+                    // Loading indicator
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .blue))
+                        .scaleEffect(1.2)
+                        .opacity(textOpacity)
+                }
             }
             .onAppear {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    isActive = true
+                // Animate logo appearance
+                withAnimation(.easeOut(duration: 1.0)) {
+                    logoScale = 1.0
+                    logoOpacity = 1.0
+                }
+                
+                // Animate text appearance
+                withAnimation(.easeOut(duration: 0.8).delay(0.5)) {
+                    textOpacity = 1.0
+                }
+                
+                // Transition to main app after delay
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                    withAnimation(.easeInOut(duration: 0.5)) {
+                        isActive = true
+                    }
                 }
             }
         }

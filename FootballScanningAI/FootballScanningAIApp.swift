@@ -41,7 +41,6 @@ struct FootballScanningAIApp: App {
         WindowGroup {
             SplashScreen()
                 .preferredColorScheme(.dark)
-                .environment(\.colorScheme, .dark)
                 .onAppear {
                     // Ensure protection is active when app appears
                     UIApplication.shared.isIdleTimerDisabled = true

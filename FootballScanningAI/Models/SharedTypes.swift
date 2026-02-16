@@ -94,7 +94,6 @@ enum DisplayMode: String, Codable, CaseIterable {
     case pressureResponse = "Playing Away from Pressure"
     case oneTouchPassing = "One-Touch Passing"
     case fourGoalGame = "4-Goal Game"
-    case directionScanning = "Direction Scanning"
 }
 
 // MARK: - Color Conversion Helpers
@@ -164,32 +163,6 @@ enum ImagePosition: String, Codable {
     case topRight = "Top Right"
     case bottomLeft = "Bottom Left"
     case bottomRight = "Bottom Right"
-}
-
-// MARK: - Direction Scanning Activity Types
-
-enum MovementDirection: String, Codable, CaseIterable {
-    case up = "Up"
-    case down = "Down"
-    case left = "Left"
-    case right = "Right"
-    case upLeft = "Up Left"
-    case upRight = "Up Right"
-    case downLeft = "Down Left"
-    case downRight = "Down Right"
-    
-    var vector: (x: Double, y: Double) {
-        switch self {
-        case .up: return (0, -1)
-        case .down: return (0, 1)
-        case .left: return (-1, 0)
-        case .right: return (1, 0)
-        case .upLeft: return (-0.707, -0.707)
-        case .upRight: return (0.707, -0.707)
-        case .downLeft: return (-0.707, 0.707)
-        case .downRight: return (0.707, 0.707)
-        }
-    }
 }
 
 enum Action: String, Codable {

@@ -3077,18 +3077,13 @@ struct DisplayView: View {
                             } else if scanningGamePhase == "SCANNING" {
                                 // Display sliding players
                                 ZStack {
-                                    // "You are here" indicator in the center (only for dribble/pass activity)
+                                    // "You are here" indicator in the center: your team's player image (only for dribble/pass activity)
                                     VStack(spacing: 10) {
-                                        ZStack {
-                                            Circle()
-                                                .fill(Color.white)
-                                                .frame(width: 120, height: 120)
-                                                .shadow(radius: 10)
-                                            
-                                            Text("X")
-                                                .font(.system(size: 80, weight: .bold))
-                                                .foregroundColor(.black)
-                                        }
+                                        Image("player_\(playerGender.rawValue.lowercased())_\(userTeamColor.rawValue.lowercased())_jersey")
+                                            .resizable()
+                                            .aspectRatio(contentMode: .fit)
+                                            .frame(width: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * Self.playerImageSizeRatio, height: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * Self.playerImageSizeRatio)
+                                            .shadow(radius: 10)
                                         
                                         Text("YOU ARE HERE")
                                             .font(.system(size: 24, weight: .bold))
@@ -4517,24 +4512,13 @@ struct PlayerView: View {
     }
     
     var body: some View {
-        ZStack {
-            // Try to load the image, fallback to colored circle if not found
-            Image(player.imageName)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .frame(width: imageSize, height: imageSize)
-                .opacity(isVisible ? 1 : 0)
-                .animation(.easeInOut(duration: 0.8), value: isVisible)
-
-            
-            // Fallback colored circle
-            Circle()
-                .fill(player.teamColor.color)
-                .frame(width: imageSize, height: imageSize)
-                .opacity(isVisible ? 0.3 : 0)
-                .animation(.easeInOut(duration: 0.8), value: isVisible)
-        }
+        Image(player.imageName)
+            .resizable()
+            .aspectRatio(contentMode: .fit)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(width: imageSize, height: imageSize)
+            .opacity(isVisible ? 1 : 0)
+            .animation(.easeInOut(duration: 0.8), value: isVisible)
     }
 }
 

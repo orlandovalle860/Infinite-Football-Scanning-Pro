@@ -1,0 +1,156 @@
+//
+//  MultipeerManager.swift
+//  FootballScanningAI
+//
+//  Manages Multipeer Connectivity for Pressure Response: iPad advertises,
+//  iPhone browses and sends "trigger"; iPad receives and posts notification.
+//
+
+import Foundation
+import MultipeerConnectivity
+import SwiftUI
+import UIKit
+
+extension Notification.Name {
+    /// Posted when the iPad receives a trigger from the iPhone.
+    static let pressureResponseTrigger = Notification.Name("PressureResponseTrigger")
+}
+
+/// Service type for discovery (1–15 chars, lowercase letters/numbers/hyphens).
+private let serviceType = "fbpressure"
+
+final class MultipeerManager: NSObject, ObservableObject {
+    /// Whether we are advertising (iPad, receiver).
+    @Published private(set) var isAdvertising = false
+    /// Whether we are browsing (iPhone, sender).
+    @Published private(set) var isBrowsing = false
+    /// Connected peer display name, nil if none.
+    @Published private(set) var connectedPeerName: String?
+    /// Last error message for UI.
+    @Published var lastError: String?
+
+    private var myPeerID: MCPeerID
+    private var session: MCSession
+    private var advertiser: MCNearbyServiceAdvertiser?
+    private var browser: MCNearbyServiceBrowser?
+    private let triggerMessage = "trigger".data(using: .utf8)!
+
+    override init() {
+        myPeerID = MCPeerID(displayName: UIDevice.current.name)
+        session = MCSession(peer: myPeerID, securityIdentity: nil, encryptionPreference: .required)
+        super.init()
+        session.delegate = self
+    }
+
+    // MARK: - iPad (receiver)
+
+    func startAdvertising() {
+        guard !isAdvertising else { return }
+        stopBrowsing()
+        advertiser = MCNearbyServiceAdvertiser(peer: myPeerID, discoveryInfo: nil, serviceType: serviceType)
+        advertiser?.delegate = self
+        advertiser?.startAdvertisingPeer()
+        isAdvertising = true
+        lastError = nil
+    }
+
+    func stopAdvertising() {
+        advertiser?.stopAdvertisingPeer()
+        advertiser = nil
+        session.disconnect()
+        isAdvertising = false
+        connectedPeerName = nil
+    }
+
+    // MARK: - iPhone (sender)
+
+    func startBrowsing() {
+        guard !isBrowsing else { return }
+        stopAdvertising()
+        browser = MCNearbyServiceBrowser(peer: myPeerID, serviceType: serviceType)
+        browser?.delegate = self
+        browser?.startBrowsingForPeers()
+        isBrowsing = true
+        lastError = nil
+    }
+
+    func stopBrowsing() {
+        browser?.stopBrowsingForPeers()
+        browser = nil
+        session.disconnect()
+        isBrowsing = false
+        connectedPeerName = nil
+    }
+
+    /// Send trigger to connected peer. Call from iPhone when user taps Trigger.
+    func sendTrigger() {
+        guard !session.connectedPeers.isEmpty else {
+            DispatchQueue.main.async { self.lastError = "Not connected to iPad" }
+            return
+        }
+        do {
+            try session.send(triggerMessage, toPeers: session.connectedPeers, with: .reliable)
+        } catch {
+            DispatchQueue.main.async { self.lastError = error.localizedDescription }
+        }
+    }
+}
+
+// MARK: - MCSessionDelegate
+
+extension MultipeerManager: MCSessionDelegate {
+    func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
+        DispatchQueue.main.async {
+            switch state {
+            case .connected:
+                self.connectedPeerName = peerID.displayName
+                self.lastError = nil
+            case .notConnected, .connecting:
+                if session.connectedPeers.isEmpty {
+                    self.connectedPeerName = nil
+                }
+            @unknown default:
+                break
+            }
+        }
+    }
+
+    func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
+        if data == triggerMessage {
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .pressureResponseTrigger, object: nil)
+            }
+        }
+    }
+
+    func session(_ session: MCSession, didReceive stream: InputStream, withName streamName: String, fromPeer peerID: MCPeerID) {}
+    func session(_ session: MCSession, didStartReceivingResourceWithName resourceName: String, fromPeer peerID: MCPeerID, with progress: Progress) {}
+    func session(_ session: MCSession, didFinishReceivingResourceWithName resourceName: String, fromPeer peerID: MCPeerID, at localURL: URL?, withError error: Error?) {}
+}
+
+// MARK: - MCNearbyServiceAdvertiserDelegate
+
+extension MultipeerManager: MCNearbyServiceAdvertiserDelegate {
+    func advertiser(_ advertiser: MCNearbyServiceAdvertiser, didReceiveInvitationFromPeer peerID: MCPeerID, withContext context: Data?, invitationHandler: @escaping (Bool, MCSession?) -> Void) {
+        invitationHandler(true, session)
+    }
+}
+
+// MARK: - MCNearbyServiceBrowserDelegate
+
+extension MultipeerManager: MCNearbyServiceBrowserDelegate {
+    func browser(_ browser: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID, withDiscoveryInfo info: [String: String]?) {
+        DispatchQueue.main.async {
+            guard self.connectedPeerName == nil else { return }
+            browser.invitePeer(peerID, to: self.session, withContext: nil, timeout: 15)
+        }
+    }
+
+    func browser(_ browser: MCNearbyServiceBrowser, lostPeer peerID: MCPeerID) {
+        DispatchQueue.main.async {
+            if self.connectedPeerName == peerID.displayName {
+                self.connectedPeerName = nil
+            }
+        }
+    }
+}

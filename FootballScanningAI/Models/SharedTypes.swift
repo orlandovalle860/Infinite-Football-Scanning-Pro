@@ -206,6 +206,14 @@ struct GamePosition: Identifiable, Codable {
 
 // MARK: - Pressure Response Activity Types
 
+/// Defender behavior when receiver triggers (checks to passer).
+enum PressureResponseDefenderAction: String, CaseIterable {
+    case fastPressOneSide = "Fast press one side"
+    case delayedPressOneSide = "Delay press one side"
+    case fakeStepThenDrop = "Fake step then drop"
+    case noPress = "No press"
+}
+
 enum PressureDirection: String, Codable, CaseIterable {
     case left = "Left"
     case right = "Right"

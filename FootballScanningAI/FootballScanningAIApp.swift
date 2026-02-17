@@ -40,6 +40,7 @@ struct FootballScanningAIApp: App {
     var body: some Scene {
         WindowGroup {
             SplashScreen()
+                .environmentObject(MultipeerManager())
                 .preferredColorScheme(.dark)
                 .onAppear {
                     // Ensure protection is active when app appears

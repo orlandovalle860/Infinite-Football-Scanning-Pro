@@ -620,6 +620,22 @@ struct IntroView: View {
                 }
                 .buttonStyle(PlainButtonStyle())
                 .padding(.horizontal)
+
+                // Use as trigger (iPhone) for Playing Away from Pressure
+                NavigationLink(destination: PressureTriggerView()) {
+                    HStack {
+                        Image(systemName: "hand.tap.fill")
+                        Text("Use as Trigger (iPhone)")
+                    }
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.orange)
+                    .cornerRadius(15)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .padding(.horizontal)
                 .padding(.bottom, 40)
             }
             .padding()
@@ -2660,7 +2676,8 @@ struct DisplayView: View {
     let fourGoalRightColor: Color
         @Binding var showDisplay: Bool
         @ObservedObject var profileManager: UserProfileManager
-    
+    @EnvironmentObject var multipeerManager: MultipeerManager
+
     @State private var currentColor: Color
     @State private var currentNumber: Int = 1
     @State private var currentNumberColor: Color = .blue
@@ -2724,6 +2741,15 @@ struct DisplayView: View {
     @State private var opponentPositionX: CGFloat = 0
     @State private var opponentPositionY: CGFloat = 0
     @State private var opponentMovingDirection: Bool = true // true = moving right, false = moving left
+    // Defender wandering in upper screen (prepare phase) — only for Pressure Response
+    @State private var pressureResponseDefenderWanderX: CGFloat = 0.5
+    @State private var pressureResponseDefenderWanderY: CGFloat = 0.25
+    @State private var pressureResponseWanderTimer: Timer?
+    /// Current round's defender action (for animation phases). nil when not in a triggered round.
+    @State private var pressureResponseDefenderAction: PressureResponseDefenderAction?
+    /// For "fake step then drop": show defender at this X during fake, then animate to real side.
+    @State private var pressureResponseFakeStepX: CGFloat?
+    @State private var pressureResponseNoPressEndWorkItem: DispatchWorkItem?
     
     // One-Touch Passing state variables
     @State private var currentPassDirection: PassDirection?
@@ -3077,13 +3103,12 @@ struct DisplayView: View {
                             } else if scanningGamePhase == "SCANNING" {
                                 // Display sliding players
                                 ZStack {
-                                    // "You are here" indicator in the center: your team's player image (only for dribble/pass activity)
+                                    // "You are here" indicator in the center (only for dribble/pass activity)
                                     VStack(spacing: 10) {
-                                        Image("player_\(playerGender.rawValue.lowercased())_\(userTeamColor.rawValue.lowercased())_jersey")
-                                            .resizable()
-                                            .aspectRatio(contentMode: .fit)
-                                            .frame(width: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * Self.playerImageSizeRatio, height: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * Self.playerImageSizeRatio)
-                                            .shadow(radius: 10)
+                                        Text("X")
+                                            .font(.system(size: 80, weight: .bold))
+                                            .foregroundColor(.white)
+                                            .shadow(radius: 5)
                                         
                                         Text("YOU ARE HERE")
                                             .font(.system(size: 24, weight: .bold))
@@ -3125,46 +3150,62 @@ struct DisplayView: View {
                         }
                     }
                 } else if displayMode == .pressureResponse {
-                    // Pressure Response display
+                    // Pressure Response display — single background color for whole activity
                     ZStack {
-                        // Background color based on phase
-                        if criticalScanPhase == "NORMAL" || criticalScanPhase == "BEEP" {
-                            Color.black
-                                .ignoresSafeArea()
-                        } else if criticalScanPhase == "CRITICAL" {
-                            Color.yellow
-                                .ignoresSafeArea()
-                        } else if criticalScanPhase == "RESET" {
-                            Color.blue
-                                .ignoresSafeArea()
-                        } else {
-                            Color.black
-                                .ignoresSafeArea()
-                        }
+                        Color.black
+                            .ignoresSafeArea()
                         
                         VStack(spacing: 20) {
                             if criticalScanPhase == "NORMAL" || criticalScanPhase == "BEEP" {
-                                VStack(spacing: 15) {
-                                    // Scanning circle (cycles through colors every second)
-                                    Circle()
-                                        .fill(selectedColorSet.colors[scanningColorIndex])
-                                        .frame(width: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.6, height: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.6)
-                                        .background(Color.black)
-                                        .clipShape(Circle())
-                                        .overlay(
-                                            Circle()
-                                                .stroke(Color.white, lineWidth: 4)
-                                        )
-                                    
-                                    Text("SCAN & PREPARE")
-                                        .font(.system(size: 40, weight: .bold))
+                                // Defender wandering in upper part; you (receiver) at bottom the whole time; tap when ready
+                                ZStack(alignment: .top) {
+                                    Text("Check to passer — tap when ready")
+                                        .font(.system(size: 28, weight: .semibold))
                                         .foregroundColor(.white)
                                         .shadow(radius: 5)
+                                        .padding(.top, 50)
+                                    // Wandering defender in upper band
+                                    Image("player_\(playerGender.rawValue.lowercased())_\(opponentColor.rawValue.lowercased())_jersey")
+                                        .resizable()
+                                        .aspectRatio(contentMode: .fit)
+                                        .frame(width: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * Self.playerImageSizeRatio, height: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * Self.playerImageSizeRatio)
+                                        .shadow(radius: 10)
+                                        .position(
+                                            x: UIScreen.main.bounds.width * pressureResponseDefenderWanderX,
+                                            y: UIScreen.main.bounds.height * pressureResponseDefenderWanderY
+                                        )
+                                        .animation(.easeInOut(duration: 0.8), value: pressureResponseDefenderWanderX)
+                                        .animation(.easeInOut(duration: 0.8), value: pressureResponseDefenderWanderY)
+                                    // You (receiver) at bottom — visible the whole time
+                                    VStack(spacing: 10) {
+                                        Image("player_\(playerGender.rawValue.lowercased())_\(userTeamColor.rawValue.lowercased())_jersey")
+                                            .resizable()
+                                            .aspectRatio(contentMode: .fit)
+                                            .frame(width: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * Self.playerImageSizeRatio, height: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * Self.playerImageSizeRatio)
+                                            .shadow(radius: 10)
+                                            .rotationEffect(.degrees(trainingPerspective == "front" ? 180 : 0))
+                                    }
+                                    .position(x: UIScreen.main.bounds.width / 2, y: UIScreen.main.bounds.height * 0.8)
+                                    // Trigger button (for now on iPad; later iPhone will trigger)
+                                    VStack(spacing: 12) {
+                                        Spacer()
+                                        Button(action: triggerPressureResponseDefender) {
+                                            Text("Trigger defender")
+                                                .font(.system(size: 22, weight: .bold))
+                                                .foregroundColor(.black)
+                                                .padding(.horizontal, 32)
+                                                .padding(.vertical, 16)
+                                                .background(Color.white)
+                                                .cornerRadius(12)
+                                        }
+                                        .padding(.bottom, 60)
+                                    }
                                 }
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
                             } else if criticalScanPhase == "CRITICAL" {
-                                // Display pressure response scenario
+                                // Same layout: you at bottom, defender commits (moves or stays)
                                 ZStack {
-                                    // User player near bottom center
+                                    // User player near bottom center (same position as prepare phase)
                                     VStack(spacing: 10) {
                                         Image("player_\(playerGender.rawValue.lowercased())_\(userTeamColor.rawValue.lowercased())_jersey")
                                             .resizable()
@@ -3175,22 +3216,19 @@ struct DisplayView: View {
                                     }
                                     .position(x: UIScreen.main.bounds.width / 2, y: UIScreen.main.bounds.height * 0.8)
                                     
-                                    // Moving opponent
-                                    if currentPressureDirection != nil {
+                                    // Moving opponent (or fake-step X override; or no-press = stay at wander)
+                                    if currentPressureDirection != nil || pressureResponseFakeStepX != nil || pressureResponseDefenderAction == .noPress {
+                                        let x = pressureResponseFakeStepX ?? opponentPositionX
                                         Image("player_\(playerGender.rawValue.lowercased())_\(opponentColor.rawValue.lowercased())_jersey")
                                             .resizable()
                                             .aspectRatio(contentMode: .fit)
                                             .frame(width: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * Self.playerImageSizeRatio, height: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * Self.playerImageSizeRatio)
                                             .shadow(radius: 10)
-                                        .position(
-                                            x: opponentPositionX,
-                                            y: opponentPositionY
-                                        )
-                                        .animation(.linear(duration: opponentMovementDuration), value: opponentPositionX)
-                                        .animation(.linear(duration: opponentMovementDuration), value: opponentPositionY)
+                                            .position(x: x, y: opponentPositionY)
+                                            .animation(.linear(duration: opponentMovementDuration), value: opponentPositionX)
+                                            .animation(.linear(duration: opponentMovementDuration), value: opponentPositionY)
+                                            .animation(.easeInOut(duration: 0.25), value: pressureResponseFakeStepX ?? 0)
                                     }
-                                    
-
                                 }
                             } else if criticalScanPhase == "RESET" {
                                 VStack(spacing: 15) {
@@ -3425,10 +3463,13 @@ struct DisplayView: View {
                 } else {
                     UIApplication.shared.isIdleTimerDisabled = true // Always prevent sleep during training
                 }
-                
+            if displayMode == .pressureResponse {
+                multipeerManager.startAdvertising()
+            }
             startCountdown()
         }
         .onDisappear {
+            multipeerManager.stopAdvertising()
             isActive = false
             stopTimer()
                 
@@ -3437,6 +3478,11 @@ struct DisplayView: View {
                     sessionDuration = Date().timeIntervalSince(startTime)
                     endTrainingSession()
                 }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .pressureResponseTrigger)) { _ in
+            if displayMode == .pressureResponse {
+                triggerPressureResponseDefender()
+            }
         }
         .onTapGesture(count: 2) {
             endTrainingSessionAndReturn()
@@ -4527,104 +4573,181 @@ extension DisplayView {
     
     private func startPressureResponseSequence() {
         print("🛡️ Starting Pressure Response Sequence")
-        
-        // Start scanning circle timer
-        scanningCircleTimer = Timer.scheduledTimer(withTimeInterval: changeInterval, repeats: true) { _ in
-            scanningColorIndex = (scanningColorIndex + 1) % selectedColorSet.colors.count
-        }
-        
-        // Schedule first pressure response round
-        DispatchQueue.main.asyncAfter(deadline: .now() + getBeepInterval()) {
-            startPressureResponseRound()
+        criticalScanPhase = "NORMAL"
+        startPressureResponseWander()
+    }
+    
+    /// Defender moves randomly in upper part of screen until user triggers.
+    private func startPressureResponseWander() {
+        pressureResponseWanderTimer?.invalidate()
+        pressureResponseDefenderWanderX = 0.5
+        pressureResponseDefenderWanderY = 0.25
+        pressureResponseWanderTimer = Timer.scheduledTimer(withTimeInterval: 1.2, repeats: true) { _ in
+            guard displayMode == .pressureResponse, criticalScanPhase == "NORMAL" || criticalScanPhase == "BEEP" else {
+                pressureResponseWanderTimer?.invalidate()
+                return
+            }
+            let newX = CGFloat.random(in: 0.25...0.75)
+            let newY = CGFloat.random(in: 0.18...0.35)
+            pressureResponseDefenderWanderX = newX
+            pressureResponseDefenderWanderY = newY
         }
     }
     
-    private func startPressureResponseRound() {
-        guard isActive else { return }
-        
-        print("🔴 Starting Pressure Response Round")
-        criticalScanPhase = "BEEP"
-        
-        // Play beep sound
-        if soundEnabled {
-            playCriticalScanSound()
-        }
-        
-        // Show critical phase after delay
-        DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanDelay) {
-            guard isActive else { return }
-            
-            criticalScanPhase = "CRITICAL"
-            generatePressureDirection()
-            
-            // End critical phase after duration
-            DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanDuration) {
+    private func stopPressureResponseWander() {
+        pressureResponseWanderTimer?.invalidate()
+        pressureResponseWanderTimer = nil
+    }
+    
+    /// Duration for defender to "commit" to one side from current position before running down.
+    private static let pressureResponseCommitToSideDuration: Double = 0.3
+    /// Short pause with defender at current position before she reacts (removes teleport feel, reads as "decision").
+    private static let pressureResponseDecisionPause: Double = 0.25
+
+    /// Called when user taps "Trigger defender" (or later when iPhone sends trigger). Picks 1 of 4 actions and runs it.
+    /// Defender always starts from her current wander position.
+    private func triggerPressureResponseDefender() {
+        guard isActive, displayMode == .pressureResponse else { return }
+        guard criticalScanPhase == "NORMAL" || criticalScanPhase == "BEEP" else { return }
+        stopPressureResponseWander()
+        let action = PressureResponseDefenderAction.allCases.randomElement()!
+        pressureResponseDefenderAction = action
+        criticalScanPhase = "CRITICAL"
+        let screenWidth = UIScreen.main.bounds.width
+        let screenHeight = UIScreen.main.bounds.height
+        // Start defender from her current wander position (no teleport to top)
+        opponentPositionX = screenWidth * pressureResponseDefenderWanderX
+        opponentPositionY = screenHeight * pressureResponseDefenderWanderY
+        pressureResponseFakeStepX = nil
+        pressureResponseNoPressEndWorkItem?.cancel()
+
+        switch action {
+        case .fastPressOneSide:
+            generatePressureDirectionAndStartMove(delay: 0)
+        case .delayedPressOneSide:
+            let delay = Double.random(in: 0.5...1.2)
+            generatePressureDirectionAndStartMove(delay: delay)
+        case .fakeStepThenDrop:
+            let realDirection = PressureDirection.allCases.randomElement()!
+            currentPressureDirection = realDirection
+            let realX = realDirection == .left ? screenWidth * 0.25 : screenWidth * 0.75
+            let fakeX = realDirection == .left ? screenWidth * 0.55 : screenWidth * 0.45
+            // Decision pause at current position, then animate from here to fake then real then down
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.pressureResponseDecisionPause) {
+                guard isActive else { return }
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    opponentPositionX = fakeX
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.pressureResponseDecisionPause + 0.25) {
+                guard isActive else { return }
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    opponentPositionX = realX
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    guard isActive else { return }
+                    startOpponentStraightDownMovement()
+                    schedulePressureResponseReset()
+                }
+            }
+        case .noPress:
+            currentPressureDirection = nil
+            let work = DispatchWorkItem { [self] in
+                guard isActive else { return }
                 startPressureResponseResetPhase()
             }
+            pressureResponseNoPressEndWorkItem = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: work)
+        }
+
+        if action != .fakeStepThenDrop && action != .noPress {
+            schedulePressureResponseReset()
         }
     }
-    
-    private func generatePressureDirection() {
-        // Randomly choose left or right pressure
-        currentPressureDirection = PressureDirection.allCases.randomElement()
-        
-        // Set up opponent movement based on pressure direction
-        if let direction = currentPressureDirection {
-            let screenWidth = UIScreen.main.bounds.width
-            let screenHeight = UIScreen.main.bounds.height
-            
-            // Start opponent on either the left or right side (top of screen), then move straight down
-            if direction == .left {
-                opponentPositionX = screenWidth * 0.25 // Start on left side
-                opponentMovingDirection = false
-            } else {
-                opponentPositionX = screenWidth * 0.75 // Start on right side
-                opponentMovingDirection = true
+
+    /// Pick a side, then from current (wander) position commit to that side and run down (with optional delay).
+    private func generatePressureDirectionAndStartMove(delay: Double) {
+        guard let direction = PressureDirection.allCases.randomElement() else { return }
+        currentPressureDirection = direction
+        if delay <= 0 {
+            // Let view draw defender at wander, then decision pause, then commit (no teleport)
+            DispatchQueue.main.async {
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.pressureResponseDecisionPause) {
+                    guard isActive else { return }
+                    startOpponentCommitThenDown(direction: direction)
+                }
             }
-            
-            // Start at top of screen
-            opponentPositionY = screenHeight * 0.25
-            
-            // Animate straight down
+        } else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay + Self.pressureResponseDecisionPause) {
+                guard isActive else { return }
+                startOpponentCommitThenDown(direction: direction)
+            }
+        }
+    }
+
+    /// From current position, animate defender to commit to one side (same height), then run straight down.
+    private func startOpponentCommitThenDown(direction: PressureDirection) {
+        let screenWidth = UIScreen.main.bounds.width
+        let sideX = direction == .left ? screenWidth * 0.25 : screenWidth * 0.75
+        withAnimation(.easeOut(duration: Self.pressureResponseCommitToSideDuration)) {
+            opponentPositionX = sideX
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.pressureResponseCommitToSideDuration) {
+            guard isActive else { return }
             startOpponentStraightDownMovement()
         }
-        
-        print("🛡️ Generated pressure direction: \(currentPressureDirection?.rawValue ?? "unknown")")
     }
     
-    private func startOpponentStraightDownMovement() {
-        let screenHeight = UIScreen.main.bounds.height
-        
-        // Keep X unchanged; move straight down only
-        let finalTargetPositionY: CGFloat
-        if trainingPerspective == "front" {
-            finalTargetPositionY = screenHeight * 0.8 // Near the user at bottom
-        } else {
-            finalTargetPositionY = screenHeight * 0.7 // Shoulder level for back perspective
-        }
-        
-        withAnimation(.linear(duration: opponentMovementDuration)) {
-            opponentPositionY = finalTargetPositionY
+    private func schedulePressureResponseReset() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanDuration) {
+            guard isActive else { return }
+            startPressureResponseResetPhase()
         }
     }
     
     private func startPressureResponseResetPhase() {
         guard isActive else { return }
-        
+        pressureResponseNoPressEndWorkItem?.cancel()
+        pressureResponseNoPressEndWorkItem = nil
         print("🔵 Starting Pressure Response Reset Phase")
         criticalScanPhase = "RESET"
         currentPressureDirection = nil
-        
-        // Return to normal scanning after reset time
+        pressureResponseDefenderAction = nil
+        pressureResponseFakeStepX = nil
         DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanResetTime) {
             guard isActive else { return }
-            
             criticalScanPhase = "NORMAL"
-            
-            // Schedule next round
-            DispatchQueue.main.asyncAfter(deadline: .now() + getBeepInterval()) {
-                startPressureResponseRound()
+            startPressureResponseWander()
+        }
+    }
+    
+    private func generatePressureDirection() {
+        currentPressureDirection = PressureDirection.allCases.randomElement()
+        if let direction = currentPressureDirection {
+            let screenWidth = UIScreen.main.bounds.width
+            let screenHeight = UIScreen.main.bounds.height
+            if direction == .left {
+                opponentPositionX = screenWidth * 0.25
+                opponentMovingDirection = false
+            } else {
+                opponentPositionX = screenWidth * 0.75
+                opponentMovingDirection = true
             }
+            opponentPositionY = screenHeight * 0.25
+            startOpponentStraightDownMovement()
+        }
+    }
+    
+    private func startOpponentStraightDownMovement() {
+        let screenHeight = UIScreen.main.bounds.height
+        let finalTargetPositionY: CGFloat
+        if trainingPerspective == "front" {
+            finalTargetPositionY = screenHeight * 0.8
+        } else {
+            finalTargetPositionY = screenHeight * 0.7
+        }
+        withAnimation(.linear(duration: opponentMovementDuration)) {
+            opponentPositionY = finalTargetPositionY
         }
     }
 }

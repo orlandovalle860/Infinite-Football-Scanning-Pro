@@ -6,6 +6,7 @@
 //  iPhone browses and sends "trigger"; iPad receives and posts notification.
 //
 
+import Combine
 import Foundation
 import MultipeerConnectivity
 import SwiftUI
@@ -19,7 +20,7 @@ extension Notification.Name {
 /// Service type for discovery (1–15 chars, lowercase letters/numbers/hyphens).
 private let serviceType = "fbpressure"
 
-final class MultipeerManager: NSObject, ObservableObject {
+final class MultipeerManager: NSObject {
     /// Whether we are advertising (iPad, receiver).
     @Published private(set) var isAdvertising = false
     /// Whether we are browsing (iPhone, sender).
@@ -95,6 +96,9 @@ final class MultipeerManager: NSObject, ObservableObject {
         }
     }
 }
+
+// Explicit ObservableObject conformance (satisfies Swift 6 / strict concurrency)
+extension MultipeerManager: ObservableObject {}
 
 // MARK: - MCSessionDelegate
 

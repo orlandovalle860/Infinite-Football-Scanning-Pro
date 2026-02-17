@@ -1720,14 +1720,14 @@ struct MainView: View {
                                 .padding(.horizontal)
                             }
                             
-                            // Opponent Speed Control (only for Pressure Response and 4-Goal Game modes)
-                            if displayMode == .pressureResponse || displayMode == .fourGoalGame {
+                            // Opponent Speed Control (Pressure Response, 4-Goal Game, Dribble or Pass, One-Touch Passing)
+                            if displayMode == .pressureResponse || displayMode == .fourGoalGame || displayMode == .scanningGame || displayMode == .oneTouchPassing {
                                 VStack(alignment: .leading, spacing: 10) {
                                     Text("Opponent Movement Speed")
                                         .font(.headline)
                                         .foregroundColor(.white)
                                     
-                                    Text("Control how fast the opponent moves")
+                                    Text(displayMode == .scanningGame ? "Control how fast defenders move to their positions" : displayMode == .oneTouchPassing ? "Control how fast the defender moves to the side" : "Control how fast the opponent moves")
                                         .font(.caption)
                                         .foregroundColor(.white.opacity(0.7))
                                     
@@ -2734,6 +2734,9 @@ struct DisplayView: View {
     @State private var activePlayers: [GamePlayer] = []
     @State private var playersVisible: Bool = false
     @State private var scanningGameTimer: Timer?
+    /// Wandering and committed positions (key = player id). Updated by wander timer and on trigger.
+    @State private var scanningGamePositions: [UUID: CGPoint] = [:]
+    @State private var scanningGameWanderTimer: Timer?
     
     // Pressure Response state variables
     @State private var currentPressureDirection: PressureDirection?
@@ -2760,6 +2763,7 @@ struct DisplayView: View {
     @State private var oneTouchTeammateOnLeft: Bool?
     /// Teammate image name for this round (set once so face doesn’t change during the round)
     @State private var oneTouchTeammateImageNameForRound: String = ""
+    @State private var oneTouchWanderTimer: Timer?
     
     // 4-Goal Game state variables
     @State private var fourGoalGamePhase: String = "NORMAL"
@@ -2777,6 +2781,8 @@ struct DisplayView: View {
     let availableLanes = ["Left", "Center", "Right"]
     /// Same display size for all player images (YOU, teammate, opponent) across activities.
     private static let playerImageSizeRatio: CGFloat = 0.35
+    /// Larger defender in Pressure Response so movement is easy to see.
+    private static let pressureResponseDefenderSizeRatio: CGFloat = 0.5
     
         init(selectedColors: [Color], displayMode: DisplayMode, changeInterval: Double, selectedNumbers: [Int], soundEnabled: Bool, laneSpeed: Double, numberRange: Double, selectedArrows: [String], selectedBeepInterval: BeepInterval, beepMode: BeepMode, fixedBeepInterval: Double, criticalScanDelay: Double, criticalScanDuration: Double, criticalScanResetTime: Double, teammateMovementDuration: Double, opponentMovementDuration: Double, trainingPerspective: String, selectedColorSet: ScanningColorSet, selectedActionSet: ActionSet, customActions: [CustomAction], selectedCriticalScanNumbers: [Int], screenProtectionEnabled: Bool, numberColor: Color, arrowColor: Color, userTeamColor: TeamColor, opponentColor: TeamColor, playerGender: PlayerGender, numberOfOpponents: Int, numberOfTeammates: Int, numberOfOpenSpaces: Int, fourGoalLeftColor: Color, fourGoalRightColor: Color, showDisplay: Binding<Bool>, profileManager: UserProfileManager) {
             self.profileManager = profileManager
@@ -3083,49 +3089,68 @@ struct DisplayView: View {
                         
                         VStack(spacing: 20) {
                             if scanningGamePhase == "NORMAL" || scanningGamePhase == "BEEP" {
-                                VStack(spacing: 15) {
-                                    // Scanning circle (cycles through colors every second)
-                                    Circle()
-                                        .fill(selectedColorSet.colors[scanningColorIndex])
-                                            .frame(width: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.6, height: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.6)
-                                        .background(Color.black)
-                                        .clipShape(Circle())
-                                        .overlay(
-                                            Circle()
-                                                .stroke(Color.white, lineWidth: 4)
-                                        )
-                                    
-                                    Text("SCAN & IDENTIFY")
-                                        .font(.system(size: 40, weight: .bold))
+                                // Wandering phase: defenders and teammates move subtly; trigger commits them to 4 slots
+                                ZStack(alignment: .top) {
+                                    Text("Check to passer — tap when ready")
+                                        .font(.system(size: 26, weight: .semibold))
                                         .foregroundColor(.white)
                                         .shadow(radius: 5)
-                                }
-                            } else if scanningGamePhase == "SCANNING" {
-                                // Display sliding players
-                                ZStack {
-                                    // "You are here" indicator in the center (only for dribble/pass activity)
+                                        .padding(.top, 50)
+                                    // Center "you are here"
                                     VStack(spacing: 10) {
                                         Text("X")
                                             .font(.system(size: 80, weight: .bold))
                                             .foregroundColor(.white)
                                             .shadow(radius: 5)
-                                        
                                         Text("YOU ARE HERE")
                                             .font(.system(size: 24, weight: .bold))
                                             .foregroundColor(.white)
                                             .shadow(radius: 5)
                                     }
                                     .position(x: UIScreen.main.bounds.width / 2, y: UIScreen.main.bounds.height / 2)
-                                    .opacity(playersVisible ? 1.0 : 0.0)
-                                    .animation(.easeInOut(duration: 0.8), value: playersVisible)
-                                    
-                                    // Sliding players positioned at different screen locations
+                                    // Wandering players (positions from scanningGamePositions)
                                     ForEach(activePlayers) { player in
-                                        PlayerView(player: player, isVisible: playersVisible)
-                                            .position(getPlayerPosition(for: player.direction))
-                                            .onAppear {
-                                                print("🎮 PlayerView ForEach appeared for: \(player.imageName) at \(player.direction.rawValue)")
-                                            }
+                                        let pos = scanningGamePositions[player.id] ?? getPlayerPosition(for: player.direction)
+                                        PlayerView(player: player, isVisible: true)
+                                            .position(pos)
+                                            .animation(.easeInOut(duration: 0.6), value: scanningGamePositions[player.id]?.x ?? 0)
+                                            .animation(.easeInOut(duration: 0.6), value: scanningGamePositions[player.id]?.y ?? 0)
+                                    }
+                                    VStack(spacing: 12) {
+                                        Spacer()
+                                        Button(action: triggerScanningGameCommit) {
+                                            Text("Trigger defender")
+                                                .font(.system(size: 22, weight: .bold))
+                                                .foregroundColor(.black)
+                                                .padding(.horizontal, 32)
+                                                .padding(.vertical, 16)
+                                                .background(Color.white)
+                                                .cornerRadius(12)
+                                        }
+                                        .padding(.bottom, 60)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            } else if scanningGamePhase == "SCANNING" {
+                                // Players at slots (committed positions)
+                                ZStack {
+                                    VStack(spacing: 10) {
+                                        Text("X")
+                                            .font(.system(size: 80, weight: .bold))
+                                            .foregroundColor(.white)
+                                            .shadow(radius: 5)
+                                        Text("YOU ARE HERE")
+                                            .font(.system(size: 24, weight: .bold))
+                                            .foregroundColor(.white)
+                                            .shadow(radius: 5)
+                                    }
+                                    .position(x: UIScreen.main.bounds.width / 2, y: UIScreen.main.bounds.height / 2)
+                                    ForEach(activePlayers) { player in
+                                        let pos = scanningGamePositions[player.id] ?? getPlayerPosition(for: player.direction)
+                                        PlayerView(player: player, isVisible: true)
+                                            .position(pos)
+                                            .animation(.easeInOut(duration: 0.3), value: scanningGamePositions[player.id]?.x ?? 0)
+                                            .animation(.easeInOut(duration: 0.3), value: scanningGamePositions[player.id]?.y ?? 0)
                                     }
                                 }
                             } else if scanningGamePhase == "RESET" {
@@ -3164,18 +3189,18 @@ struct DisplayView: View {
                                         .foregroundColor(.white)
                                         .shadow(radius: 5)
                                         .padding(.top, 50)
-                                    // Wandering defender in upper band
+                                    // Wandering defender in upper band (larger for visibility)
                                     Image("player_\(playerGender.rawValue.lowercased())_\(opponentColor.rawValue.lowercased())_jersey")
                                         .resizable()
                                         .aspectRatio(contentMode: .fit)
-                                        .frame(width: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * Self.playerImageSizeRatio, height: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * Self.playerImageSizeRatio)
+                                        .frame(width: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * Self.pressureResponseDefenderSizeRatio, height: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * Self.pressureResponseDefenderSizeRatio)
                                         .shadow(radius: 10)
                                         .position(
                                             x: UIScreen.main.bounds.width * pressureResponseDefenderWanderX,
                                             y: UIScreen.main.bounds.height * pressureResponseDefenderWanderY
                                         )
-                                        .animation(.easeInOut(duration: 0.8), value: pressureResponseDefenderWanderX)
-                                        .animation(.easeInOut(duration: 0.8), value: pressureResponseDefenderWanderY)
+                                        .animation(.easeInOut(duration: 0.5), value: pressureResponseDefenderWanderX)
+                                        .animation(.easeInOut(duration: 0.5), value: pressureResponseDefenderWanderY)
                                     // You (receiver) at bottom — visible the whole time
                                     VStack(spacing: 10) {
                                         Image("player_\(playerGender.rawValue.lowercased())_\(userTeamColor.rawValue.lowercased())_jersey")
@@ -3216,13 +3241,13 @@ struct DisplayView: View {
                                     }
                                     .position(x: UIScreen.main.bounds.width / 2, y: UIScreen.main.bounds.height * 0.8)
                                     
-                                    // Moving opponent (or fake-step X override; or no-press = stay at wander)
+                                    // Moving opponent (or fake-step X override; or no-press = stay at wander) — larger for visibility
                                     if currentPressureDirection != nil || pressureResponseFakeStepX != nil || pressureResponseDefenderAction == .noPress {
                                         let x = pressureResponseFakeStepX ?? opponentPositionX
                                         Image("player_\(playerGender.rawValue.lowercased())_\(opponentColor.rawValue.lowercased())_jersey")
                                             .resizable()
                                             .aspectRatio(contentMode: .fit)
-                                            .frame(width: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * Self.playerImageSizeRatio, height: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * Self.playerImageSizeRatio)
+                                            .frame(width: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * Self.pressureResponseDefenderSizeRatio, height: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * Self.pressureResponseDefenderSizeRatio)
                                             .shadow(radius: 10)
                                             .position(x: x, y: opponentPositionY)
                                             .animation(.linear(duration: opponentMovementDuration), value: opponentPositionX)
@@ -3252,42 +3277,64 @@ struct DisplayView: View {
                         }
                     }
                 } else if displayMode == .oneTouchPassing {
-                    // One-Touch Passing display
+                    // One-Touch Passing display (single background color)
                     ZStack {
-                        // Background color based on phase
-                        if criticalScanPhase == "NORMAL" || criticalScanPhase == "BEEP" {
-                            Color.black
-                                .ignoresSafeArea()
-                        } else if criticalScanPhase == "CRITICAL" {
-                            Color.yellow
-                                .ignoresSafeArea()
-                        } else if criticalScanPhase == "RESET" {
-                            Color.blue
-                                .ignoresSafeArea()
-                        } else {
-                            Color.black
-                                .ignoresSafeArea()
-                        }
+                        Color.black
+                            .ignoresSafeArea()
                         
                         VStack(spacing: 20) {
                             if criticalScanPhase == "NORMAL" || criticalScanPhase == "BEEP" {
-                                VStack(spacing: 15) {
-                                    // Scanning circle (cycles through colors every second)
-                                    Circle()
-                                        .fill(selectedColorSet.colors[scanningColorIndex])
-                                        .frame(width: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.6, height: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.6)
-                                        .background(Color.black)
-                                        .clipShape(Circle())
-                                        .overlay(
-                                            Circle()
-                                                .stroke(Color.white, lineWidth: 4)
-                                        )
-                                    
-                                    Text("SCAN & PREPARE")
-                                        .font(.system(size: 40, weight: .bold))
+                                // Wandering phase: teammate and opponent move subtly in middle; trigger commits them to sides
+                                ZStack(alignment: .top) {
+                                    Text("Check to passer — tap when ready")
+                                        .font(.system(size: 26, weight: .semibold))
                                         .foregroundColor(.white)
                                         .shadow(radius: 5)
+                                        .padding(.top, 50)
+                                    // User (with ball) at bottom center
+                                    VStack(spacing: 10) {
+                                        Image("player_\(playerGender.rawValue.lowercased())_\(userTeamColor.rawValue.lowercased())_jersey")
+                                            .resizable()
+                                            .aspectRatio(contentMode: .fit)
+                                            .frame(width: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * Self.playerImageSizeRatio, height: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * Self.playerImageSizeRatio)
+                                            .shadow(radius: 10)
+                                            .rotationEffect(.degrees(trainingPerspective == "front" ? 180 : 0))
+                                    }
+                                    .position(x: UIScreen.main.bounds.width / 2, y: UIScreen.main.bounds.height * 0.8)
+                                    // Teammate and opponent wandering in middle
+                                    if !oneTouchTeammateImageNameForRound.isEmpty {
+                                        Image(oneTouchTeammateImageNameForRound)
+                                            .resizable()
+                                            .aspectRatio(contentMode: .fit)
+                                            .frame(width: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * Self.playerImageSizeRatio, height: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * Self.playerImageSizeRatio)
+                                            .shadow(radius: 10)
+                                            .position(x: teammatePositionX, y: teammatePositionY)
+                                            .animation(.easeInOut(duration: 0.6), value: teammatePositionX)
+                                            .animation(.easeInOut(duration: 0.6), value: teammatePositionY)
+                                    }
+                                    Image("player_\(playerGender.rawValue.lowercased())_\(opponentColor.rawValue.lowercased())_jersey")
+                                        .resizable()
+                                        .aspectRatio(contentMode: .fit)
+                                        .frame(width: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * Self.playerImageSizeRatio, height: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * Self.playerImageSizeRatio)
+                                        .shadow(radius: 10)
+                                        .position(x: opponentPositionX, y: opponentPositionY)
+                                        .animation(.easeInOut(duration: 0.6), value: opponentPositionX)
+                                        .animation(.easeInOut(duration: 0.6), value: opponentPositionY)
+                                    VStack(spacing: 12) {
+                                        Spacer()
+                                        Button(action: triggerOneTouchPassingCommit) {
+                                            Text("Trigger")
+                                                .font(.system(size: 22, weight: .bold))
+                                                .foregroundColor(.black)
+                                                .padding(.horizontal, 32)
+                                                .padding(.vertical, 16)
+                                                .background(Color.white)
+                                                .cornerRadius(12)
+                                        }
+                                        .padding(.bottom, 60)
+                                    }
                                 }
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
                             } else if criticalScanPhase == "CRITICAL" {
                                 // One-touch: YOU at bottom; teammate and opponent start center then move to sides. Pass to teammate's side.
                                 ZStack {
@@ -3314,7 +3361,7 @@ struct DisplayView: View {
                                             .animation(.easeInOut(duration: teammateMovementDuration), value: teammatePositionY)
                                     }
                                     
-                                    // Opponent – moves to the other side
+                                    // Opponent – moves to the other side (uses Opponent Movement Speed)
                                     if oneTouchTeammateOnLeft != nil {
                                         Image("player_\(playerGender.rawValue.lowercased())_\(opponentColor.rawValue.lowercased())_jersey")
                                             .resizable()
@@ -3322,8 +3369,8 @@ struct DisplayView: View {
                                             .frame(width: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * Self.playerImageSizeRatio, height: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * Self.playerImageSizeRatio)
                                             .shadow(radius: 10)
                                             .position(x: opponentPositionX, y: opponentPositionY)
-                                            .animation(.easeInOut(duration: teammateMovementDuration), value: opponentPositionX)
-                                            .animation(.easeInOut(duration: teammateMovementDuration), value: opponentPositionY)
+                                            .animation(.easeInOut(duration: opponentMovementDuration), value: opponentPositionX)
+                                            .animation(.easeInOut(duration: opponentMovementDuration), value: opponentPositionY)
                                     }
                                     
                                 }
@@ -3463,7 +3510,7 @@ struct DisplayView: View {
                 } else {
                     UIApplication.shared.isIdleTimerDisabled = true // Always prevent sleep during training
                 }
-            if displayMode == .pressureResponse {
+            if displayMode == .pressureResponse || displayMode == .scanningGame || displayMode == .oneTouchPassing {
                 multipeerManager.startAdvertising()
             }
             startCountdown()
@@ -3472,6 +3519,10 @@ struct DisplayView: View {
             multipeerManager.stopAdvertising()
             isActive = false
             stopTimer()
+            scanningGameWanderTimer?.invalidate()
+            scanningGameWanderTimer = nil
+            oneTouchWanderTimer?.invalidate()
+            oneTouchWanderTimer = nil
                 
                 // End session tracking
                 if let startTime = sessionStartTime {
@@ -3482,6 +3533,10 @@ struct DisplayView: View {
         .onReceive(NotificationCenter.default.publisher(for: .pressureResponseTrigger)) { _ in
             if displayMode == .pressureResponse {
                 triggerPressureResponseDefender()
+            } else if displayMode == .scanningGame && (scanningGamePhase == "NORMAL" || scanningGamePhase == "BEEP") {
+                triggerScanningGameCommit()
+            } else if displayMode == .oneTouchPassing && (criticalScanPhase == "NORMAL" || criticalScanPhase == "BEEP") {
+                triggerOneTouchPassingCommit()
             }
         }
         .onTapGesture(count: 2) {
@@ -4577,21 +4632,24 @@ extension DisplayView {
         startPressureResponseWander()
     }
     
-    /// Defender moves randomly in upper part of screen until user triggers.
+    /// Defender moves subtly in upper part of screen until user triggers (small steps like other activities).
     private func startPressureResponseWander() {
         pressureResponseWanderTimer?.invalidate()
         pressureResponseDefenderWanderX = 0.5
         pressureResponseDefenderWanderY = 0.25
-        pressureResponseWanderTimer = Timer.scheduledTimer(withTimeInterval: 1.2, repeats: true) { _ in
+        let bandX: CGFloat = 0.04
+        let bandY: CGFloat = 0.025
+        pressureResponseWanderTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
             guard displayMode == .pressureResponse, criticalScanPhase == "NORMAL" || criticalScanPhase == "BEEP" else {
                 pressureResponseWanderTimer?.invalidate()
                 return
             }
-            let newX = CGFloat.random(in: 0.25...0.75)
-            let newY = CGFloat.random(in: 0.18...0.35)
+            let newX = min(max(pressureResponseDefenderWanderX + CGFloat.random(in: -bandX...bandX), 0.25), 0.75)
+            let newY = min(max(pressureResponseDefenderWanderY + CGFloat.random(in: -bandY...bandY), 0.18), 0.35)
             pressureResponseDefenderWanderX = newX
             pressureResponseDefenderWanderY = newY
         }
+        RunLoop.main.add(pressureResponseWanderTimer!, forMode: .common)
     }
     
     private func stopPressureResponseWander() {
@@ -4756,41 +4814,49 @@ extension DisplayView {
 extension DisplayView {
     
     private func startOneTouchPassingSequence() {
-        print("⚽ Starting One-Touch Passing Sequence")
-        
-        // Start scanning circle timer
-        scanningCircleTimer = Timer.scheduledTimer(withTimeInterval: changeInterval, repeats: true) { _ in
-            scanningColorIndex = (scanningColorIndex + 1) % selectedColorSet.colors.count
-        }
-        
-        // Schedule first one-touch passing round
-        DispatchQueue.main.asyncAfter(deadline: .now() + getBeepInterval()) {
-            startOneTouchPassingRound()
-        }
+        print("⚽ Starting One-Touch Passing Sequence (wandering phase)")
+        criticalScanPhase = "NORMAL"
+        oneTouchTeammateImageNameForRound = oneTouchTeammateImageName()
+        let screenWidth = UIScreen.main.bounds.width
+        let screenHeight = UIScreen.main.bounds.height
+        let centerY = screenHeight * 0.5
+        teammatePositionX = screenWidth / 2
+        teammatePositionY = centerY
+        opponentPositionX = screenWidth / 2
+        opponentPositionY = centerY
+        oneTouchTeammateOnLeft = nil
+        startOneTouchWander()
     }
     
-    private func startOneTouchPassingRound() {
-        guard isActive else { return }
-        
-        print("🔴 Starting One-Touch Passing Round")
-        criticalScanPhase = "BEEP"
-        
-        // Play beep sound
-        if soundEnabled {
-            playCriticalScanSound()
-        }
-        
-        // Show critical phase after delay
-        DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanDelay) {
-            guard isActive else { return }
-            
-            criticalScanPhase = "CRITICAL"
-            generatePassDirection()
-            
-            // End critical phase after duration (if user hasn't already tapped)
-            DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanDuration) {
-                startOneTouchPassingResetPhase()
+    private func startOneTouchWander() {
+        oneTouchWanderTimer?.invalidate()
+        oneTouchWanderTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
+            guard isActive, displayMode == .oneTouchPassing, criticalScanPhase == "NORMAL" || criticalScanPhase == "BEEP" else {
+                oneTouchWanderTimer?.invalidate()
+                oneTouchWanderTimer = nil
+                return
             }
+            let screenWidth = UIScreen.main.bounds.width
+            let screenHeight = UIScreen.main.bounds.height
+            let centerX = screenWidth / 2
+            let centerY = screenHeight * 0.5
+            let band: CGFloat = 35
+            teammatePositionX = min(max(teammatePositionX + CGFloat.random(in: -band...band), centerX - 80), centerX + 80)
+            teammatePositionY = min(max(teammatePositionY + CGFloat.random(in: -band...band), centerY - 60), centerY + 60)
+            opponentPositionX = min(max(opponentPositionX + CGFloat.random(in: -band...band), centerX - 80), centerX + 80)
+            opponentPositionY = min(max(opponentPositionY + CGFloat.random(in: -band...band), centerY - 60), centerY + 60)
+        }
+        RunLoop.main.add(oneTouchWanderTimer!, forMode: .common)
+    }
+    
+    private func triggerOneTouchPassingCommit() {
+        guard isActive, displayMode == .oneTouchPassing, criticalScanPhase == "NORMAL" || criticalScanPhase == "BEEP" else { return }
+        oneTouchWanderTimer?.invalidate()
+        oneTouchWanderTimer = nil
+        criticalScanPhase = "CRITICAL"
+        generatePassDirection()
+        DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanDuration) {
+            startOneTouchPassingResetPhase()
         }
     }
     
@@ -4802,33 +4868,21 @@ extension DisplayView {
         // Randomly assign teammate to left or right; opponent goes to the other side
         let teammateOnLeft = Bool.random()
         oneTouchTeammateOnLeft = teammateOnLeft
-        oneTouchTeammateImageNameForRound = oneTouchTeammateImageName() // pick once so face doesn’t change during round
-        currentPassDirection = teammateOnLeft ? .left : .right // for compatibility
+        currentPassDirection = teammateOnLeft ? .left : .right
         
-        // Start both players in the center (lined up), then they move to sides
         let leftX = screenWidth * 0.25
         let rightX = screenWidth * 0.75
+        let (teammateTargetX, teammateTargetY) = teammateOnLeft ? (leftX, centerY) : (rightX, centerY)
+        let (opponentTargetX, opponentTargetY) = teammateOnLeft ? (rightX, centerY) : (leftX, centerY)
         
-        teammatePositionX = screenWidth / 2
-        teammatePositionY = centerY
-        opponentPositionX = screenWidth / 2
-        opponentPositionY = centerY
-        
-        // Animate both to their sides
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            withAnimation(.easeInOut(duration: teammateMovementDuration)) {
-                if teammateOnLeft {
-                    teammatePositionX = leftX
-                    teammatePositionY = centerY
-                    opponentPositionX = rightX
-                    opponentPositionY = centerY
-                } else {
-                    teammatePositionX = rightX
-                    teammatePositionY = centerY
-                    opponentPositionX = leftX
-                    opponentPositionY = centerY
-                }
-            }
+        // Animate from current (wandering) positions: opponent uses Opponent Speed, teammate uses Teammate Speed (unified settings)
+        withAnimation(.easeInOut(duration: opponentMovementDuration)) {
+            opponentPositionX = opponentTargetX
+            opponentPositionY = opponentTargetY
+        }
+        withAnimation(.easeInOut(duration: teammateMovementDuration)) {
+            teammatePositionX = teammateTargetX
+            teammatePositionY = teammateTargetY
         }
         
         print("⚽ One-touch: teammate on \(teammateOnLeft ? "left" : "right"), pass to teammate's side")
@@ -4889,17 +4943,29 @@ extension DisplayView {
         oneTouchTeammateOnLeft = nil
         oneTouchTeammateImageNameForRound = ""
         
-        // Return to normal scanning after reset time
+        // Return to wandering phase after reset time
         DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanResetTime) {
             guard isActive else { return }
-            
             criticalScanPhase = "NORMAL"
-            
-            // Schedule next round
-            DispatchQueue.main.asyncAfter(deadline: .now() + getBeepInterval()) {
-                startOneTouchPassingRound()
-            }
+            oneTouchTeammateImageNameForRound = oneTouchTeammateImageName()
+            let screenWidth = UIScreen.main.bounds.width
+            let screenHeight = UIScreen.main.bounds.height
+            let centerY = screenHeight * 0.5
+            teammatePositionX = screenWidth / 2
+            teammatePositionY = centerY
+            opponentPositionX = screenWidth / 2
+            opponentPositionY = centerY
+            oneTouchTeammateOnLeft = nil
+            startOneTouchWander()
         }
+    }
+    
+    /// Position for "middle behind the center player" (one defender can stay here ~20% of the time).
+    private func getScanningGameMiddlePosition() -> CGPoint {
+        let screenWidth = UIScreen.main.bounds.width
+        let screenHeight = UIScreen.main.bounds.height
+        // Slightly above center (behind the passer)
+        return CGPoint(x: screenWidth / 2, y: screenHeight / 2 - 60)
     }
 }
 
@@ -4907,45 +4973,132 @@ extension DisplayView {
 extension DisplayView {
     
     private func startScanningGameSequence() {
-        print("🎮 Starting Scanning Game Sequence")
-        
-        // Start scanning circle timer
-        scanningCircleTimer = Timer.scheduledTimer(withTimeInterval: changeInterval, repeats: true) { _ in
-            scanningColorIndex = (scanningColorIndex + 1) % selectedColorSet.colors.count
-        }
-        
-        // Schedule first scanning round
-        DispatchQueue.main.asyncAfter(deadline: .now() + getBeepInterval()) {
-            startScanningGameRound()
-        }
+        print("🎮 Starting Scanning Game Sequence (wandering phase)")
+        scanningGamePhase = "NORMAL"
+        generatePlayers()
+        scanningGamePositions = initialWanderPositions()
+        playersVisible = true
+        startScanningGameWander()
     }
     
-    private func startScanningGameRound() {
-        guard isActive else { return }
+    /// Random positions in a band away from center for wandering.
+    private func initialWanderPositions() -> [UUID: CGPoint] {
+        let screenWidth = UIScreen.main.bounds.width
+        let screenHeight = UIScreen.main.bounds.height
+        let cx = screenWidth / 2
+        let cy = screenHeight / 2
+        let margin: CGFloat = 80
+        var out: [UUID: CGPoint] = [:]
+        for p in activePlayers {
+            // Random point in annulus / band (avoid center)
+            let angle = CGFloat.random(in: 0 ..< .pi * 2)
+            let r = CGFloat.random(in: 120 ... 220)
+            let x = cx + cos(angle) * r
+            let y = cy + sin(angle) * r
+            let clampedX = min(max(x, margin), screenWidth - margin)
+            let clampedY = min(max(y, margin), screenHeight - margin)
+            out[p.id] = CGPoint(x: clampedX, y: clampedY)
+        }
+        return out
+    }
+    
+    private func startScanningGameWander() {
+        scanningGameWanderTimer?.invalidate()
+        scanningGameWanderTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
+            guard isActive, displayMode == .scanningGame, scanningGamePhase == "NORMAL" else {
+                scanningGameWanderTimer?.invalidate()
+                scanningGameWanderTimer = nil
+                return
+            }
+            let screenWidth = UIScreen.main.bounds.width
+            let screenHeight = UIScreen.main.bounds.height
+            let margin: CGFloat = 80
+            var next = scanningGamePositions
+            for p in activePlayers {
+                guard var pt = next[p.id] else { continue }
+                pt.x += CGFloat.random(in: -18 ... 18)
+                pt.y += CGFloat.random(in: -18 ... 18)
+                pt.x = min(max(pt.x, margin), screenWidth - margin)
+                pt.y = min(max(pt.y, margin), screenHeight - margin)
+                next[p.id] = pt
+            }
+            scanningGamePositions = next
+        }
+        RunLoop.main.add(scanningGameWanderTimer!, forMode: .common)
+    }
+    
+    private func triggerScanningGameCommit() {
+        guard isActive, displayMode == .scanningGame, scanningGamePhase == "NORMAL" || scanningGamePhase == "BEEP" else { return }
+        scanningGameWanderTimer?.invalidate()
+        scanningGameWanderTimer = nil
         
-        print("🔴 Starting Scanning Game Round")
-        scanningGamePhase = "BEEP"
+        let slotTop = getPlayerPosition(for: .top)
+        let slotBottom = getPlayerPosition(for: .bottom)
+        let slotLeft = getPlayerPosition(for: .left)
+        let slotRight = getPlayerPosition(for: .right)
+        let middlePos = getScanningGameMiddlePosition()
+        let slots: [Direction] = [.top, .bottom, .left, .right]
+        let slotPositions: [Direction: CGPoint] = [.top: slotTop, .bottom: slotBottom, .left: slotLeft, .right: slotRight]
         
-        // Play beep sound
-        if soundEnabled {
-            playCriticalScanSound()
+        var defenders = activePlayers.filter { !$0.isTeammate }
+        let teammates = activePlayers.filter { $0.isTeammate }
+        defenders.shuffle()
+        
+        let oneDefenderToMiddle = defenders.count > 0 && Double.random(in: 0..<1) < 0.20
+        var slotAssignments: [GamePlayer] = []
+        var middlePlayer: GamePlayer?
+        if oneDefenderToMiddle {
+            middlePlayer = defenders.removeFirst()
+        }
+        slotAssignments = defenders + teammates
+        let shuffledSlots = slots.shuffled()
+        
+        var targetPositions: [UUID: CGPoint] = [:]
+        for (idx, player) in slotAssignments.enumerated() {
+            if idx < shuffledSlots.count {
+                targetPositions[player.id] = slotPositions[shuffledSlots[idx]]!
+            }
+        }
+        if let mid = middlePlayer {
+            targetPositions[mid.id] = middlePos
         }
         
-        // Show scanning phase after delay
-        DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanDelay) {
+        scanningGamePhase = "SCANNING"
+        let scanningDuration = max(criticalScanDuration, 3.0)
+        DispatchQueue.main.asyncAfter(deadline: .now() + scanningDuration) {
+            startScanningGameResetPhase()
+        }
+        // Unified timing: defenders use Opponent Movement Speed; teammates follow after a short delay (same logic across activities)
+        let defenderCommitDuration = Self.dribblePassDefenderCommitScale * (opponentMovementDuration / Self.dribblePassMediumOpponentDuration)
+        var defenderTargets = scanningGamePositions
+        for p in activePlayers where !p.isTeammate {
+            if let pos = targetPositions[p.id] {
+                defenderTargets[p.id] = pos
+            }
+        }
+        withAnimation(.easeInOut(duration: defenderCommitDuration)) {
+            scanningGamePositions = defenderTargets
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.dribblePassTeammateCommitDelay) {
             guard isActive else { return }
-            
-            scanningGamePhase = "SCANNING"
-            generatePlayers()
-            slideInPlayers()
-            
-            // End scanning phase after duration (give more time for scanning game)
-            let scanningDuration = displayMode == .scanningGame ? max(criticalScanDuration, 3.0) : criticalScanDuration
-            DispatchQueue.main.asyncAfter(deadline: .now() + scanningDuration) {
-                startScanningGameResetPhase()
+            var withTeammates = scanningGamePositions
+            for p in activePlayers where p.isTeammate {
+                if let pos = targetPositions[p.id] {
+                    withTeammates[p.id] = pos
+                }
+            }
+            withAnimation(.easeInOut(duration: Self.dribblePassTeammateCommitDuration)) {
+                scanningGamePositions = withTeammates
             }
         }
     }
+    
+    /// Dribble or Pass: defender commit duration = scale * (opponentMovementDuration / medium baseline).
+    private static let dribblePassDefenderCommitScale: Double = 0.25
+    private static let dribblePassMediumOpponentDuration: Double = 1.5
+    /// Teammates start moving this many seconds after trigger (defenders-first stagger).
+    private static let dribblePassTeammateCommitDelay: Double = 0.2
+    private static let dribblePassTeammateCommitDuration: Double = 0.3
     
     private func generatePlayers() {
         activePlayers.removeAll()
@@ -5016,7 +5169,6 @@ extension DisplayView {
         scanningGamePhase = "RESET"
         playersVisible = false
         
-        // End reset phase after reset time
         DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanResetTime) {
             startScanningGameNormalPhase()
         }
@@ -5025,13 +5177,12 @@ extension DisplayView {
     private func startScanningGameNormalPhase() {
         guard isActive else { return }
         
-        print("⚪ Starting Scanning Game Normal Phase")
+        print("⚪ Starting Scanning Game Normal Phase (wandering)")
         scanningGamePhase = "NORMAL"
-        
-        // Schedule next scanning round
-        DispatchQueue.main.asyncAfter(deadline: .now() + getBeepInterval()) {
-            startScanningGameRound()
-        }
+        generatePlayers()
+        scanningGamePositions = initialWanderPositions()
+        playersVisible = true
+        startScanningGameWander()
     }
     
     // Calculate responsive image size based on device and orientation

@@ -29,7 +29,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		9F592D6F2DFF0B7D00525BF9 /* InfiniteFootballScanningPro.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = InfiniteFootballScanningPro.app; path = "Infinite Football Scanning Pro.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		9F592D6F2DFF0B7D00525BF9 /* Infinite Football Scanning Pro.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Infinite Football Scanning Pro.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		9F592D7C2DFF0B7E00525BF9 /* FootballScanningAITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FootballScanningAITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9F592D862DFF0B7E00525BF9 /* FootballScanningAIUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FootballScanningAIUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9FDCE9C32E089EAD00F39677 /* critical scan beep.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "critical scan beep.wav"; sourceTree = "<group>"; };
@@ -94,7 +94,7 @@
 		9F592D702DFF0B7D00525BF9 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				9F592D6F2DFF0B7D00525BF9 /* InfiniteFootballScanningPro.app */,
+				9F592D6F2DFF0B7D00525BF9 /* Infinite Football Scanning Pro.app */,
 				9F592D7C2DFF0B7E00525BF9 /* FootballScanningAITests.xctest */,
 				9F592D862DFF0B7E00525BF9 /* FootballScanningAIUITests.xctest */,
 			);
@@ -123,7 +123,7 @@
 			packageProductDependencies = (
 			);
 			productName = InfiniteFootballScanningPro;
-			productReference = 9F592D6F2DFF0B7D00525BF9 /* InfiniteFootballScanningPro.app */;
+			productReference = 9F592D6F2DFF0B7D00525BF9 /* Infinite Football Scanning Pro.app */;
 			productType = "com.apple.product-type.application";
 		};
 		9F592D7B2DFF0B7E00525BF9 /* FootballScanningAITests */ = {
@@ -180,7 +180,7 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 2600;
-				LastUpgradeCheck = 2600;
+				LastUpgradeCheck = 2620;
 				TargetAttributes = {
 					9F592D6E2DFF0B7D00525BF9 = {
 						CreatedOnToolsVersion = 26.0;
@@ -339,6 +339,7 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
@@ -396,6 +397,7 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				VALIDATE_PRODUCT = YES;
 			};
@@ -412,13 +414,14 @@
 				DEVELOPMENT_TEAM = 7XZF229B8W;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.sports";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connect to the iPad running Playing Away from Pressure so you can trigger the defender when you check to the passer.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connect to the iPad running Playing Away from Pressure so you can trigger the defender when you check to the passer.";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -451,13 +454,14 @@
 				DEVELOPMENT_TEAM = 7XZF229B8W;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.sports";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connect to the iPad running Playing Away from Pressure so you can trigger the defender when you check to the passer.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connect to the iPad running Playing Away from Pressure so you can trigger the defender when you check to the passer.";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

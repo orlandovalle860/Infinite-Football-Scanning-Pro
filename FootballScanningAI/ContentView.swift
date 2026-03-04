@@ -280,17 +280,19 @@ struct VideoPlayerView: View {
 }
 
 struct SplashScreen: View {
+    @EnvironmentObject private var multipeerManager: MultipeerManager
     @State private var isActive = false
-    
+
     var body: some View {
         if isActive {
             ContentView()
+                .environmentObject(multipeerManager)
         } else {
             ZStack {
                 Color.white
                     .ignoresSafeArea()
-                
-                Image("SplashLogo") // Change this to match your renamed image set
+
+                Image("SplashLogo")
                     .resizable()
                     .scaledToFit()
                     .frame(width: 300)
@@ -328,318 +330,490 @@ struct ContentView: View {
 struct MainAppView: View {
     @ObservedObject var profileManager: UserProfileManager
     @ObservedObject var settingsViewModel: SettingsViewModel
-    @State private var selectedTab = 0
-    
+    @EnvironmentObject private var multipeerManager: MultipeerManager
+    @StateObject private var progressStore = ProgressStore()
+    @StateObject private var playerStore = PlayerStore()
+    @State private var showsTopToggle: Bool = true
+
     var body: some View {
-        TabView(selection: $selectedTab) {
-            // Training Tab
-            NavigationStack {
-                IntroView(profileManager: profileManager, settingsViewModel: settingsViewModel)
-            }
-            .tabItem {
-                Image(systemName: "figure.soccer")
-                Text("Training")
-            }
-            .tag(0)
-            
-            // Profile Tab
-            ProfileView(profileManager: profileManager)
-            .tabItem {
-                Image(systemName: "person.circle")
-                Text("Profile")
-            }
-            .tag(1)
+        NavigationStack {
+            IntroView(
+                profileManager: profileManager,
+                settingsViewModel: settingsViewModel,
+                showsTopToggle: $showsTopToggle
+            )
         }
-        .accentColor(.blue)
+        .environmentObject(multipeerManager)
+        .environmentObject(progressStore)
+        .environmentObject(playerStore)
+        .onAppear {
+            progressStore.load()
+            playerStore.load()
+            playerStore.createDefaultIfNeeded()
+        }
+    }
+}
+
+/// Card style for Start Page sections: fill, stroke, rounded corners.
+struct StartPageCardStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .padding()
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Color.white.opacity(0.05))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            )
     }
 }
 
 struct IntroView: View {
     @ObservedObject var profileManager: UserProfileManager
     @ObservedObject var settingsViewModel: SettingsViewModel
-    @State private var navigateToMain = false
-    
+    @Binding var showsTopToggle: Bool
+    @EnvironmentObject private var progressStore: ProgressStore
+    @EnvironmentObject private var playerStore: PlayerStore
+    @State private var showHowItWorks = false
+    @State private var showStatusUpgrade = false
+    @State private var upgradedStatus: PlayerStatus?
+
+    private var playerId: UUID? { playerStore.selectedPlayerId }
+    private var last5: [SessionRecord] { progressStore.last5TrainingBlocks(playerId: playerId) }
+    private var consistencyLabel: ConsistencyLabel { DashboardConsistency.label(from: last5) }
+    private var decisionScore: Int { DashboardDecisionScore.score(from: last5) }
+    private var status: PlayerStatus { DashboardDecisionScore.status(score: decisionScore, consistencyLabel: consistencyLabel) }
+    private var recommendation: Recommendation { RecommendationEngine.recommendation(progressStore: progressStore, playerId: playerId) }
+    private var dailyCompleted: Int { DailyTargetState.completedBlocksToday(playerId: playerId) }
+    private var dailyTarget: Int { DailyTargetState.targetBlocksPerDay }
+    private var hasAnyBlock: Bool { !last5.isEmpty }
+
+    /// Focus line for Train Now card from last training block (priority: slow → low accuracy → bias → strong).
+    private var focusText: String? {
+        guard let last = last5.first else { return nil }
+        if last.speedBucket == .slow { return "decide earlier before the ball arrives" }
+        if last.correct <= 7 { return "find the safe option" }
+        if let b = last.bias, !b.isEmpty, b != "None", b != "Balanced" { return "scan the whole field" }
+        if last.correct >= 10 { return "repeat this level" }
+        return nil
+    }
+
     var body: some View {
-        ScrollView {
-            VStack(spacing: 30) {
-                // Header
-                VStack(spacing: 10) {
-                Text("Infinite Football Scanning Pro")
-                    .font(.system(size: 40, weight: .bold))
-                    .foregroundColor(.white)
-                    
-                    if profileManager.hasMultipleProfiles(), let currentProfile = profileManager.currentProfile {
-                        Text("Training as: \(currentProfile.name)")
-                            .font(.headline)
-                            .foregroundColor(.blue)
-                            .padding(.horizontal, 20)
-                            .padding(.vertical, 8)
-                            .background(.ultraThinMaterial)
-                            .cornerRadius(20)
-                    }
-                }
-                    .padding(.top, 40)
-                
-                // What is Scanning Section
-                VStack(alignment: .leading, spacing: 15) {
-                    Text("What is Scanning?")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .foregroundColor(.white)
-                    
-                    Text("Scanning is the crucial skill of constantly checking your surroundings during a game. It's like having eyes in the back of your head - you're always aware of where your teammates, opponents, and the ball are.")
-                        .foregroundColor(.white.opacity(0.9))
+        ZStack {
+            LinearGradient(
+                gradient: Gradient(colors: [
+                    Color(red: 0.05, green: 0.05, blue: 0.1),
+                    Color(red: 0.1, green: 0.1, blue: 0.15)
+                ]),
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 12) {
+                    Text("Do you know what you're going to do\nbefore the ball reaches you?")
+                        .font(.system(size: 32, weight: .bold, design: .rounded))
                         .lineSpacing(4)
-                }
-                .padding()
-                .frame(maxWidth: 800)
-                .background(.ultraThinMaterial)
-                .cornerRadius(20)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20)
-                        .stroke(.white.opacity(0.2), lineWidth: 1)
-                )
-                
-                // Why Scan Section
-                VStack(alignment: .leading, spacing: 15) {
-                    Text("Why Should You Scan?")
-                        .font(.title2)
-                        .fontWeight(.bold)
+                        .multilineTextAlignment(.center)
                         .foregroundColor(.white)
-                    
-                    VStack(alignment: .leading, spacing: 10) {
-                        BenefitRow(icon: "eye.fill", text: "Better Decision Making")
-                        BenefitRow(icon: "brain.head.profile", text: "Improved Spatial Awareness")
-                        BenefitRow(icon: "figure.soccer", text: "Enhanced Game Intelligence")
-                        BenefitRow(icon: "bolt.fill", text: "Faster Decision Making")
+                        .padding(.horizontal, 24)
+                    Text("Elite players do.")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.75))
+                    Text("Train Perception Before Action.")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.5))
+                        .padding(.bottom, 4)
+
+                    snapshotCard
+                        .modifier(StartPageCardStyle())
+
+                    dailyTargetCard
+                        .modifier(StartPageCardStyle())
+
+                    curriculumPreviewCard
+                        .modifier(StartPageCardStyle())
+
+                    scanWarmupsCard
+                        .modifier(StartPageCardStyle())
+
+                    twoMinuteTestCard
+                        .modifier(StartPageCardStyle())
+
+                    progressCard
+                        .modifier(StartPageCardStyle())
+
+                    Button {
+                        showHowItWorks = true
+                    } label: {
+                        Text("How it works")
+                            .font(.footnote)
+                            .foregroundColor(.white.opacity(0.55))
+                            .underline()
                     }
+                    .buttonStyle(PlainButtonStyle())
+                    .padding(.top, 4)
+
+                    Spacer(minLength: 40)
                 }
-                .padding()
-                .background(.ultraThinMaterial)
-                .cornerRadius(20)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20)
-                        .stroke(.white.opacity(0.2), lineWidth: 1)
-                )
-                
-                // Two Types of Scanning Training
-                VStack(alignment: .leading, spacing: 15) {
-                    Text("Two Types of Scanning Training")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .foregroundColor(.white)
-                    
-                    // Normal Scanning Modes
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Image(systemName: "eye.circle.fill")
-                                .font(.system(size: 24))
-                                .foregroundColor(.blue)
-                            
-                            Text("Normal Scanning Modes")
-                                .font(.title3)
-                                .fontWeight(.semibold)
-                                .foregroundColor(.white)
-                        }
-                        
-                        Text("Build your foundation with continuous scanning practice. Develop the habit of constantly checking your surroundings and recognizing visual cues.")
-                            .foregroundColor(.white.opacity(0.8))
-                            .lineSpacing(4)
-                        
-                        VStack(alignment: .leading, spacing: 6) {
-                            BenefitRow(icon: "arrow.clockwise", text: "Continuous awareness building")
-                            BenefitRow(icon: "eye", text: "Visual recognition training")
-                            BenefitRow(icon: "waveform.path", text: "Pattern recognition")
-                            BenefitRow(icon: "brain.head.profile", text: "Foundation scanning skills")
-                        }
-                    }
-                    .padding()
-                    .background(.ultraThinMaterial)
-                    .cornerRadius(15)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 15)
-                            .stroke(.white.opacity(0.2), lineWidth: 1)
-                    )
-                    
-                    // Critical Scanning Modes
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Image(systemName: "bolt.circle.fill")
-                                .font(.system(size: 24))
-                                .foregroundColor(.red)
-                            
-                            Text("Critical Scanning Modes")
-                                .font(.title3)
-                                .fontWeight(.semibold)
-                                .foregroundColor(.white)
-                        }
-                        
-                        Text("Master decision-making under pressure. Train in high-stakes scenarios where you must scan, decide, and execute actions in split seconds.")
-                            .foregroundColor(.white.opacity(0.8))
-                            .lineSpacing(4)
-                        
-                        VStack(alignment: .leading, spacing: 6) {
-                            BenefitRow(icon: "brain.head.profile", text: "Decision-making under pressure")
-                            BenefitRow(icon: "bolt.fill", text: "Action execution training")
-                            BenefitRow(icon: "figure.soccer", text: "Game simulation scenarios")
-                            BenefitRow(icon: "star.fill", text: "Advanced scanning mastery")
-                        }
-                    }
-                    .padding()
-                    .background(.ultraThinMaterial)
-                    .cornerRadius(15)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 15)
-                            .stroke(.white.opacity(0.2), lineWidth: 1)
-                    )
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+                .padding(.bottom, 24)
+            }
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            ZStack {
+                Rectangle()
+                    .fill(.ultraThinMaterial)
+                continueTrainingPinnedCard
+                    .padding(.horizontal, 20)
+                    .padding(.top, 10)
+                    .padding(.bottom, 10)
+            }
+            .shadow(color: .black.opacity(0.25), radius: 10, y: 6)
+        }
+        .sheet(isPresented: $showHowItWorks) { HowItWorksView() }
+        .overlay {
+            if showStatusUpgrade, let s = upgradedStatus {
+                statusUpgradeToast(status: s)
+            }
+        }
+        .onAppear {
+            showsTopToggle = false
+            checkStatusUpgrade()
+        }
+        .onDisappear { showsTopToggle = true }
+    }
+
+    private var snapshotCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if hasAnyBlock {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Decision Score:")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.8))
+                    Text("\(decisionScore)")
+                        .font(.system(size: 36, weight: .bold, design: .rounded))
+                        .foregroundColor(.yellow)
                 }
-                .padding()
-                .background(.ultraThinMaterial)
-                .cornerRadius(20)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20)
-                        .stroke(.white.opacity(0.2), lineWidth: 1)
-                )
-                
-                // Pro Examples
-                VStack(alignment: .leading, spacing: 15) {
-                    Text("Pro Players Who Mastered Scanning")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .foregroundColor(.white)
-                    
-                    // Xavi Section
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Xavi")
-                            .font(.title3)
-                            .fontWeight(.bold)
-                            .foregroundColor(.white)
-                        
-                        Text("Known for his constant scanning, Xavi could make 360° turns while receiving the ball, always knowing where his teammates were.")
-                            .foregroundColor(.white.opacity(0.8))
-                            .lineSpacing(4)
-                        
-                        Link(destination: URL(string: "https://www.youtube.com/watch?v=CNQGMukcsWQ")!) {
-                            HStack {
-                                Image(systemName: "play.circle.fill")
-                                Text("Watch Example")
-                            }
-                            .foregroundColor(.blue)
-                            .padding(.top, 4)
-                        }
-                    }
-                    .padding()
-                    .background(.ultraThinMaterial)
-                    .cornerRadius(15)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 15)
-                            .stroke(.white.opacity(0.2), lineWidth: 1)
-                    )
-                    
-                    // Ødegaard Section
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Martin Ødegaard")
-                            .font(.title3)
-                            .fontWeight(.bold)
-                            .foregroundColor(.white)
-                        
-                        Text("Ødegaard's exceptional scanning ability allows him to create space and find passing lanes even in tight situations, making him one of the most creative midfielders in the game.")
-                            .foregroundColor(.white.opacity(0.8))
-                            .lineSpacing(4)
-                        
-                        Link(destination: URL(string: "https://www.youtube.com/shorts/TdP7hr4-k_g")!) {
-                            HStack {
-                                Image(systemName: "play.circle.fill")
-                                Text("Watch Example")
-                            }
-                            .foregroundColor(.blue)
-                            .padding(.top, 4)
-                        }
-                    }
-                    .padding()
-                    .background(.ultraThinMaterial)
-                    .cornerRadius(15)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 15)
-                            .stroke(.white.opacity(0.2), lineWidth: 1)
-                    )
-                    
-                    // De Bruyne Section
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Kevin De Bruyne")
-                            .font(.title3)
-                            .fontWeight(.bold)
-                            .foregroundColor(.white)
-                        
-                        Text("De Bruyne's scanning skills enable him to execute perfect through balls and crosses, often without even looking at his target.")
-                            .foregroundColor(.white.opacity(0.8))
-                            .lineSpacing(4)
-                        
-                        Link(destination: URL(string: "https://www.youtube.com/watch?v=8j8BxM0ZqXY")!) {
-                            HStack {
-                                Image(systemName: "play.circle.fill")
-                                Text("Watch Example")
-                            }
-                            .foregroundColor(.blue)
-                            .padding(.top, 4)
-                        }
-                    }
-                    .padding()
-                    .background(.ultraThinMaterial)
-                    .cornerRadius(15)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 15)
-                            .stroke(.white.opacity(0.2), lineWidth: 1)
-                    )
-                }
-                .padding()
-                .background(.ultraThinMaterial)
-                .cornerRadius(20)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20)
-                        .stroke(.white.opacity(0.2), lineWidth: 1)
-                )
-                
-                // Start Training Button
-                NavigationLink(destination: MainView(settingsViewModel: settingsViewModel, profileManager: profileManager)) {
-                    HStack {
-                        Image(systemName: "figure.soccer")
-                        if profileManager.hasMultipleProfiles(), let currentProfile = profileManager.currentProfile {
-                            Text("Start Training - \(currentProfile.name)")
-                        } else {
-                            Text("Start Training")
-                        }
-                    }
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .foregroundColor(.white)
+                Text("Status: \(status.rawValue)")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.8))
+                Text("Consistency: \(consistencyLabel.rawValue)")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.8))
+            } else {
+                Text("Run your first block to get your score.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.8))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var dailyTargetCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if dailyCompleted >= dailyTarget {
+                Text("Target Complete ✓")
+                    .font(.headline)
+                    .foregroundColor(.green)
+                Text("Good work today.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.85))
+                Text("Come back tomorrow and keep building your decision speed.")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.6))
+                NavigationLink(destination: PBAProgressView(settingsViewModel: settingsViewModel, profileManager: profileManager)) {
+                    Text("View Progress")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.black)
                         .frame(maxWidth: .infinity)
-                        .padding()
-                    .background(Color.blue)
-                    .cornerRadius(15)
+                        .padding(.vertical, 12)
+                        .background(Color.yellow)
+                        .cornerRadius(12)
                 }
                 .buttonStyle(PlainButtonStyle())
-                .padding(.horizontal)
-
-                // Use as trigger (iPhone) for Playing Away from Pressure
-                NavigationLink(destination: PressureTriggerView()) {
-                    HStack {
-                        Image(systemName: "hand.tap.fill")
-                        Text("Use as Trigger (iPhone)")
-                    }
+            } else {
+                Text("Today's Target")
                     .font(.headline)
                     .foregroundColor(.white)
+                GeometryReader { g in
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.white.opacity(0.2))
+                            .frame(height: 10)
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.yellow)
+                            .frame(width: max(0, g.size.width * CGFloat(min(dailyCompleted, dailyTarget)) / CGFloat(dailyTarget)), height: 10)
+                    }
+                }
+                .frame(height: 10)
+                Text("\(min(dailyCompleted, dailyTarget))/\(dailyTarget) blocks")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.7))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Pinned at top via safeAreaInset: title, activity, description, focus, Train Now button.
+    private var continueTrainingPinnedCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Continue Training")
+                .font(.caption)
+                .foregroundColor(.yellow)
+            Text(RecommendationEngine.activityTitle(recommendation.nextActivity))
+                .font(.title3.weight(.bold))
+                .foregroundColor(.white)
+            Text(recommendation.rationale)
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.85))
+            if let focus = focusText {
+                Text("Focus: \(focus)")
+                    .font(.footnote)
+                    .foregroundColor(.yellow.opacity(0.9))
+            }
+            NavigationLink(destination: introDestination(for: recommendation.nextActivity)) {
+                Text(recommendation.nextActivity == .twoMinuteTest ? "Take Test" : "Train Now")
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .foregroundColor(.black)
                     .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color.orange)
-                    .cornerRadius(15)
+                    .padding(.vertical, 18)
+                    .background(Color.yellow)
+                    .cornerRadius(16)
+            }
+            .buttonStyle(PlainButtonStyle())
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color.white.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    private var curriculumPreviewCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Perception Training Path")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.white)
+            pathRow("Escape Pressure", activity: .awayFromPressure)
+            pathRow("Choose Action", activity: .dribbleOrPass)
+            pathRow("Play Early", activity: .oneTouchPassing)
+            NavigationLink(destination: PBACurriculumView(settingsViewModel: settingsViewModel, profileManager: profileManager)) {
+                Text("Open Path")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.9))
+            }
+            .buttonStyle(PlainButtonStyle())
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var scanWarmupsCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Scan Warmups")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.white)
+            Text("Warm up your scanning with the first path activity.")
+                .font(.footnote)
+                .foregroundColor(.white.opacity(0.8))
+            NavigationLink(destination: AwayFromPressureRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)) {
+                Text("Start Warmup")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundColor(.white.opacity(0.9))
+            }
+            .buttonStyle(PlainButtonStyle())
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var twoMinuteTestCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("2-Minute Test")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.white)
+            Text("Benchmark your receiving and decision speed.")
+                .font(.footnote)
+                .foregroundColor(.white.opacity(0.8))
+            NavigationLink(destination: TwoMinuteRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)) {
+                Text("Take Test")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundColor(.black)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Color.yellow)
+                    .cornerRadius(12)
+            }
+            .buttonStyle(PlainButtonStyle())
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var progressCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Progress")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.white)
+            Text("View your blocks and decision trends.")
+                .font(.footnote)
+                .foregroundColor(.white.opacity(0.8))
+            NavigationLink(destination: PBAProgressView(settingsViewModel: settingsViewModel, profileManager: profileManager)) {
+                Text("View Progress")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundColor(.white.opacity(0.9))
+            }
+            .buttonStyle(PlainButtonStyle())
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func pathRow(_ title: String, activity: ActivityKind) -> some View {
+        let unlocked = progressStore.isUnlocked(activity: activity, playerId: playerId)
+        let ready = progressStore.isReady(activity: activity, playerId: playerId)
+        let icon: String
+        if !unlocked { icon = "lock.fill" }
+        else if ready { icon = "checkmark.circle.fill" }
+        else { icon = "circle" }
+        return HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.subheadline)
+                .foregroundColor(unlocked ? (ready ? .green : .white.opacity(0.7)) : .white.opacity(0.4))
+            Text(title)
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(unlocked ? 0.9 : 0.5))
+        }
+    }
+
+    @ViewBuilder
+    private func introDestination(for activity: ActivityKind) -> some View {
+        switch activity {
+        case .twoMinuteTest:
+            TwoMinuteRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+        case .awayFromPressure:
+            AwayFromPressureRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+        case .dribbleOrPass:
+            DribbleOrPassRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+        case .oneTouchPassing:
+            OneTouchPassingRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+        }
+    }
+
+    private func statusUpgradeToast(status: PlayerStatus) -> some View {
+        VStack(spacing: 8) {
+            Text("Status Upgraded")
+                .font(.headline)
+                .foregroundColor(.white)
+            Text("You're becoming a \(status.rawValue).")
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.9))
+            Text("You're deciding earlier and using the whole field.")
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.7))
+        }
+        .padding(24)
+        .background(Color.black.opacity(0.85))
+        .cornerRadius(16)
+        .padding(.horizontal, 32)
+        .onTapGesture { showStatusUpgrade = false }
+    }
+
+    private func checkStatusUpgrade() {
+        let previous = PlayerStatus.loadLastStatus(playerId: playerId)
+        let order: [PlayerStatus] = [.beginner, .developing, .playmaker, .elite]
+        guard let prevIdx = previous.flatMap({ order.firstIndex(of: $0) }),
+              let currIdx = order.firstIndex(of: status),
+              currIdx > prevIdx else {
+            if hasAnyBlock { status.saveAsLastStatus(playerId: playerId) }
+            return
+        }
+        upgradedStatus = status
+        showStatusUpgrade = true
+        status.saveAsLastStatus(playerId: playerId)
+    }
+}
+
+// MARK: - 2-Minute Test flow
+
+enum TwoMinuteTestHelperSelection: Hashable {
+    case partner
+    case wall
+}
+
+struct TwoMinuteRoleSelectionView: View {
+    @ObservedObject var settingsViewModel: SettingsViewModel
+    @ObservedObject var profileManager: UserProfileManager
+
+    var body: some View {
+        VStack(spacing: 24) {
+            Spacer(minLength: 40)
+            Text("Use this device as:")
+                .font(.system(size: 26, weight: .bold, design: .rounded))
+                .foregroundColor(.white)
+                .padding(.horizontal)
+
+            Text("Choose one. The other device should choose the other role.")
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.7))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 28)
+
+            VStack(spacing: 16) {
+                NavigationLink(destination: TwoMinuteTestSetupView(settingsViewModel: settingsViewModel, profileManager: profileManager)) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Image(systemName: "tv")
+                            Text("Display")
+                                .font(.system(size: 20, weight: .bold, design: .rounded))
+                        }
+                        Text("This device shows the grid and star. Place it behind the player.")
+                            .font(.footnote)
+                            .foregroundColor(.black.opacity(0.8))
+                            .multilineTextAlignment(.leading)
+                    }
+                    .foregroundColor(.black)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 20)
+                    .padding(.horizontal, 24)
+                    .background(Color.yellow)
+                    .cornerRadius(18)
                 }
                 .buttonStyle(PlainButtonStyle())
-                .padding(.horizontal)
-                .padding(.bottom, 40)
+                .padding(.horizontal, 28)
+
+                NavigationLink(destination: TwoMinuteCoachRemoteView(settingsViewModel: settingsViewModel, profileManager: profileManager)) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Image(systemName: "hand.raised")
+                            Text("Coach remote")
+                                .font(.system(size: 20, weight: .bold, design: .rounded))
+                        }
+                        Text("This device starts each rep and logs exit direction. Tap Connect to Display first.")
+                            .font(.footnote)
+                            .foregroundColor(.white.opacity(0.9))
+                            .multilineTextAlignment(.leading)
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 20)
+                    .padding(.horizontal, 24)
+                    .background(Color.white.opacity(0.12))
+                    .cornerRadius(18)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .padding(.horizontal, 28)
             }
-            .padding()
+
+            Spacer()
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
             LinearGradient(
                 gradient: Gradient(colors: [
@@ -651,6 +825,260 @@ struct IntroView: View {
             )
             .ignoresSafeArea()
         )
+        .preferredColorScheme(.dark)
+        .navigationTitle("2-Minute Test")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+struct TwoMinuteTestSetupView: View {
+    @ObservedObject var settingsViewModel: SettingsViewModel
+    @ObservedObject var profileManager: UserProfileManager
+    @AppStorage("hasSeenTwoMinuteOnboarding") private var hasSeenTwoMinuteOnboarding = false
+    @State private var showOnboarding = false
+    @State private var difficulty: TestDifficulty = TestDifficulty.loadFromUserDefaults()
+
+    var body: some View {
+        VStack(spacing: 18) {
+            Spacer(minLength: 20)
+
+            Text("Set up")
+                .font(.system(size: 32, weight: .bold, design: .rounded))
+                .multilineTextAlignment(.center)
+                .foregroundColor(.white)
+                .padding(.horizontal, 28)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("• Put the iPad behind the player.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.9))
+                Text("• Player stays inside the square.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.9))
+                Text("• Coach stands 5–7 yards in front with the ball.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.9))
+            }
+            .padding(.top, 4)
+
+            Text("Difficulty")
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.8))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 28)
+                .padding(.top, 12)
+            Picker("Difficulty", selection: $difficulty) {
+                Text("Beginner").tag(TestDifficulty.beginner)
+                Text("Standard").tag(TestDifficulty.standard)
+                Text("Advanced").tag(TestDifficulty.advanced)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 28)
+            .onChange(of: difficulty) { _, newValue in
+                newValue.saveToUserDefaults()
+            }
+
+            Text("How are you getting the ball?")
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.8))
+                .padding(.top, 16)
+
+            Spacer(minLength: 8)
+
+            VStack(spacing: 14) {
+                NavigationLink(destination: TwoMinuteGetReadyView(selection: .partner, config: TwoMinuteTestConfig.config(for: difficulty), settingsViewModel: settingsViewModel, profileManager: profileManager)) {
+                    HStack {
+                        Image(systemName: "person.2.fill")
+                        Text("Partner pass")
+                            .font(.system(size: 20, weight: .bold, design: .rounded))
+                    }
+                    .foregroundColor(.black)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 18)
+                    .padding(.horizontal, 20)
+                    .background(Color.yellow)
+                    .cornerRadius(18)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .padding(.horizontal, 28)
+
+                NavigationLink(destination: TwoMinuteGetReadyView(selection: .wall, config: TwoMinuteTestConfig.config(for: difficulty), settingsViewModel: settingsViewModel, profileManager: profileManager)) {
+                    HStack {
+                        Image(systemName: "square.split.2x2")
+                        Text("Wall pass")
+                            .font(.system(size: 20, weight: .bold, design: .rounded))
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 18)
+                    .padding(.horizontal, 20)
+                    .background(Color.white.opacity(0.08))
+                    .cornerRadius(18)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .padding(.horizontal, 28)
+            }
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
+            LinearGradient(
+                gradient: Gradient(colors: [
+                    Color(red: 0.05, green: 0.05, blue: 0.1),
+                    Color(red: 0.1, green: 0.1, blue: 0.15)
+                ]),
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+        )
+        .preferredColorScheme(.dark)
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            if !hasSeenTwoMinuteOnboarding { showOnboarding = true }
+        }
+        .sheet(isPresented: $showOnboarding) {
+            TwoMinuteOnboardingView {
+                hasSeenTwoMinuteOnboarding = true
+                showOnboarding = false
+            }
+        }
+    }
+}
+
+struct TwoMinuteGetReadyView: View {
+    let selection: TwoMinuteTestHelperSelection
+    let config: TwoMinuteTestConfig
+    @ObservedObject var settingsViewModel: SettingsViewModel
+    @ObservedObject var profileManager: UserProfileManager
+    @State private var countdown: Int? = nil
+    @State private var navigateToTest = false
+
+    private var isPartner: Bool { selection == .partner }
+
+    var body: some View {
+        VStack(spacing: 24) {
+            if let n = countdown, n > 0 {
+                Text("\(n)")
+                    .font(.system(size: 80, weight: .bold, design: .rounded))
+                    .foregroundColor(.white)
+                Spacer()
+            } else if countdown == 0 {
+                Text("Go")
+                    .font(.system(size: 44, weight: .bold, design: .rounded))
+                    .foregroundColor(.yellow)
+                Spacer()
+            } else {
+                Spacer(minLength: 20)
+                Text("Get ready")
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .foregroundColor(.white)
+
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Player instructions (the whole time):")
+                        .font(.subheadline.bold())
+                        .foregroundColor(.white.opacity(0.95))
+                    Text("• Keep moving inside the square.")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.9))
+                    Text("• Check both shoulders often.")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.9))
+                    Text("• When you receive, your first touch must take you out through the correct side.")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.9))
+                    Text("Don't stand still — shuffle, open your hips, check shoulders.")
+                        .font(.footnote)
+                        .foregroundColor(.white.opacity(0.75))
+                        .italic()
+                }
+                .padding(.horizontal, 28)
+                .multilineTextAlignment(.leading)
+
+                VStack(alignment: .leading, spacing: 16) {
+                    if isPartner {
+                        Text("Passer: hold the phone. When the screen says ready, play the pass and tap PASS (or press volume) when the ball leaves your foot.")
+                            .font(.subheadline)
+                            .foregroundColor(.white.opacity(0.9))
+                    } else {
+                        Text("Trigger each rep yourself with the PASS button or volume when the ball bounces back.")
+                            .font(.subheadline)
+                            .foregroundColor(.white.opacity(0.9))
+                    }
+                }
+                .padding(.horizontal, 28)
+                .padding(.top, 8)
+                .multilineTextAlignment(.leading)
+
+                Spacer()
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
+            LinearGradient(
+                gradient: Gradient(colors: [
+                    Color(red: 0.05, green: 0.05, blue: 0.1),
+                    Color(red: 0.1, green: 0.1, blue: 0.15)
+                ]),
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+        )
+        .navigationDestination(isPresented: $navigateToTest) {
+            TwoMinuteCriticalScanSessionView(config: config, settingsViewModel: settingsViewModel, profileManager: profileManager)
+        }
+        .onAppear { startCountdown() }
+        .preferredColorScheme(.dark)
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func startCountdown() {
+        countdown = 3
+        _ = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { timer in
+            DispatchQueue.main.async {
+                guard let n = countdown else { timer.invalidate(); return }
+                if n <= 1 {
+                    timer.invalidate()
+                    countdown = 0
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                        navigateToTest = true
+                    }
+                } else {
+                    countdown = n - 1
+                }
+            }
+        }
+    }
+}
+
+/// Simple explanation sheet for "How it works" link.
+private struct HowItWorksView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("It's about when you decide, not how you touch. Know your first touch before the ball reaches you.")
+                        .foregroundColor(.primary)
+
+                    Text("Use the training activities to practice scanning and deciding early.")
+                        .foregroundColor(.primary)
+                }
+                .padding(24)
+            }
+            .navigationTitle("How it works")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
     }
 }
 
@@ -894,7 +1322,7 @@ struct MainView: View {
     @State private var numberOfOpponents: Int = 2
     @State private var numberOfTeammates: Int = 1
     @State private var numberOfOpenSpaces: Int = 1
-    
+
     let availableLanes = ["Left", "Center", "Right"]
     
     init(settingsViewModel: SettingsViewModel, profileManager: UserProfileManager, selectedColors: [Color] = [], displayMode: DisplayMode = .colors, changeInterval: Double = 1.5, selectedNumbers: Set<Int> = []) {
@@ -949,6 +1377,8 @@ struct MainView: View {
             )
             .ignoresSafeArea()
             .background(Color.black.ignoresSafeArea())
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2) { showDisplay = false }
             .navigationBarHidden(true)
         } else {
             // Configuration View
@@ -1288,7 +1718,7 @@ struct MainView: View {
                                 }
                                 .padding(.horizontal)
                             }
-                            
+
                             // Lane Selection
                             if displayMode == .lanes {
                                 VStack(alignment: .leading, spacing: 10) {
@@ -2585,7 +3015,7 @@ struct MainView: View {
         }
         return ""
     }
-    
+
     private let availableColors: [Color] = [
         Color(red: 0.8, green: 0.0, blue: 0.0), // Darker red
         .blue,
@@ -3323,7 +3753,7 @@ struct DisplayView: View {
                                     VStack(spacing: 12) {
                                         Spacer()
                                         Button(action: triggerOneTouchPassingCommit) {
-                                            Text("Trigger")
+                                            Text("Pass Made")
                                                 .font(.system(size: 22, weight: .bold))
                                                 .foregroundColor(.black)
                                                 .padding(.horizontal, 32)
@@ -4849,12 +5279,19 @@ extension DisplayView {
         RunLoop.main.add(oneTouchWanderTimer!, forMode: .common)
     }
     
+    /// After passMade: wait this range before teammate and defender begin movement (receiver reads while ball is traveling).
+    private static let oneTouchMovementDelayRange: ClosedRange<Double> = 0.15 ... 0.25
+    
     private func triggerOneTouchPassingCommit() {
         guard isActive, displayMode == .oneTouchPassing, criticalScanPhase == "NORMAL" || criticalScanPhase == "BEEP" else { return }
         oneTouchWanderTimer?.invalidate()
         oneTouchWanderTimer = nil
         criticalScanPhase = "CRITICAL"
-        generatePassDirection()
+        let movementDelay = Double.random(in: Self.oneTouchMovementDelayRange)
+        DispatchQueue.main.asyncAfter(deadline: .now() + movementDelay) {
+            guard self.isActive, self.displayMode == .oneTouchPassing else { return }
+            self.generatePassDirection()
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanDuration) {
             startOneTouchPassingResetPhase()
         }
@@ -4865,17 +5302,21 @@ extension DisplayView {
         let screenHeight = UIScreen.main.bounds.height
         let centerY = screenHeight * 0.5
         
-        // Randomly assign teammate to left or right; opponent goes to the other side
+        // Randomly assign teammate to left or right; defender blocks the other passing lane
         let teammateOnLeft = Bool.random()
         oneTouchTeammateOnLeft = teammateOnLeft
         currentPassDirection = teammateOnLeft ? .left : .right
         
         let leftX = screenWidth * 0.25
         let rightX = screenWidth * 0.75
-        let (teammateTargetX, teammateTargetY) = teammateOnLeft ? (leftX, centerY) : (rightX, centerY)
+        // Teammate: diagonal movement to create a passing angle (not flat horizontal)
+        let diagonalOffset = screenHeight * 0.12
+        let teammateTargetX = teammateOnLeft ? leftX : rightX
+        let teammateTargetY = centerY + (teammateOnLeft ? -diagonalOffset : diagonalOffset)
+        // Defender: steps across to block one passing lane (other side)
         let (opponentTargetX, opponentTargetY) = teammateOnLeft ? (rightX, centerY) : (leftX, centerY)
         
-        // Animate from current (wandering) positions: opponent uses Opponent Speed, teammate uses Teammate Speed (unified settings)
+        // Both accelerate smoothly (easeInOut), not instant full speed
         withAnimation(.easeInOut(duration: opponentMovementDuration)) {
             opponentPositionX = opponentTargetX
             opponentPositionY = opponentTargetY
@@ -4885,7 +5326,7 @@ extension DisplayView {
             teammatePositionY = teammateTargetY
         }
         
-        print("⚽ One-touch: teammate on \(teammateOnLeft ? "left" : "right"), pass to teammate's side")
+        print("⚽ One-touch: teammate on \(teammateOnLeft ? "left" : "right") (diagonal), defender blocks other lane")
     }
     
     private func getTargetPosition(for direction: PassDirection, screenWidth: CGFloat, screenHeight: CGFloat) -> (CGFloat, CGFloat) {

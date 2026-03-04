@@ -2,7 +2,7 @@
 //  PressureTriggerView.swift
 //  FootballScanningAI
 //
-//  Use on iPhone: connect to iPad running Pressure Response. Trigger via tap or volume button.
+//  Use on iPhone: connect to iPad running Pressure Response (e.g. Playing Away from Pressure). Trigger via tap or volume button.
 //
 
 import AVFoundation
@@ -16,21 +16,21 @@ struct PressureTriggerView: View {
 
     var body: some View {
         VStack(spacing: 24) {
-            Text("Pressure Response Trigger")
+            Text("Training Trigger")
                 .font(.title.bold())
                 .foregroundColor(.white)
 
-            Text("Connect this iPhone to the iPad running Playing Away from Pressure, then tap when you check to the passer.")
+            Text("Connect this iPhone to the iPad running an activity (e.g. Playing Away from Pressure), then tap to trigger (e.g. when you check to the passer, or when the pass is made).")
                 .font(.subheadline)
                 .foregroundColor(.white.opacity(0.9))
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("1. On iPad: Start Training → Playing Away from Pressure → Start (get to the screen with the defender).")
+                Text("1. On iPad: Start Training → choose activity (e.g. Playing Away from Pressure) → Start.")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.85))
-                Text("2. Use the same Wi‑Fi on both devices. Allow Local Network if prompted.")
+                Text("2. Keep iPhone and iPad nearby. Same Wi‑Fi is not required; they can connect over peer-to-peer. Allow Local Network if prompted.")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.85))
                 Text("3. Then tap Connect to iPad below.")
@@ -91,13 +91,31 @@ struct PressureTriggerView: View {
                     multipeerManager.lastError = nil
                     multipeerManager.sendTrigger()
                 }) {
-                    Text("TRIGGER")
+                    Text("Pass Made")
                         .font(.system(size: 28, weight: .bold))
                         .foregroundColor(.black)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 24)
                         .background(Color.green)
                         .cornerRadius(16)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .padding(.horizontal, 40)
+                .padding(.top, 8)
+
+                Button(action: {
+                    multipeerManager.lastError = nil
+                }) {
+                    Text("Clear error")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(Color.white.opacity(0.8), lineWidth: 2)
+                        )
+                        .cornerRadius(12)
                 }
                 .buttonStyle(PlainButtonStyle())
                 .padding(.horizontal, 40)

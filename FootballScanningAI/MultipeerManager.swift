@@ -15,6 +15,8 @@ import UIKit
 extension Notification.Name {
     /// Posted when the iPad receives a trigger from the iPhone.
     static let pressureResponseTrigger = Notification.Name("PressureResponseTrigger")
+    /// Posted when the iPad receives a TwoMinuteMessage (PBA V2). object = TwoMinuteMessage.
+    static let twoMinuteMessageReceived = Notification.Name("TwoMinuteMessageReceived")
 }
 
 /// Service type for discovery (1–15 chars, lowercase letters/numbers/hyphens).
@@ -83,7 +85,7 @@ final class MultipeerManager: NSObject {
         connectedPeerName = nil
     }
 
-    /// Send trigger to connected peer. Call from iPhone when user taps Trigger.
+    /// Send trigger to connected peer. Call from iPhone when user taps Pass Made.
     func sendTrigger() {
         guard !session.connectedPeers.isEmpty else {
             DispatchQueue.main.async { self.lastError = "Not connected to iPad" }
@@ -95,6 +97,26 @@ final class MultipeerManager: NSObject {
             DispatchQueue.main.async { self.lastError = error.localizedDescription }
         }
     }
+
+    // MARK: - PBA V2 (2-Minute Test)
+
+    /// Send a TwoMinuteMessage to connected peer. Call from iPhone (Coach).
+    func sendTwoMinuteMessage(_ message: TwoMinuteMessage) {
+        guard !session.connectedPeers.isEmpty else {
+            DispatchQueue.main.async { self.lastError = "Not connected to iPad" }
+            return
+        }
+        do {
+            let encoder = JSONEncoder()
+            let json = try encoder.encode(message)
+            var data = "pba2:".data(using: .utf8)!
+            data.append(json)
+            try session.send(data, toPeers: session.connectedPeers, with: .reliable)
+        } catch {
+            DispatchQueue.main.async { self.lastError = error.localizedDescription }
+        }
+    }
+
 }
 
 // Explicit ObservableObject conformance (satisfies Swift 6 / strict concurrency)
@@ -123,6 +145,19 @@ extension MultipeerManager: MCSessionDelegate {
         if data == triggerMessage {
             DispatchQueue.main.async {
                 NotificationCenter.default.post(name: .pressureResponseTrigger, object: nil)
+            }
+        } else if data.count > 5, data.prefix(5) == "pba2:".data(using: .utf8)! {
+            let json = data.dropFirst(5)
+            do {
+                let msg = try JSONDecoder().decode(TwoMinuteMessage.self, from: json)
+                DispatchQueue.main.async {
+                    self.lastError = nil
+                    NotificationCenter.default.post(name: .twoMinuteMessageReceived, object: msg)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.lastError = "2-min decode: \(error.localizedDescription)"
+                }
             }
         }
     }

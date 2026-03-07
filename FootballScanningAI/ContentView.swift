@@ -654,6 +654,7 @@ struct IntroView: View {
     @State private var showPlayersSheet = false
     @AppStorage(hasSeenPlayerSwitcherTooltipKey) private var hasSeenPlayerSwitcherTooltip = false
     // Programmatic navigation so buttons reliably push (NavigationLink in ScrollView can miss taps).
+    @State private var isStartTrainingPressed = false
     @State private var warmupDisplayMode: DisplayMode = .colors
     @State private var snapshotMetricInfoToShow: (title: String, message: String)?
 
@@ -666,6 +667,11 @@ struct IntroView: View {
     private var dailyTarget: Int { DailyTargetState.targetBlocksPerDay }
     private var hasAnyBlock: Bool { !last5.isEmpty }
     private var trainingStreakDays: Int { profileManager.trainingStreakDays() }
+    private var streakLabel: String {
+        let count = trainingStreakDays
+        let dayWord = (count == 0 || count == 1) ? "Day" : "Days"
+        return "🔥 \(count) \(dayWord) Training Streak"
+    }
     @AppStorage(hasCompletedInitialTestKey) private var hasCompletedInitialTest = false
 
     private var lastAFPSessionResult: SessionResult? {
@@ -681,6 +687,51 @@ struct IntroView: View {
     private var scanEfficiencyScore: Int? {
         guard let s = mostRecentSessionResult else { return nil }
         return Int(round(ScanEfficiency.score(from: s)))
+    }
+
+    /// Recent session results (for snapshot metrics). Uses profile for current player.
+    private var recentSessionsForSnapshot: [SessionResult] {
+        profileManager.recentTrainSessions(limit: 5)
+    }
+
+    /// Decision speed: average decision time in seconds from recent sessions that have avgDecisionTime. Nil if none.
+    private var snapshotDecisionSpeedSeconds: Double? {
+        let times = recentSessionsForSnapshot.compactMap { $0.avgDecisionTime }
+        guard !times.isEmpty else { return nil }
+        return times.reduce(0, +) / Double(times.count)
+    }
+
+    /// Trend for decision speed: "↑ Faster" if recent avg < older avg.
+    private var snapshotDecisionSpeedTrend: String {
+        let times = recentSessionsForSnapshot.compactMap { $0.avgDecisionTime }
+        guard times.count >= 2 else { return "" }
+        let recent = times.prefix(2)
+        let newer = recent.first!, older = recent.dropFirst().first!
+        return newer < older ? "↑ Faster" : ""
+    }
+
+    /// First touch accuracy % from most recent session that has firstTouchMatchCount. Nil if none.
+    private var snapshotFirstTouchPercent: Int? {
+        guard let s = recentSessionsForSnapshot.first(where: { $0.firstTouchMatchCount != nil && $0.totalReps > 0 }) else { return nil }
+        return Int(round(Double(s.firstTouchMatchCount!) / Double(s.totalReps) * 100))
+    }
+
+    /// Trend for first touch: "↑ Improving" if we have 2+ sessions with data and latest > previous.
+    private var snapshotFirstTouchTrend: String {
+        let withData = recentSessionsForSnapshot.filter { $0.firstTouchMatchCount != nil && $0.totalReps > 0 }
+        guard withData.count >= 2 else { return "" }
+        let pct1 = Double(withData[0].firstTouchMatchCount!) / Double(withData[0].totalReps) * 100
+        let pct0 = Double(withData[1].firstTouchMatchCount!) / Double(withData[1].totalReps) * 100
+        return pct1 > pct0 ? "↑ Improving" : ""
+    }
+
+    /// Trend for correct decisions from consistency label.
+    private var snapshotCorrectTrend: String {
+        switch consistencyLabel {
+        case .steady: return "↑ Stable"
+        case .improving: return "↑ Improving"
+        case .streaky: return "↑ Variable"
+        }
     }
     /// Automatic recommendation by player level with overrides for timing, bias, consistency. Updates when level/timing/bias/consistency change.
     private var trainingRecommendation: TrainingRecommendationResult {
@@ -709,6 +760,26 @@ struct IntroView: View {
     /// Focus line for pinned Train Now card (from recommendation engine).
     private var focusText: String { trainingRecommendation.focusLine }
     private var coachTipText: String { trainingRecommendation.coachTip }
+
+    /// Stage position for Next Training card (perception path order: AFP=1, DOP=2, OTP=3).
+    private var nextTrainingStageLabel: String {
+        switch continueTrainingCardActivity {
+        case .awayFromPressure: return "Stage 1 of 3"
+        case .dribbleOrPass: return "Stage 2 of 3"
+        case .oneTouchPassing: return "Stage 3 of 3"
+        case .twoMinuteTest: return "Stage 1 of 3"
+        }
+    }
+
+    /// Encouragement message for Today's Goal based on blocks completed today.
+    private var todayGoalEncouragement: String {
+        switch dailyCompleted {
+        case 0: return "Complete \(dailyTarget) blocks today."
+        case 1: return "Nice start — keep going."
+        case 2: return "One more to reach today's goal."
+        default: return "Goal achieved today. Great work."
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -771,20 +842,29 @@ struct IntroView: View {
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    hasSeenPlayerSwitcherTooltip = true
-                    showPlayersSheet = true
+                Menu {
+                    Button {
+                        hasSeenPlayerSwitcherTooltip = true
+                        showPlayersSheet = true
+                    } label: {
+                        Label("Switch Player", systemImage: "person.circle")
+                    }
+                    Button {
+                        router.push(.coachRemote)
+                    } label: {
+                        Label("Coach Remote", systemImage: "hand.raised")
+                    }
                 } label: {
                     HStack(spacing: 4) {
-                        Text("Player: \(profileManager.currentProfile?.name ?? "Player")")
-                            .lineLimit(1)
-                        Text("▾")
-                            .font(.caption)
+                        Text("Coach & Player")
+                            .font(.subheadline.weight(.medium))
+                        Image(systemName: "chevron.down")
+                            .font(.caption2.weight(.semibold))
                     }
-                    .font(.subheadline.weight(.medium))
                     .foregroundColor(.white.opacity(0.95))
                 }
-                .accessibilityHint("Tap to switch players.")
+                .accessibilityLabel("Coach and Player options")
+                .accessibilityHint("Double tap for Coach Remote and Switch Player.")
             }
         }
         .overlay(alignment: .topTrailing) {
@@ -833,51 +913,60 @@ struct IntroView: View {
             Text("Your Snapshot")
                 .font(.subheadline.weight(.semibold))
                 .foregroundColor(.white)
-            if hasAnyBlock {
-                Text("Decision Score: \(decisionScore)")
+            if last5.count >= 2 {
+                snapshotMetricRow(label: "Decision Speed", value: snapshotDecisionSpeedSeconds.map { String(format: "%.2fs", $0) } ?? "—", trend: snapshotDecisionSpeedTrend)
+                snapshotMetricRow(label: "First Touch Accuracy", value: snapshotFirstTouchPercent.map { "\($0)%" } ?? "—", trend: snapshotFirstTouchTrend)
+                snapshotMetricRow(label: "Correct Decisions", value: "\(decisionScore)%", trend: snapshotCorrectTrend)
+            } else if hasAnyBlock {
+                Text("Run your first block to get your score.")
                     .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.9))
-                Text("Player Level: \(PlayerDevelopmentLevel.level(fromScore: decisionScore).rawValue)")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.9))
-                Text("Consistency: \(consistencyLabel.rawValue)")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.9))
-                if let scan = scanEfficiencyScore {
-                    HStack(spacing: 6) {
-                        Text("Scan Efficiency: \(scan)")
-                            .font(.subheadline)
-                            .foregroundColor(.white.opacity(0.9))
-                        if let msg = MetricExplanations.message(for: "Scan Efficiency") {
-                            Button {
-                                snapshotMetricInfoToShow = ("Scan Efficiency", msg)
-                            } label: {
-                                Image(systemName: "info.circle")
-                                    .font(.subheadline)
-                                    .foregroundColor(.white.opacity(0.6))
-                            }
-                            .buttonStyle(PlainButtonStyle())
-                        }
-                    }
-                }
+                    .foregroundColor(.white.opacity(0.8))
             } else {
                 Text("Run your first block to get your score.")
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.8))
             }
-            Text(trainingStreakDays == 1 ? "🔥 1 Day Training Streak" : "🔥 \(trainingStreakDays) Days Training Streak")
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.9))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(streakLabel)
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.9))
+                Text(trainingStreakDays == 0 ? "Keep it going today" : "Keep it alive today")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.75))
+            }
         }
     }
 
-    /// Pinned at top: current training session card (recommendation + today's goal + Train Now). Coach Remote overlaid in corner.
+    private func snapshotMetricRow(label: String, value: String, trend: String) -> some View {
+        HStack {
+            Text(label)
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.9))
+            Spacer(minLength: 8)
+            HStack(spacing: 4) {
+                Text(value)
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.95))
+                if !trend.isEmpty {
+                    Text(trend)
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.75))
+                }
+            }
+        }
+    }
+
+    /// Pinned at top: current training session card (recommendation + today's goal + Start Training).
     private var continueTrainingPinnedCard: some View {
-        ZStack(alignment: .topTrailing) {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("NEXT TRAINING")
-                    .font(.caption.weight(.semibold))
-                    .foregroundColor(.black.opacity(0.7))
+        VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("NEXT TRAINING")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.black.opacity(0.7))
+                    Text(nextTrainingStageLabel)
+                        .font(.caption)
+                        .foregroundColor(.black.opacity(0.7))
+                }
 
                 Text(RecommendationEngine.activityTitle(continueTrainingCardActivity))
                     .font(.title3)
@@ -893,10 +982,11 @@ struct IntroView: View {
                     .lineLimit(2)
 
                 Text("Coach Tip: \(coachTipText)")
-                    .font(.subheadline)
-                    .foregroundColor(.black)
+                    .font(.footnote)
+                    .foregroundColor(.black.opacity(0.85))
                     .multilineTextAlignment(.leading)
                     .lineLimit(2)
+                    .padding(.top, 8)
 
                 Text("Today's Goal")
                     .font(.caption.weight(.semibold))
@@ -918,47 +1008,41 @@ struct IntroView: View {
                 Text("\(min(dailyCompleted, dailyTarget)) / \(dailyTarget) blocks complete")
                     .font(.caption)
                     .foregroundColor(.black.opacity(0.8))
+                Text(todayGoalEncouragement)
+                    .font(.caption)
+                    .foregroundColor(.black.opacity(0.7))
+                    .padding(.top, 2)
 
                 Button {
-                    router.push(routeForTrainNowActivity(continueTrainingCardActivity))
+                    isStartTrainingPressed = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                        isStartTrainingPressed = false
+                        router.push(routeForTrainNowActivity(continueTrainingCardActivity))
+                    }
                 } label: {
-                    Text("Train Now")
-                        .font(.headline.weight(.semibold))
-                        .foregroundColor(.black)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .background(Color.white.opacity(0.95))
-                        .cornerRadius(12)
-                        .contentShape(Rectangle())
+                    HStack(spacing: 6) {
+                        Image(systemName: "play.fill")
+                            .font(.subheadline.weight(.semibold))
+                        Text("Start Training")
+                            .font(.headline.weight(.semibold))
+                    }
+                    .foregroundColor(.black)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(Color.white.opacity(0.95))
+                    .cornerRadius(12)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(PlainButtonStyle())
-                .accessibilityLabel("Train now. \(RecommendationEngine.activityTitle(continueTrainingCardActivity)). Focus: \(focusText). Coach Tip: \(coachTipText).")
+                .scaleEffect(isStartTrainingPressed ? 0.96 : 1.0)
+                .animation(.spring(response: 0.25, dampingFraction: 0.6), value: isStartTrainingPressed)
+                .accessibilityLabel("Start training. \(RecommendationEngine.activityTitle(continueTrainingCardActivity)). Focus: \(focusText). Coach Tip: \(coachTipText).")
                 .accessibilityHint("Double tap to start training.")
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(16)
-            .background(Color.yellow)
-            .cornerRadius(16)
-
-            Button {
-                router.push(.coachRemote)
-            } label: {
-                Text("Coach Remote")
-                    .font(.caption.weight(.semibold))
-                    .foregroundColor(.black)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color.white.opacity(0.9))
-                    .cornerRadius(8)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(PlainButtonStyle())
-            .accessibilityHint("Double tap to open Coach Remote.")
-            .padding(8)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 4)
-        .padding(.vertical, 4)
+        .padding(16)
+        .background(Color.yellow)
+        .cornerRadius(16)
     }
 
     private var curriculumPreviewCard: some View {

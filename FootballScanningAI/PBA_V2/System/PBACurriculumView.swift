@@ -36,9 +36,10 @@ struct PBACurriculumView: View {
     ]
 
     private let timelineIndicatorWidth: CGFloat = 48
-    private let rowSpacing: CGFloat = 22
+    private let rowSpacing: CGFloat = 20
     private var cardMaxWidth: CGFloat { horizontalSizeClass == .regular ? 820 : 700 }
     private let cardMinHeight: CGFloat = 150
+    private let trainButtonMinHeight: CGFloat = 56
 
     private enum StageState { case completed, current, locked }
 
@@ -80,9 +81,9 @@ struct PBACurriculumView: View {
                     curriculumRow(index: 2, title: "One-Touch Passing", subtitle: "Decide before the ball arrives.", route: .oneTouchPassingRoleSelection)
                 }
                 .frame(maxWidth: 860, alignment: .leading)
-                .padding(.horizontal, 40)
-                .padding(.top, 24)
-                .padding(.bottom, 40)
+                .padding(.horizontal, 20)
+                .padding(.top, 20)
+                .padding(.bottom, 32)
             }
             .scrollIndicators(.visible)
         }
@@ -118,13 +119,14 @@ struct PBACurriculumView: View {
     private static let currentColor = Color.yellow
     private static let lockedColor = Color.gray.opacity(0.4)
 
-    /// Fixed-width (40pt) timeline column. Flexible line above/below dot so dot sits at vertical center of card.
+    /// Fixed-width (48pt) timeline column. Flexible line above/below dot so dot sits at vertical center of card. Yellow bottom line animates downward when stage becomes completed.
     private func timelineIndicator(index: Int) -> some View {
         let lastIndex = Self.activities.count - 1
         let state = stageState(for: index)
         // Completed: connector above and below = yellow. Current: above = yellow, below = gray. Locked: both = gray.
         let topLineColor = index != 0 && (state == .completed || state == .current) ? Self.currentColor : Self.lockedColor
-        let bottomLineColor = index != lastIndex && state == .completed ? Self.currentColor : Self.lockedColor
+        let bottomLineIsYellow = index != lastIndex && state == .completed
+        let bottomLineProgress: CGFloat = bottomLineIsYellow ? 1 : 0
 
         return VStack(spacing: 0) {
             if index != 0 {
@@ -137,10 +139,18 @@ struct PBACurriculumView: View {
             stageCircle(state: state)
 
             if index != lastIndex {
-                Rectangle()
-                    .fill(bottomLineColor)
-                    .frame(width: 2)
-                    .frame(maxHeight: .infinity)
+                ZStack(alignment: .top) {
+                    Rectangle()
+                        .fill(Self.lockedColor)
+                        .frame(width: 2)
+                        .frame(maxHeight: .infinity)
+                    Rectangle()
+                        .fill(Self.currentColor)
+                        .frame(width: 2)
+                        .frame(maxHeight: .infinity)
+                        .scaleEffect(y: bottomLineProgress, anchor: .top)
+                        .animation(.easeInOut(duration: 0.35), value: bottomLineProgress)
+                }
             }
         }
         .frame(width: timelineIndicatorWidth)
@@ -170,19 +180,20 @@ struct PBACurriculumView: View {
         }
     }
 
-    /// Card: dark rounded rect, stage label, title, subtitle, mastery progress, large yellow Train button (NavigationLink so path updates correctly). minHeight 150, padding 24.
+    /// Card: dark rounded rect, stage label, title, subtitle, mastery progress, large yellow Train button. Padding 22, corner radius 18.
     private func activityCard(index: Int, title: String, subtitle: String, route: AppRoute) -> some View {
         let activity = Self.activities[index].activity
         let mastery = masteryPercent(for: activity)
 
-        return VStack(alignment: .leading, spacing: 20) {
-            VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text("Stage \(index + 1)")
                     .font(.caption)
                     .foregroundColor(.gray)
                     .padding(.bottom, 2)
                 Text(title)
-                    .font(.headline)
+                    .font(.title3)
+                    .fontWeight(.bold)
                     .foregroundColor(.white)
                 Text(subtitle)
                     .font(.subheadline)
@@ -191,8 +202,8 @@ struct PBACurriculumView: View {
                 Text("Mastery Progress")
                     .font(.caption)
                     .foregroundColor(.gray)
-                    .padding(.top, 6)
-                    .padding(.bottom, 2)
+                    .padding(.top, 4)
+                    .padding(.bottom, 8)
                 HStack(alignment: .center, spacing: 8) {
                     GeometryReader { geo in
                         ZStack(alignment: .leading) {
@@ -216,14 +227,14 @@ struct PBACurriculumView: View {
                     .font(.body.weight(.semibold))
                     .foregroundColor(.black)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
+                    .frame(minHeight: trainButtonMinHeight)
                     .background(Color.yellow)
                     .cornerRadius(12)
                     .contentShape(Rectangle())
             }
             .buttonStyle(PlainButtonStyle())
         }
-        .padding(24)
+        .padding(22)
         .frame(maxWidth: .infinity, minHeight: cardMinHeight, alignment: .leading)
         .background(Color.white.opacity(0.08))
         .cornerRadius(18)

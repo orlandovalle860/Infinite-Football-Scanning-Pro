@@ -154,7 +154,7 @@ enum TrainingRecommendation {
         case .oneTouchPassing:
             return "decide before the ball arrives"
         case .twoMinuteTest:
-            return "see your baseline decision speed"
+            return "establish your baseline decision speed"
         }
     }
 
@@ -193,26 +193,26 @@ enum TrainingRecommendation {
     ) -> (focus: String, coachTip: String) {
         switch activity {
         case .twoMinuteTest:
-            return ("Take the 2-Minute Test to see your baseline.", "Take the 2-Minute Test to see your baseline.")
+            return ("Establish your baseline decision speed.", "Take the 2-Minute Test before starting training.")
         case .awayFromPressure:
             if case .firstTouchIssues = reason, let subtype = firstTouchSubtype(lastAFPSessionResult) {
                 switch subtype {
                 case .towardPressure:
-                    return ("escape pressure earlier", "You're turning into pressure too often. Train escaping earlier.")
+                    return ("Escape pressure earlier.", "You're turning into pressure too often.")
                 case .hesitant:
-                    return ("commit to your decision", "You're hesitating between options. Train escaping earlier.")
+                    return ("Commit to your decision.", "You're hesitating between options.")
                 case .correcting:
-                    return ("decide earlier before the ball arrives", "You're correcting your touch after receiving. Train deciding earlier.")
+                    return ("Decide earlier before the ball arrives.", "You're correcting your touch after receiving.")
                 }
             }
-            if bias == .leftRight { return ("scan the whole field", "You're favoring one side. Scan the whole field and escape early.") }
-            if speed == .slow { return ("decide earlier before the ball arrives", "Your decisions are a bit slow. Train deciding earlier.") }
-            return ("read danger and escape early", "Keep scanning and escaping pressure.")
+            if bias == .leftRight { return ("Scan the whole field.", "You're favoring one side.") }
+            if speed == .slow { return ("Decide earlier before the ball arrives.", "Your decisions are arriving late.") }
+            return ("Escape pressure earlier.", "Keep scanning and escaping pressure.")
         case .dribbleOrPass:
-            return ("choose action under pressure", "You're hesitating between options. Train choosing faster.")
+            return ("Choose action under pressure.", "You're hesitating between options.")
         case .oneTouchPassing:
-            if speed == .slow { return ("decide before the ball arrives", "Your decisions are a bit slow. Train playing earlier.") }
-            return ("decide before the ball arrives", "Train deciding before the ball arrives.")
+            if speed == .slow { return ("Decide before the ball arrives.", "Your decisions are arriving late.") }
+            return ("Decide before the ball arrives.", "Train deciding before the ball arrives.")
         }
     }
 
@@ -239,11 +239,10 @@ enum TrainingRecommendation {
         lastAFPSessionResult: SessionResult? = nil
     ) -> TrainingRecommendationResult {
         if progressStore.last(.twoMinuteTest, playerId: playerId) == nil {
-            let focus = "Take the 2-Minute Test to see your baseline."
             return TrainingRecommendationResult(
                 activity: .twoMinuteTest,
-                focusLine: focus,
-                coachTip: focus,
+                focusLine: "Establish your baseline decision speed.",
+                coachTip: "Take the 2-Minute Test before starting training.",
                 reason: "Take the 2-Minute Test first."
             )
         }

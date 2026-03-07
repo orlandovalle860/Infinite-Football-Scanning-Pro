@@ -283,15 +283,15 @@ struct PlayerDashboardView: View {
                 .font(.headline)
                 .foregroundColor(.white)
             if chartSessions.count < 2 {
-                Text("Complete at least 2 sessions to see progress graphs.")
+                Text("Complete at least 2 training sessions to see progress graphs.")
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.7))
                     .padding(.vertical, 12)
             } else {
                 ProgressLineChartView(title: "Decision Score", points: decisionScorePoints, valueLabel: "%", yAxisRange: (0, 100))
-                ProgressLineChartView(title: "Decision Speed", points: decisionSpeedPoints, valueLabel: "s", yAxisRange: nil)
-                ProgressLineChartView(title: "First Touch Commitment", points: firstTouchCommitmentPoints, valueLabel: "%", yAxisRange: (0, 100))
-                ProgressLineChartView(title: "Forward Intent", points: forwardIntentPoints, valueLabel: "%", yAxisRange: (0, 100))
+                ProgressLineChartView(title: "Decision Speed", points: decisionSpeedPoints, valueLabel: "s", yAxisRange: nil, emptyStateMessage: "Complete at least 2 Dribble or Pass sessions to see your trend.")
+                ProgressLineChartView(title: "First Touch Commitment", points: firstTouchCommitmentPoints, valueLabel: "%", yAxisRange: (0, 100), emptyStateMessage: "Complete at least 2 Playing Away From Pressure sessions to see your trend.")
+                ProgressLineChartView(title: "Forward Intent", points: forwardIntentPoints, valueLabel: "%", yAxisRange: (0, 100), emptyStateMessage: "Complete at least 2 Dribble or Pass sessions to see your trend.")
             }
         }
         .padding(18)

@@ -2,16 +2,11 @@
 //  AppRouter.swift
 //  FootballScanningAI
 //
-//  Path-based navigation so popToRoot() clears the path and returns to Home.
+//  Path-based navigation. popToRoot() clears the path and returns to Home.
 //
 
 import Combine
 import SwiftUI
-
-/// Holds the navigation stack identity. Root view owns this and uses it for .id(); router updates it on popToRoot() so the root re-renders even when called from deep in the stack.
-final class NavigationRootId: ObservableObject {
-    @Published var id = UUID()
-}
 
 /// Route enum for path-based navigation. Clearing path returns to root.
 enum AppRoute: Hashable {
@@ -26,22 +21,29 @@ enum AppRoute: Hashable {
     case twoMinuteGetReady(mode: TrainingMode, difficulty: TestDifficulty)
     /// Path from curriculum Train: role selection for each activity (avoids nested navigationDestination on curriculum).
     case awayFromPressureRoleSelection
+    case awayFromPressureTrainingModeSelection
+    case awayFromPressureSetup(mode: TrainingMode)
     case dribbleOrPassRoleSelection
+    case dribbleOrPassTrainingModeSelection
+    case dribbleOrPassSetup(mode: TrainingMode)
     case oneTouchPassingRoleSelection
+    case oneTouchPassingTrainingModeSelection
+    case oneTouchPassingSetup(mode: TrainingMode)
+    /// Tester mode only: debug menu reachable from Home via toolbar.
+    case debugMenu
 }
 
 final class AppRouter: ObservableObject {
-    @Published var rootId = UUID()
-    /// Path-driven stack: when cleared, we're at root. Home button sets path = NavigationPath().
+    /// Path-driven stack: when cleared, we're at root. Home button clears path.
     @Published var path = NavigationPath()
-
-    weak var navigationRootId: NavigationRootId?
-    var onPopToRoot: (() -> Void)?
 
     var pathBinding: Binding<NavigationPath> {
         Binding(get: { [weak self] in self?.path ?? NavigationPath() },
                 set: { [weak self] in self?.path = $0 })
     }
+
+    /// For debugging: number of entries in the path (root not included).
+    var pathCount: Int { path.count }
 
     func push(_ route: AppRoute) {
         withAnimation(.easeInOut(duration: 0.35)) {
@@ -51,15 +53,10 @@ final class AppRouter: ObservableObject {
         }
     }
 
-    /// Call from any screen (e.g. toolbar home button or Leave in alert) to return to Home.
+    /// Clear the navigation path so the stack returns to root (Home). One tap from any deep screen.
     func popToRoot() {
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            self.path = NavigationPath()
-            self.onPopToRoot?()
+        withAnimation(.easeInOut(duration: 0.25)) {
+            path = NavigationPath()
         }
-        navigationRootId?.id = UUID()
-        rootId = UUID()
-        NotificationCenter.default.post(name: .requestPopToRoot, object: nil)
     }
 }

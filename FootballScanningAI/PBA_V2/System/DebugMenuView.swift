@@ -2,7 +2,7 @@
 //  DebugMenuView.swift
 //  FootballScanningAI
 //
-//  Shown when AppConfig.testerMode is true. Entry point for testers before the main app.
+//  Tester mode: shown as a route from Home (toolbar "Tester Tools" button). Not the app root.
 //
 
 import SwiftUI
@@ -11,28 +11,21 @@ import Combine
 struct DebugMenuView: View {
     @ObservedObject var profileManager: UserProfileManager
     @ObservedObject var settingsViewModel: SettingsViewModel
-    @StateObject private var router = AppRouter()
-    @State private var mainStackId = UUID()
+    @EnvironmentObject private var router: AppRouter
 
     var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    NavigationLink("Go to App") {
-                        MainAppView(profileManager: profileManager, settingsViewModel: settingsViewModel, stackId: $mainStackId, onPopToRoot: { DispatchQueue.main.async { mainStackId = UUID() } }, router: router)
-                            .id(mainStackId)
-                    }
-                } header: {
-                    Text("Debug")
+        List {
+            Section {
+                Button("Go to Home") {
+                    router.popToRoot()
                 }
+            } header: {
+                Text("Debug")
             }
-            .navigationTitle("Tester Mode")
-            .navigationBarTitleDisplayMode(.inline)
         }
+        .navigationTitle("Tester Mode")
+        .navigationBarTitleDisplayMode(.inline)
         .environment(\.sizeCategory, .large)
         .environment(\.colorScheme, .dark)
-        .onReceive(NotificationCenter.default.publisher(for: .requestPopToRoot).receive(on: RunLoop.main)) { _ in
-            mainStackId = UUID()
-        }
     }
 }

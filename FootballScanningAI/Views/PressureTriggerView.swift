@@ -179,6 +179,7 @@ private struct VolumeButtonTriggerView: UIViewRepresentable {
         var lastVolume: Float = 0
         var savedVolume: Float = 0
         var onTrigger: (() -> Void) = {}
+        var startGeneration: Int = 0
 
         func startPolling() {
             guard timer == nil else { return }
@@ -186,13 +187,21 @@ private struct VolumeButtonTriggerView: UIViewRepresentable {
             do { try session.setActive(true) } catch {}
             lastVolume = session.outputVolume
             savedVolume = lastVolume
-            timer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: true) { [weak self] _ in
-                self?.checkVolume()
+            startGeneration += 1
+            let gen = startGeneration
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                guard let self = self, self.timer == nil, self.startGeneration == gen else { return }
+                self.lastVolume = AVAudioSession.sharedInstance().outputVolume
+                self.savedVolume = self.lastVolume
+                self.timer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: true) { [weak self] _ in
+                    self?.checkVolume()
+                }
+                RunLoop.main.add(self.timer!, forMode: .common)
             }
-            RunLoop.main.add(timer!, forMode: .common)
         }
 
         func stopPolling() {
+            startGeneration += 1
             timer?.invalidate()
             timer = nil
         }

@@ -376,8 +376,8 @@ struct PlayerProgressView: View {
                     .padding(.vertical, 12)
             } else {
                 ProgressLineChartView(title: "Decision Score", points: decisionScorePoints, valueLabel: "%", yAxisRange: (0, 100))
-                ProgressLineChartView(title: "Avg Decision Time", points: decisionSpeedPoints, valueLabel: "s", yAxisRange: nil)
-                ProgressLineChartView(title: "First Touch Accuracy", points: firstTouchAccuracyPoints, valueLabel: "%", yAxisRange: (0, 100))
+                ProgressLineChartView(title: "Avg Decision Time", points: decisionSpeedPoints, valueLabel: "s", yAxisRange: nil, emptyStateMessage: "Complete at least 2 Dribble or Pass sessions to see your trend.")
+                ProgressLineChartView(title: "First Touch Accuracy", points: firstTouchAccuracyPoints, valueLabel: "%", yAxisRange: (0, 100), emptyStateMessage: "Complete at least 2 Playing Away From Pressure sessions to see your trend.")
                 ProgressLineChartView(title: "Correct Decisions", points: correctPercentPoints, valueLabel: "%", yAxisRange: (0, 100))
                 ProgressLineChartView(title: "Scan Efficiency", points: scanEfficiencyPoints, valueLabel: "", yAxisRange: (0, 100))
             }
@@ -401,37 +401,43 @@ struct PlayerProgressView: View {
                 title: "Scan Efficiency",
                 definition: "Combines decision accuracy (50%), first-touch accuracy (30%), and decision speed (20%) into one score. Measures how efficiently you convert perception into action.",
                 currentPercent: scanEfficiencyCurrent,
-                points: scanEfficiencyPoints
+                points: scanEfficiencyPoints,
+                emptyStateMessage: nil
             )
             analyticsMetricCard(
                 title: "Early Decision Rate",
                 definition: "Percentage of reps where decision time was Fast. Measures how often you decide before receiving the ball.",
                 currentPercent: earlyDecisionRateCurrent,
-                points: earlyDecisionRatePoints
+                points: earlyDecisionRatePoints,
+                emptyStateMessage: nil
             )
             analyticsMetricCard(
                 title: "First Touch Commitment",
                 definition: "Percentage of reps where your first-touch direction matched the exit direction. Measures whether you commit to your decision immediately.",
                 currentPercent: firstTouchCommitmentCurrent,
-                points: firstTouchCommitmentPoints
+                points: firstTouchCommitmentPoints,
+                emptyStateMessage: "Complete at least 2 Playing Away From Pressure sessions to see your trend."
             )
             analyticsMetricCard(
                 title: "Forward Intent",
                 definition: "Percentage of opportunities where a forward option was available and you chose it. Measures tendency to play forward when possible.",
                 currentPercent: forwardIntentCurrent,
-                points: forwardIntentPoints
+                points: forwardIntentPoints,
+                emptyStateMessage: "Complete at least 2 Dribble or Pass sessions to see your trend."
             )
             analyticsMetricCard(
                 title: "Decision Before Contact",
                 definition: "Percentage of reps where you had already decided the correct action before receiving the ball (decision time under \(String(format: "%.1f", TimingThresholds.earlyDecisionThresholdForPreReceive))s and first touch matched the correct direction).",
                 currentPercent: preReceiveDecisionRateCurrent,
-                points: preReceiveDecisionRatePoints
+                points: preReceiveDecisionRatePoints,
+                emptyStateMessage: nil
             )
             analyticsMetricCard(
                 title: "Pressure Escape Rate",
                 definition: "Percentage of reps where you successfully escaped pressure (correct direction chosen and exit through that gate). Playing Away From Pressure only.",
                 currentPercent: pressureEscapeRateCurrent,
-                points: pressureEscapeRatePoints
+                points: pressureEscapeRatePoints,
+                emptyStateMessage: "Complete at least 2 Playing Away From Pressure sessions to see your trend."
             )
         }
         .padding(18)
@@ -444,8 +450,9 @@ struct PlayerProgressView: View {
         )
     }
 
-    private func analyticsMetricCard(title: String, definition: String, currentPercent: Int?, points: [ChartDataPoint]) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+    private func analyticsMetricCard(title: String, definition: String, currentPercent: Int?, points: [ChartDataPoint], emptyStateMessage: String? = nil) -> some View {
+        let trendMessage = emptyStateMessage ?? "Complete at least 2 training sessions to see your trend."
+        return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
                 Text(title)
                     .font(.subheadline.weight(.semibold))
@@ -474,11 +481,11 @@ struct PlayerProgressView: View {
                     .foregroundColor(.white.opacity(0.6))
             }
             if points.count >= 2 {
-                ProgressLineChartView(title: "", points: points, valueLabel: "%", yAxisRange: (0, 100))
+                ProgressLineChartView(title: "", points: points, valueLabel: "%", yAxisRange: (0, 100), emptyStateMessage: emptyStateMessage)
                     .padding(.horizontal, -16)
                     .padding(.vertical, -8)
             } else if !points.isEmpty {
-                Text("Complete more sessions to see trend.")
+                Text(trendMessage)
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.5))
             }

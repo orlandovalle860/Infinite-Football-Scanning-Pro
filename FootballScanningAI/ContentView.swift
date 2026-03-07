@@ -318,18 +318,12 @@ struct ContentView: View {
     @StateObject private var popToRootTrigger = PopToRootTrigger()
     @AppStorage("hasCompletedInitialTest") private var hasCompletedInitialTest = false
     /// When this changes, MainAppView’s navigation stack is recreated so Home/Leave actually pops to root.
-    @State private var mainStackId = UUID()
-
     var body: some View {
         Group {
-            if AppConfig.testerMode {
-                DebugMenuView(profileManager: profileManager, settingsViewModel: settingsViewModel)
-            } else if profileManager.isProfileCreated {
-                MainAppView(profileManager: profileManager, settingsViewModel: settingsViewModel, stackId: $mainStackId, onPopToRoot: nil, router: router)
-                    .id(mainStackId)
+            if profileManager.isProfileCreated {
+                MainAppView(profileManager: profileManager, settingsViewModel: settingsViewModel, router: router)
             } else if !hasCompletedInitialTest {
-                MainAppView(profileManager: profileManager, settingsViewModel: settingsViewModel, stackId: $mainStackId, onPopToRoot: nil, router: router)
-                    .id(mainStackId)
+                MainAppView(profileManager: profileManager, settingsViewModel: settingsViewModel, router: router)
             } else {
                 ProfileCreationView(profileManager: profileManager)
             }
@@ -341,12 +335,6 @@ struct ContentView: View {
         .navigationViewStyle(.stack)
         .environment(\.sizeCategory, .large)
         .environment(\.colorScheme, .dark)
-        .onAppear {
-            router.onPopToRoot = { DispatchQueue.main.async { mainStackId = UUID() } }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .requestPopToRoot).receive(on: RunLoop.main)) { _ in
-            DispatchQueue.main.async { mainStackId = UUID() }
-        }
     }
 }
 
@@ -355,8 +343,6 @@ private let coachDeviceShownHomeKey = "coachDeviceShownHome"
 struct MainAppView: View {
     @ObservedObject var profileManager: UserProfileManager
     @ObservedObject var settingsViewModel: SettingsViewModel
-    @Binding var stackId: UUID
-    var onPopToRoot: (() -> Void)?
     @ObservedObject var router: AppRouter
     @EnvironmentObject private var multipeerManager: MultipeerManager
     @EnvironmentObject private var progressStore: ProgressStore
@@ -397,14 +383,12 @@ struct MainAppView: View {
                     }
             }
         }
-        .id(stackId)
         .environmentObject(multipeerManager)
         .environmentObject(progressStore)
         .environmentObject(playerStore)
         .environmentObject(popToRootTrigger)
         .environmentObject(router)
         .onAppear {
-            if let onPopToRoot { router.onPopToRoot = onPopToRoot }
             progressStore.load()
             playerStore.load()
             playerStore.createDefaultIfNeeded()
@@ -476,8 +460,36 @@ struct MainAppView: View {
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
+        case .awayFromPressureTrainingModeSelection:
+            TrainingModeSelectionView(activityTitle: "Playing Away From Pressure", onSelectMode: { mode in
+                router.push(.awayFromPressureSetup(mode: mode))
+            }) { _ in EmptyView() }
+            .environmentObject(progressStore)
+            .environmentObject(playerStore)
+            .environmentObject(popToRootTrigger)
+            .environmentObject(router)
+        case .awayFromPressureSetup(let mode):
+            AwayFromPressureSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
         case .dribbleOrPassRoleSelection:
             DribbleOrPassRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
+        case .dribbleOrPassTrainingModeSelection:
+            TrainingModeSelectionView(activityTitle: "Dribble or Pass", onSelectMode: { mode in
+                router.push(.dribbleOrPassSetup(mode: mode))
+            }) { _ in EmptyView() }
+            .environmentObject(progressStore)
+            .environmentObject(playerStore)
+            .environmentObject(popToRootTrigger)
+            .environmentObject(router)
+        case .dribbleOrPassSetup(let mode):
+            DribbleOrPassSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
@@ -487,6 +499,23 @@ struct MainAppView: View {
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
+                .environmentObject(router)
+        case .oneTouchPassingTrainingModeSelection:
+            TrainingModeSelectionView(activityTitle: "One-Touch Passing", onSelectMode: { mode in
+                router.push(.oneTouchPassingSetup(mode: mode))
+            }) { _ in EmptyView() }
+            .environmentObject(progressStore)
+            .environmentObject(playerStore)
+            .environmentObject(popToRootTrigger)
+            .environmentObject(router)
+        case .oneTouchPassingSetup(let mode):
+            OneTouchPassingSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
+        case .debugMenu:
+            DebugMenuView(profileManager: profileManager, settingsViewModel: settingsViewModel)
                 .environmentObject(router)
         }
     }
@@ -625,7 +654,6 @@ struct IntroView: View {
     @State private var showPlayersSheet = false
     @AppStorage(hasSeenPlayerSwitcherTooltipKey) private var hasSeenPlayerSwitcherTooltip = false
     // Programmatic navigation so buttons reliably push (NavigationLink in ScrollView can miss taps).
-    @State private var navigateToTrainNow = false
     @State private var warmupDisplayMode: DisplayMode = .colors
     @State private var snapshotMetricInfoToShow: (title: String, message: String)?
 
@@ -666,6 +694,16 @@ struct IntroView: View {
     private var continueTrainingCardActivity: ActivityKind {
         if pinnedActivity == .twoMinuteTest { return .awayFromPressure }
         return pinnedActivity
+    }
+
+    /// Route for the first screen of this activity’s flow (role selection). Train Now uses this so the whole flow stays on the path-based stack.
+    private func routeForTrainNowActivity(_ activity: ActivityKind) -> AppRoute {
+        switch activity {
+        case .twoMinuteTest: return .twoMinuteRoleSelection
+        case .awayFromPressure: return .awayFromPressureRoleSelection
+        case .dribbleOrPass: return .dribbleOrPassRoleSelection
+        case .oneTouchPassing: return .oneTouchPassingRoleSelection
+        }
     }
 
     /// Focus line for pinned Train Now card (from recommendation engine).
@@ -724,6 +762,14 @@ struct IntroView: View {
         .navigationTitle("Home")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            if AppConfig.testerMode {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Tester Tools") {
+                        router.push(.debugMenu)
+                    }
+                    .foregroundColor(.white.opacity(0.9))
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     hasSeenPlayerSwitcherTooltip = true
@@ -769,13 +815,6 @@ struct IntroView: View {
             PlayersSheetView(profileManager: profileManager)
         }
         .sheet(isPresented: $showHowItWorks) { HowItWorksView() }
-        .navigationDestination(isPresented: $navigateToTrainNow) {
-            introDestination(for: continueTrainingCardActivity)
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(popToRootTrigger)
-                .environmentObject(router)
-        }
         .overlay {
             if showStatusUpgrade, let s = upgradedStatus {
                 statusUpgradeToast(status: s)
@@ -881,7 +920,7 @@ struct IntroView: View {
                     .foregroundColor(.black.opacity(0.8))
 
                 Button {
-                    navigateToTrainNow = true
+                    router.push(routeForTrainNowActivity(continueTrainingCardActivity))
                 } label: {
                     Text("Train Now")
                         .font(.headline.weight(.semibold))

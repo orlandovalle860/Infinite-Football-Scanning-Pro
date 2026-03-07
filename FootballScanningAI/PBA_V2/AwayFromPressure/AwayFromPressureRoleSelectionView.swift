@@ -35,14 +35,7 @@ struct AwayFromPressureRoleSelectionView: View {
                 .padding(.horizontal, 28)
 
             VStack(spacing: 16) {
-                NavigationLink(destination: TrainingModeSelectionView(activityTitle: "Playing Away From Pressure") { mode in
-                    AwayFromPressureSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
-                }
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(popToRootTrigger)
-                .environmentObject(router)
-                ) {
+                NavigationLink(value: AppRoute.awayFromPressureTrainingModeSelection) {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             Image(systemName: "tv")

@@ -20,6 +20,8 @@ struct ProgressLineChartView: View {
     let points: [ChartDataPoint]
     let valueLabel: String  // e.g. "%", "s"
     let yAxisRange: (min: Double, max: Double)?  // nil = auto from data
+    /// When points.count < 2, show this instead of the chart. Nil = use default generic message.
+    var emptyStateMessage: String? = nil
 
     private var effectiveYRange: (min: Double, max: Double) {
         guard !points.isEmpty else { return (0, 100) }
@@ -38,7 +40,7 @@ struct ProgressLineChartView: View {
                 .foregroundColor(.white)
 
             if points.count < 2 {
-                Text("Complete at least 2 sessions to see your trend.")
+                Text(emptyStateMessage ?? "Complete at least 2 training sessions to see your trend.")
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.7))
                     .frame(maxWidth: .infinity, alignment: .leading)

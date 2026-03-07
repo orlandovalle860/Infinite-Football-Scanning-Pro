@@ -35,15 +35,26 @@ struct PBACurriculumView: View {
         ("One-Touch Passing", "Decide before the ball arrives.", .oneTouchPassing)
     ]
 
-    private let pathLineColor = Color.gray.opacity(0.58)
-    private let pathLineWidth: CGFloat = 2.5
-    private let ladderColumnWidth: CGFloat = 32
-    private let connectorHeight: CGFloat = 28
+    private let timelineIndicatorWidth: CGFloat = 48
+    private let rowSpacing: CGFloat = 22
     private var cardMaxWidth: CGFloat { horizontalSizeClass == .regular ? 820 : 700 }
     private let cardMinHeight: CGFloat = 150
-    private let ladderToCardSpacing: CGFloat = 12
-    private let circleSize: CGFloat = 18
-    private let circleStrokeWidth: CGFloat = 2.5
+
+    private enum StageState { case completed, current, locked }
+
+    private func stageState(for index: Int) -> StageState {
+        let activity = Self.activities[index].activity
+        let playerId = playerStore.selectedPlayerId
+        if !progressStore.isUnlocked(activity: activity, playerId: playerId) { return .locked }
+        if progressStore.isReady(activity: activity, playerId: playerId) { return .completed }
+        return .current
+    }
+
+    /// Stage mastery 0–100 from last 3 training blocks (same formula as dashboard decision score).
+    private func masteryPercent(for activity: ActivityKind) -> Int {
+        let list = progressStore.lastN(activity, n: 3, playerId: playerStore.selectedPlayerId)
+        return DashboardDecisionScore.score(from: Array(list))
+    }
 
     var body: some View {
         ZStack {
@@ -58,11 +69,11 @@ struct PBACurriculumView: View {
             .ignoresSafeArea()
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 28) {
+                VStack(alignment: .leading, spacing: rowSpacing) {
                     Text("Perception Training Path")
                         .font(.system(size: 34, weight: .bold))
                         .foregroundColor(.white)
-                        .padding(.leading, ladderColumnWidth + ladderToCardSpacing)
+                        .padding(.leading, timelineIndicatorWidth + 20)
 
                     curriculumRow(index: 0, title: "Playing Away From Pressure", subtitle: "Read danger and escape.", route: .awayFromPressureRoleSelection)
                     curriculumRow(index: 1, title: "Dribble or Pass", subtitle: "Choose action under pressure.", route: .dribbleOrPassRoleSelection)
@@ -94,65 +105,111 @@ struct PBACurriculumView: View {
         }
     }
 
-    /// One row: ladder segment (left) + activity card (right). HStack(alignment: .center) so dot aligns with card center.
+    /// One row: timeline indicator (left) + activity card (right). Dot is vertically centered with the card.
     private func curriculumRow(index: Int, title: String, subtitle: String, route: AppRoute) -> some View {
-        HStack(alignment: .center, spacing: ladderToCardSpacing) {
-            ladderSegmentForRow(index: index)
-            activityCard(title: title, subtitle: subtitle, route: route)
+        HStack(alignment: .center, spacing: 20) {
+            timelineIndicator(index: index)
+            activityCard(index: index, title: title, subtitle: subtitle, route: route)
         }
         .frame(maxWidth: cardMaxWidth, alignment: .leading)
     }
 
-    /// This row's ladder segment only: optional top line, circle, optional bottom line. Fixed heights so no shared long line.
-    private func ladderSegmentForRow(index: Int) -> some View {
-        let hasTopLine = index > 0
-        let hasBottomLine = index < Self.activities.count - 1
-        let isCurrent = index == 0
+    private static let completedColor = Color.green
+    private static let currentColor = Color.yellow
+    private static let lockedColor = Color.gray.opacity(0.4)
+
+    /// Fixed-width (40pt) timeline column. Flexible line above/below dot so dot sits at vertical center of card.
+    private func timelineIndicator(index: Int) -> some View {
+        let lastIndex = Self.activities.count - 1
+        let state = stageState(for: index)
+        // Completed: connector above and below = yellow. Current: above = yellow, below = gray. Locked: both = gray.
+        let topLineColor = index != 0 && (state == .completed || state == .current) ? Self.currentColor : Self.lockedColor
+        let bottomLineColor = index != lastIndex && state == .completed ? Self.currentColor : Self.lockedColor
 
         return VStack(spacing: 0) {
-            if hasTopLine {
+            if index != 0 {
                 Rectangle()
-                    .fill(pathLineColor)
-                    .frame(width: pathLineWidth, height: connectorHeight)
-            } else {
-                Color.clear
-                    .frame(width: pathLineWidth, height: connectorHeight)
+                    .fill(topLineColor)
+                    .frame(width: 2)
+                    .frame(maxHeight: .infinity)
             }
 
-            Group {
-                if isCurrent {
-                    Circle()
-                        .fill(Color.yellow)
-                        .frame(width: circleSize, height: circleSize)
-                } else {
-                    Circle()
-                        .stroke(Color.gray.opacity(0.9), lineWidth: circleStrokeWidth)
-                        .frame(width: circleSize, height: circleSize)
-                }
-            }
+            stageCircle(state: state)
 
-            if hasBottomLine {
+            if index != lastIndex {
                 Rectangle()
-                    .fill(pathLineColor)
-                    .frame(width: pathLineWidth, height: connectorHeight)
-            } else {
-                Color.clear
-                    .frame(width: pathLineWidth, height: connectorHeight)
+                    .fill(bottomLineColor)
+                    .frame(width: 2)
+                    .frame(maxHeight: .infinity)
             }
         }
-        .frame(width: ladderColumnWidth)
+        .frame(width: timelineIndicatorWidth)
+        .frame(maxHeight: .infinity)
     }
 
-    /// Card: dark rounded rect, title, subtitle, large yellow Train button (NavigationLink so path updates correctly). minHeight 150, padding 24.
-    private func activityCard(title: String, subtitle: String, route: AppRoute) -> some View {
-        VStack(alignment: .leading, spacing: 20) {
+    @ViewBuilder
+    private func stageCircle(state: StageState) -> some View {
+        switch state {
+        case .completed:
+            ZStack {
+                Circle()
+                    .fill(Color.green)
+                Image(systemName: "checkmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundColor(.white)
+            }
+            .frame(width: 14, height: 14)
+        case .current:
+            Circle()
+                .fill(Color.yellow)
+                .frame(width: 14, height: 14)
+        case .locked:
+            Circle()
+                .stroke(Color.gray.opacity(0.6), lineWidth: 2)
+                .frame(width: 14, height: 14)
+        }
+    }
+
+    /// Card: dark rounded rect, stage label, title, subtitle, mastery progress, large yellow Train button (NavigationLink so path updates correctly). minHeight 150, padding 24.
+    private func activityCard(index: Int, title: String, subtitle: String, route: AppRoute) -> some View {
+        let activity = Self.activities[index].activity
+        let mastery = masteryPercent(for: activity)
+
+        return VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 8) {
+                Text("Stage \(index + 1)")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+                    .padding(.bottom, 2)
                 Text(title)
                     .font(.headline)
                     .foregroundColor(.white)
                 Text(subtitle)
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.85))
+
+                Text("Mastery Progress")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+                    .padding(.top, 6)
+                    .padding(.bottom, 2)
+                HStack(alignment: .center, spacing: 8) {
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Color.white.opacity(0.15))
+                                .frame(height: 8)
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Color.yellow)
+                                .frame(width: max(0, geo.size.width * CGFloat(mastery) / 100), height: 8)
+                        }
+                    }
+                    .frame(height: 8)
+                    Text("\(mastery)%")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.9))
+                        .lineLimit(1)
+                }
             }
             NavigationLink(value: route) {
                 Text("Train")
@@ -166,7 +223,7 @@ struct PBACurriculumView: View {
             }
             .buttonStyle(PlainButtonStyle())
         }
-        .padding(28)
+        .padding(24)
         .frame(maxWidth: .infinity, minHeight: cardMinHeight, alignment: .leading)
         .background(Color.white.opacity(0.08))
         .cornerRadius(18)

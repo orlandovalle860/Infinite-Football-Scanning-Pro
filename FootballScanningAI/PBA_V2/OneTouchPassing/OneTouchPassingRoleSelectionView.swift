@@ -35,14 +35,7 @@ struct OneTouchPassingRoleSelectionView: View {
                 .padding(.horizontal, 28)
 
             VStack(spacing: 16) {
-                NavigationLink(destination: TrainingModeSelectionView(activityTitle: "One-Touch Passing") { mode in
-                    OneTouchPassingSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
-                }
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(popToRootTrigger)
-                .environmentObject(router)
-                ) {
+                NavigationLink(value: AppRoute.oneTouchPassingTrainingModeSelection) {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             Image(systemName: "tv")

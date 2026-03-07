@@ -81,12 +81,17 @@ struct OneTouchPassingSetupView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
+                    print("[SetupScreen OTP] Home tapped, router path count before = \(router.pathCount)")
                     router.popToRoot()
+                    print("[SetupScreen OTP] after popToRoot, router path count = \(router.pathCount)")
                 } label: {
                     Image(systemName: "house.fill")
                 }
                 .foregroundColor(.white.opacity(0.9))
             }
+        }
+        .onAppear {
+            print("[SetupScreen OTP] onAppear, router path count = \(router.pathCount)")
         }
     }
 }

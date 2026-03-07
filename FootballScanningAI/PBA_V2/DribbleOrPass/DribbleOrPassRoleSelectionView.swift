@@ -33,14 +33,7 @@ struct DribbleOrPassRoleSelectionView: View {
                 .padding(.horizontal, 28)
 
             VStack(spacing: 16) {
-                NavigationLink(destination: TrainingModeSelectionView(activityTitle: "Dribble or Pass") { mode in
-                    DribbleOrPassSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
-                }
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(popToRootTrigger)
-                .environmentObject(router)
-                ) {
+                NavigationLink(value: AppRoute.dribbleOrPassTrainingModeSelection) {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             Image(systemName: "tv")

@@ -24,6 +24,10 @@ enum AppRoute: Hashable {
     case trainingModeSelection(activityTitle: String)
     case twoMinuteSetup(mode: TrainingMode)
     case twoMinuteGetReady(mode: TrainingMode, difficulty: TestDifficulty)
+    /// Path from curriculum Train: role selection for each activity (avoids nested navigationDestination on curriculum).
+    case awayFromPressureRoleSelection
+    case dribbleOrPassRoleSelection
+    case oneTouchPassingRoleSelection
 }
 
 final class AppRouter: ObservableObject {
@@ -40,9 +44,11 @@ final class AppRouter: ObservableObject {
     }
 
     func push(_ route: AppRoute) {
-        var p = path
-        p.append(route)
-        path = p
+        withAnimation(.easeInOut(duration: 0.35)) {
+            var p = path
+            p.append(route)
+            path = p
+        }
     }
 
     /// Call from any screen (e.g. toolbar home button or Leave in alert) to return to Home.

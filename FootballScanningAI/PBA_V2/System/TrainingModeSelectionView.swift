@@ -38,27 +38,21 @@ struct TrainingModeSelectionView<Next: View>: View {
 
             VStack(spacing: 16) {
                 ForEach(TrainingMode.allCases, id: \.self) { mode in
-                    modeButton(mode: mode)
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack {
-                                Image(systemName: mode.systemImage)
-                                Text(mode.rawValue)
-                                    .font(.system(size: 20, weight: .bold, design: .rounded))
-                            }
-                            Text(mode.shortDescription)
-                                .font(.footnote)
-                                .foregroundColor(mode == .partner ? .black.opacity(0.8) : .white.opacity(0.9))
-                                .multilineTextAlignment(.leading)
+                    if onSelectMode != nil {
+                        Button {
+                            onSelectMode?(mode)
+                        } label: {
+                            modeRowLabel(mode: mode)
                         }
-                        .foregroundColor(mode == .partner ? .black : .white)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 20)
-                        .padding(.horizontal, 24)
-                        .background(mode == .partner ? Color.yellow : Color.white.opacity(0.12))
-                        .cornerRadius(18)
+                        .buttonStyle(PlainButtonStyle())
+                        .padding(.horizontal, 28)
+                    } else if let next = nextDestination {
+                        NavigationLink(destination: next(mode)) {
+                            modeRowLabel(mode: mode)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        .padding(.horizontal, 28)
                     }
-                    .buttonStyle(PlainButtonStyle())
-                    .padding(.horizontal, 28)
                 }
             }
 
@@ -79,5 +73,25 @@ struct TrainingModeSelectionView<Next: View>: View {
         .preferredColorScheme(.dark)
         .navigationTitle(activityTitle)
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func modeRowLabel(mode: TrainingMode) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Image(systemName: mode.systemImage)
+                Text(mode.rawValue)
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
+            }
+            Text(mode.shortDescription)
+                .font(.footnote)
+                .foregroundColor(mode == .partner ? .black.opacity(0.8) : .white.opacity(0.9))
+                .multilineTextAlignment(.leading)
+        }
+        .foregroundColor(mode == .partner ? .black : .white)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 20)
+        .padding(.horizontal, 24)
+        .background(mode == .partner ? Color.yellow : Color.white.opacity(0.12))
+        .cornerRadius(18)
     }
 }

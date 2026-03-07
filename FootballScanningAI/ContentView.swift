@@ -312,6 +312,10 @@ struct ContentView: View {
     @StateObject private var settingsViewModel = SettingsViewModel()
     @StateObject private var profileManager = UserProfileManager()
     @StateObject private var router = AppRouter()
+    /// Injected at root so any screen (including navigation destinations) can use @EnvironmentObject.
+    @StateObject private var progressStore = ProgressStore()
+    @StateObject private var playerStore = PlayerStore()
+    @StateObject private var popToRootTrigger = PopToRootTrigger()
     @AppStorage("hasCompletedInitialTest") private var hasCompletedInitialTest = false
     /// When this changes, MainAppView’s navigation stack is recreated so Home/Leave actually pops to root.
     @State private var mainStackId = UUID()
@@ -330,6 +334,10 @@ struct ContentView: View {
                 ProfileCreationView(profileManager: profileManager)
             }
         }
+        .environmentObject(progressStore)
+        .environmentObject(playerStore)
+        .environmentObject(popToRootTrigger)
+        .environmentObject(router)
         .navigationViewStyle(.stack)
         .environment(\.sizeCategory, .large)
         .environment(\.colorScheme, .dark)
@@ -351,31 +359,42 @@ struct MainAppView: View {
     var onPopToRoot: (() -> Void)?
     @ObservedObject var router: AppRouter
     @EnvironmentObject private var multipeerManager: MultipeerManager
-    @StateObject private var progressStore = ProgressStore()
-    @StateObject private var playerStore = PlayerStore()
-    @StateObject private var popToRootTrigger = PopToRootTrigger()
+    @EnvironmentObject private var progressStore: ProgressStore
+    @EnvironmentObject private var playerStore: PlayerStore
+    @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
     @State private var showsTopToggle: Bool = true
     @AppStorage(hasCompletedInitialTestKey) private var hasCompletedInitialTest = false
     @AppStorage(coachDeviceShownHomeKey) private var coachDeviceShownHome = false
 
+    @ViewBuilder
+    private var rootView: some View {
+        Group {
+            if hasCompletedInitialTest || coachDeviceShownHome {
+                HomeDashboardView(
+                    profileManager: profileManager,
+                    settingsViewModel: settingsViewModel,
+                    showsTopToggle: $showsTopToggle
+                )
+            } else {
+                IntroOnboardingView(
+                    settingsViewModel: settingsViewModel,
+                    profileManager: profileManager
+                )
+            }
+        }
+        .environmentObject(progressStore)
+        .environmentObject(playerStore)
+        .environmentObject(popToRootTrigger)
+        .environmentObject(router)
+    }
+
     var body: some View {
         Group {
             NavigationStack(path: router.pathBinding) {
-                if hasCompletedInitialTest || coachDeviceShownHome {
-                    HomeDashboardView(
-                        profileManager: profileManager,
-                        settingsViewModel: settingsViewModel,
-                        showsTopToggle: $showsTopToggle
-                    )
-                } else {
-                    IntroOnboardingView(
-                        settingsViewModel: settingsViewModel,
-                        profileManager: profileManager
-                    )
-                }
-            }
-            .navigationDestination(for: AppRoute.self) { route in
-                routeView(for: route)
+                rootView
+                    .navigationDestination(for: AppRoute.self) { route in
+                        routeView(for: route)
+                    }
             }
         }
         .id(stackId)
@@ -412,11 +431,17 @@ struct MainAppView: View {
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
         case .curriculum:
-            PBACurriculumView(settingsViewModel: settingsViewModel, profileManager: profileManager)
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(popToRootTrigger)
-                .environmentObject(router)
+            PBACurriculumView(
+                settingsViewModel: settingsViewModel,
+                profileManager: profileManager,
+                progressStore: progressStore,
+                playerStore: playerStore,
+                popToRootTrigger: popToRootTrigger
+            )
+            .environmentObject(progressStore)
+            .environmentObject(playerStore)
+            .environmentObject(popToRootTrigger)
+            .environmentObject(router)
         case .progress:
             PlayerDashboardView(profileManager: profileManager, settingsViewModel: settingsViewModel)
                 .environmentObject(progressStore)
@@ -441,6 +466,24 @@ struct MainAppView: View {
                 .environmentObject(router)
         case .twoMinuteGetReady(let mode, let difficulty):
             TwoMinuteGetReadyView(mode: mode, config: TwoMinuteTestConfig.config(for: difficulty), settingsViewModel: settingsViewModel, profileManager: profileManager)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
+        case .awayFromPressureRoleSelection:
+            AwayFromPressureRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
+        case .dribbleOrPassRoleSelection:
+            DribbleOrPassRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
+        case .oneTouchPassingRoleSelection:
+            OneTouchPassingRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
@@ -881,6 +924,9 @@ struct IntroView: View {
 
     private var curriculumPreviewCard: some View {
         Button {
+            #if DEBUG
+            print("[Home] Perception Training Path card tapped → pushing AppRoute.curriculum")
+            #endif
             router.push(.curriculum)
         } label: {
             VStack(alignment: .leading, spacing: 10) {

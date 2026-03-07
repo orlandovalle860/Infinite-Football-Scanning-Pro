@@ -6,7 +6,8 @@
 //
 
 import Testing
-@testable import InfiniteFootballScanningPro
+@tes
+table import InfiniteFootballScanningPro
 
 struct TrainingRecommendationTests {
 

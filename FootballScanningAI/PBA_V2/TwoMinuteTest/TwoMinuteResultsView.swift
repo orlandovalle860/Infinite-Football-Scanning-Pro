@@ -191,7 +191,7 @@ struct TwoMinuteResultsView: View {
             didSave = true
         }
         .navigationDestination(isPresented: $navigateToCurriculum) {
-            PBACurriculumView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+            PBACurriculumView(settingsViewModel: settingsViewModel, profileManager: profileManager, progressStore: progressStore, playerStore: playerStore, popToRootTrigger: popToRootTrigger)
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)

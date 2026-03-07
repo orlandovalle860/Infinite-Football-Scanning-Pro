@@ -11,7 +11,6 @@ struct TrainingHistoryView: View {
         case numbers = "Numbers"
         case arrows = "Arrows"
         case lanes = "Lanes"
-        case criticalScan = "Critical Scan"
         case fourGoalGame = "4-Goal Game"
     }
     
@@ -30,8 +29,6 @@ struct TrainingHistoryView: View {
                 return session.displayMode == .colorsArrows
             case .lanes:
                 return session.displayMode == .lanes
-            case .criticalScan:
-                return session.displayMode == .criticalScan
             case .fourGoalGame:
                 return session.displayMode == .fourGoalGame
             }

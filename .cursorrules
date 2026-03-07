@@ -1,0 +1,9 @@
+# FootballScanningAI — Cursor rules
+
+## PBA V2 — Two-Minute Critical Scan (Display)
+
+- **Overlay during starVisible:** The overlay text (status/coaching copy at the bottom) must fade out or reduce opacity during `starVisible` so the star is the focus. Keep this behavior when changing the display view.
+
+## Layout and scrolling
+
+- **Opening screen only:** The intro screen (“Do you know what you're going to do before the ball reaches you?”) may use `ScrollView` on small devices so all content is visible. Other PBA/flow screens stay non-scrolling unless explicitly required.

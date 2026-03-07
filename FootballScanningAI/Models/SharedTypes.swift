@@ -82,14 +82,12 @@ struct CustomAction: Codable, Identifiable {
     }
 }
 
-enum DisplayMode: String, Codable, CaseIterable {
+enum DisplayMode: String, Codable, CaseIterable, Hashable {
     case colors = "Colors"
     case colorsNumbers = "Colors & Numbers"
     case colorsArrows = "Colors & Arrows"
     case numbers = "Numbers"
     case lanes = "Lanes"
-    case criticalScan = "Critical Scan"
-    case criticalScanArrows = "Critical Scan Arrows"
     case scanningGame = "Dribble or Pass"
     case pressureResponse = "Playing Away from Pressure"
     case oneTouchPassing = "One-Touch Passing"

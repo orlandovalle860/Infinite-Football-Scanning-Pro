@@ -6,7 +6,7 @@
 //
 
 import Testing
-@testable import FootballScanningAI
+@testable import InfiniteFootballScanningPro
 
 struct FootballScanningAITests {
 

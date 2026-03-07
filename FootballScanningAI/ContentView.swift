@@ -11,6 +11,7 @@ import WebKit
 import AVFoundation
 import AudioToolbox
 import UIKit
+import Combine
 
 struct DisplayModeButtonStyle: ButtonStyle {
     let isSelected: Bool
@@ -310,98 +311,222 @@ struct SplashScreen: View {
 struct ContentView: View {
     @StateObject private var settingsViewModel = SettingsViewModel()
     @StateObject private var profileManager = UserProfileManager()
-    
+    @StateObject private var router = AppRouter()
+    @AppStorage("hasCompletedInitialTest") private var hasCompletedInitialTest = false
+    /// When this changes, MainAppView’s navigation stack is recreated so Home/Leave actually pops to root.
+    @State private var mainStackId = UUID()
+
     var body: some View {
         Group {
-            if profileManager.isProfileCreated {
-                // User has profiles - show main app with tabs
-                MainAppView(profileManager: profileManager, settingsViewModel: settingsViewModel)
+            if AppConfig.testerMode {
+                DebugMenuView(profileManager: profileManager, settingsViewModel: settingsViewModel)
+            } else if profileManager.isProfileCreated {
+                MainAppView(profileManager: profileManager, settingsViewModel: settingsViewModel, stackId: $mainStackId, onPopToRoot: nil, router: router)
+                    .id(mainStackId)
+            } else if !hasCompletedInitialTest {
+                MainAppView(profileManager: profileManager, settingsViewModel: settingsViewModel, stackId: $mainStackId, onPopToRoot: nil, router: router)
+                    .id(mainStackId)
             } else {
-                // No profiles - show profile creation
                 ProfileCreationView(profileManager: profileManager)
             }
         }
         .navigationViewStyle(.stack)
-        .environment(\.sizeCategory, .large) // Force consistent sizing
-        .environment(\.colorScheme, .dark) // Force dark mode for consistency
+        .environment(\.sizeCategory, .large)
+        .environment(\.colorScheme, .dark)
+        .onAppear {
+            router.onPopToRoot = { DispatchQueue.main.async { mainStackId = UUID() } }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .requestPopToRoot).receive(on: RunLoop.main)) { _ in
+            DispatchQueue.main.async { mainStackId = UUID() }
+        }
     }
 }
+
+private let coachDeviceShownHomeKey = "coachDeviceShownHome"
 
 struct MainAppView: View {
     @ObservedObject var profileManager: UserProfileManager
     @ObservedObject var settingsViewModel: SettingsViewModel
+    @Binding var stackId: UUID
+    var onPopToRoot: (() -> Void)?
+    @ObservedObject var router: AppRouter
     @EnvironmentObject private var multipeerManager: MultipeerManager
     @StateObject private var progressStore = ProgressStore()
     @StateObject private var playerStore = PlayerStore()
+    @StateObject private var popToRootTrigger = PopToRootTrigger()
     @State private var showsTopToggle: Bool = true
+    @AppStorage(hasCompletedInitialTestKey) private var hasCompletedInitialTest = false
+    @AppStorage(coachDeviceShownHomeKey) private var coachDeviceShownHome = false
 
     var body: some View {
-        NavigationStack {
-            IntroView(
-                profileManager: profileManager,
-                settingsViewModel: settingsViewModel,
-                showsTopToggle: $showsTopToggle
-            )
+        Group {
+            NavigationStack(path: router.pathBinding) {
+                if hasCompletedInitialTest || coachDeviceShownHome {
+                    HomeDashboardView(
+                        profileManager: profileManager,
+                        settingsViewModel: settingsViewModel,
+                        showsTopToggle: $showsTopToggle
+                    )
+                } else {
+                    IntroOnboardingView(
+                        settingsViewModel: settingsViewModel,
+                        profileManager: profileManager
+                    )
+                }
+            }
+            .navigationDestination(for: AppRoute.self) { route in
+                routeView(for: route)
+            }
         }
+        .id(stackId)
         .environmentObject(multipeerManager)
         .environmentObject(progressStore)
         .environmentObject(playerStore)
+        .environmentObject(popToRootTrigger)
+        .environmentObject(router)
         .onAppear {
+            if let onPopToRoot { router.onPopToRoot = onPopToRoot }
             progressStore.load()
             playerStore.load()
             playerStore.createDefaultIfNeeded()
         }
     }
-}
 
-/// Card style for Start Page sections: fill, stroke, rounded corners.
-struct StartPageCardStyle: ViewModifier {
-    func body(content: Content) -> some View {
-        content
-            .padding()
-            .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(Color.white.opacity(0.05))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 16)
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
-            )
+    @ViewBuilder
+    private func routeView(for route: AppRoute) -> some View {
+        switch route {
+        case .twoMinuteRoleSelection:
+            TwoMinuteRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
+        case .coachRemote:
+            CoachRemoteHubView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
+        case .twoMinuteCoachRemote:
+            TwoMinuteCoachRemoteView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
+        case .curriculum:
+            PBACurriculumView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
+        case .progress:
+            PlayerDashboardView(profileManager: profileManager, settingsViewModel: settingsViewModel)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
+        case .warmup(let mode):
+            MainView(settingsViewModel: settingsViewModel, profileManager: profileManager, displayMode: mode)
+        case .trainingModeSelection(let activityTitle):
+            TrainingModeSelectionView(activityTitle: activityTitle, onSelectMode: { mode in
+                router.push(.twoMinuteSetup(mode: mode))
+            }) { _ in EmptyView() }
+            .environmentObject(progressStore)
+            .environmentObject(playerStore)
+            .environmentObject(popToRootTrigger)
+            .environmentObject(router)
+        case .twoMinuteSetup(let mode):
+            TwoMinuteTestSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
+        case .twoMinuteGetReady(let mode, let difficulty):
+            TwoMinuteGetReadyView(mode: mode, config: TwoMinuteTestConfig.config(for: difficulty), settingsViewModel: settingsViewModel, profileManager: profileManager)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
+        }
     }
 }
 
-struct IntroView: View {
-    @ObservedObject var profileManager: UserProfileManager
+/// SCREEN 1 — INTRO ONBOARDING. Shown when hasCompletedInitialTest == false.
+struct IntroOnboardingView: View {
     @ObservedObject var settingsViewModel: SettingsViewModel
-    @Binding var showsTopToggle: Bool
+    @ObservedObject var profileManager: UserProfileManager
     @EnvironmentObject private var progressStore: ProgressStore
     @EnvironmentObject private var playerStore: PlayerStore
+    @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
+    @EnvironmentObject private var router: AppRouter
     @State private var showHowItWorks = false
-    @State private var showStatusUpgrade = false
-    @State private var upgradedStatus: PlayerStatus?
-
-    private var playerId: UUID? { playerStore.selectedPlayerId }
-    private var last5: [SessionRecord] { progressStore.last5TrainingBlocks(playerId: playerId) }
-    private var consistencyLabel: ConsistencyLabel { DashboardConsistency.label(from: last5) }
-    private var decisionScore: Int { DashboardDecisionScore.score(from: last5) }
-    private var status: PlayerStatus { DashboardDecisionScore.status(score: decisionScore, consistencyLabel: consistencyLabel) }
-    private var recommendation: Recommendation { RecommendationEngine.recommendation(progressStore: progressStore, playerId: playerId) }
-    private var dailyCompleted: Int { DailyTargetState.completedBlocksToday(playerId: playerId) }
-    private var dailyTarget: Int { DailyTargetState.targetBlocksPerDay }
-    private var hasAnyBlock: Bool { !last5.isEmpty }
-
-    /// Focus line for Train Now card from last training block (priority: slow → low accuracy → bias → strong).
-    private var focusText: String? {
-        guard let last = last5.first else { return nil }
-        if last.speedBucket == .slow { return "decide earlier before the ball arrives" }
-        if last.correct <= 7 { return "find the safe option" }
-        if let b = last.bias, !b.isEmpty, b != "None", b != "Balanced" { return "scan the whole field" }
-        if last.correct >= 10 { return "repeat this level" }
-        return nil
-    }
 
     var body: some View {
-        ZStack {
+        ScrollView {
+            VStack(spacing: 24) {
+                Spacer(minLength: 32)
+                Text("Do you know what you're going to do before the ball reaches you?")
+                    .font(.system(size: 26, weight: .bold, design: .rounded))
+                    .foregroundColor(.white)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                Text("Elite players do.")
+                    .font(.title3)
+                    .foregroundColor(.white.opacity(0.9))
+                Text("No sign-up. Just start.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.7))
+                    .padding(.top, 4)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("You only need:")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white.opacity(0.9))
+                    Text("• a ball")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.85))
+                    Text("• a partner (or a wall)")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.85))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 32)
+                .padding(.top, 8)
+                Spacer(minLength: 24)
+                Button {
+                    router.push(.twoMinuteRoleSelection)
+                } label: {
+                    Text("Start 2-Minute Test")
+                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .foregroundColor(.black)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 18)
+                        .background(Color.yellow)
+                        .cornerRadius(16)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(PlainButtonStyle())
+                .padding(.horizontal, 28)
+                Button {
+                    UserDefaults.standard.set(true, forKey: coachDeviceShownHomeKey)
+                } label: {
+                    Text("I'm the coach — open Coach Remote")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundColor(.white.opacity(0.9))
+                }
+                .buttonStyle(PlainButtonStyle())
+                .padding(.top, 8)
+                Spacer(minLength: 32)
+                Button {
+                    showHowItWorks = true
+                } label: {
+                    Text("How it works")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.8))
+                }
+                .buttonStyle(PlainButtonStyle())
+                Spacer(minLength: 48)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
             LinearGradient(
                 gradient: Gradient(colors: [
                     Color(red: 0.05, green: 0.05, blue: 0.1),
@@ -411,33 +536,117 @@ struct IntroView: View {
                 endPoint: .bottom
             )
             .ignoresSafeArea()
+        )
+        .preferredColorScheme(.dark)
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showHowItWorks) {
+            HowItWorksView()
+        }
+    }
+}
 
-            ScrollView(.vertical, showsIndicators: false) {
+/// Card style for Home dashboard: consistent for all non-pinned cards.
+struct StartPageCardStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 18)
+                    .fill(Color.white.opacity(0.05))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            )
+    }
+}
+
+private let hasSeenPlayerSwitcherTooltipKey = "hasSeenPlayerSwitcherTooltip"
+
+/// SCREEN 8 — HOME DASHBOARD. Main app after onboarding. Pinned Train Now + scrollable cards.
+typealias HomeDashboardView = IntroView
+
+struct IntroView: View {
+    @ObservedObject var profileManager: UserProfileManager
+    @ObservedObject var settingsViewModel: SettingsViewModel
+    @Binding var showsTopToggle: Bool
+    @EnvironmentObject private var progressStore: ProgressStore
+    @EnvironmentObject private var playerStore: PlayerStore
+    @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
+    @EnvironmentObject private var router: AppRouter
+    @State private var showHowItWorks = false
+    @State private var showStatusUpgrade = false
+    @State private var upgradedStatus: PlayerStatus?
+    @State private var showPlayersSheet = false
+    @AppStorage(hasSeenPlayerSwitcherTooltipKey) private var hasSeenPlayerSwitcherTooltip = false
+    // Programmatic navigation so buttons reliably push (NavigationLink in ScrollView can miss taps).
+    @State private var navigateToTrainNow = false
+    @State private var warmupDisplayMode: DisplayMode = .colors
+    @State private var snapshotMetricInfoToShow: (title: String, message: String)?
+
+    private var playerId: UUID? { playerStore.selectedPlayerId }
+    private var last5: [SessionRecord] { progressStore.last5TrainingBlocks(playerId: playerId) }
+    private var consistencyLabel: ConsistencyLabel { DashboardConsistency.label(from: last5) }
+    private var decisionScore: Int { DashboardDecisionScore.score(from: last5) }
+    private var status: PlayerStatus { DashboardDecisionScore.status(score: decisionScore, consistencyLabel: consistencyLabel) }
+    private var dailyCompleted: Int { DailyTargetState.completedBlocksToday(playerId: playerId) }
+    private var dailyTarget: Int { DailyTargetState.targetBlocksPerDay }
+    private var hasAnyBlock: Bool { !last5.isEmpty }
+    private var trainingStreakDays: Int { profileManager.trainingStreakDays() }
+    @AppStorage(hasCompletedInitialTestKey) private var hasCompletedInitialTest = false
+
+    private var lastAFPSessionResult: SessionResult? {
+        profileManager.recentTrainSessions(limit: 20).first { $0.activityType == .awayFromPressure }
+    }
+
+    /// Most recent session (any activity) for Scan Efficiency snapshot.
+    private var mostRecentSessionResult: SessionResult? {
+        profileManager.recentTrainSessions(limit: 1).first
+    }
+
+    /// Scan Efficiency 0–100 from most recent session (accuracy + first-touch + speed).
+    private var scanEfficiencyScore: Int? {
+        guard let s = mostRecentSessionResult else { return nil }
+        return Int(round(ScanEfficiency.score(from: s)))
+    }
+    /// Automatic recommendation by player level with overrides for timing, bias, consistency. Updates when level/timing/bias/consistency change.
+    private var trainingRecommendation: TrainingRecommendationResult {
+        TrainingRecommendation.recommend(progressStore: progressStore, playerId: playerId, last5: last5, hasCompletedInitialTest: hasCompletedInitialTest, lastAFPSessionResult: lastAFPSessionResult)
+    }
+
+    /// Pinned row never promotes "Take Test" after the initial test; 2-Minute Test remains in the scroll.
+    private var pinnedActivity: ActivityKind { trainingRecommendation.activity }
+
+    /// Activity shown in the yellow card. Never 2-Minute Test; when recommendation is test, show first training activity so the card is always visible.
+    private var continueTrainingCardActivity: ActivityKind {
+        if pinnedActivity == .twoMinuteTest { return .awayFromPressure }
+        return pinnedActivity
+    }
+
+    /// Focus line for pinned Train Now card (from recommendation engine).
+    private var focusText: String { trainingRecommendation.focusLine }
+    private var coachTipText: String { trainingRecommendation.coachTip }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            continueTrainingPinnedCard
+                .padding(.horizontal, 20)
+                .padding(.top, 10)
+                .padding(.bottom, 10)
+                .background(.ultraThinMaterial)
+                .background(Rectangle().fill(.black.opacity(0.4)))
+                .shadow(color: .black.opacity(0.3), radius: 12, y: 6)
+
+            ScrollView(.vertical, showsIndicators: true) {
                 VStack(spacing: 12) {
-                    Text("Do you know what you're going to do\nbefore the ball reaches you?")
-                        .font(.system(size: 32, weight: .bold, design: .rounded))
-                        .lineSpacing(4)
-                        .multilineTextAlignment(.center)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 24)
-                    Text("Elite players do.")
-                        .font(.subheadline)
-                        .foregroundColor(.white.opacity(0.75))
-                    Text("Train Perception Before Action.")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.5))
-                        .padding(.bottom, 4)
+                    Color.clear.frame(height: 12)
 
-                    snapshotCard
-                        .modifier(StartPageCardStyle())
-
-                    dailyTargetCard
+                    playerSnapshotCard
                         .modifier(StartPageCardStyle())
 
                     curriculumPreviewCard
-                        .modifier(StartPageCardStyle())
-
-                    scanWarmupsCard
                         .modifier(StartPageCardStyle())
 
                     twoMinuteTestCard
@@ -446,16 +655,8 @@ struct IntroView: View {
                     progressCard
                         .modifier(StartPageCardStyle())
 
-                    Button {
-                        showHowItWorks = true
-                    } label: {
-                        Text("How it works")
-                            .font(.footnote)
-                            .foregroundColor(.white.opacity(0.55))
-                            .underline()
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    .padding(.top, 4)
+                    scanWarmupsCard
+                        .modifier(StartPageCardStyle())
 
                     Spacer(minLength: 40)
                 }
@@ -463,19 +664,75 @@ struct IntroView: View {
                 .padding(.top, 12)
                 .padding(.bottom, 24)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            ZStack {
-                Rectangle()
-                    .fill(.ultraThinMaterial)
-                continueTrainingPinnedCard
-                    .padding(.horizontal, 20)
-                    .padding(.top, 10)
-                    .padding(.bottom, 10)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
+            LinearGradient(
+                gradient: Gradient(colors: [
+                    Color(red: 0.05, green: 0.05, blue: 0.1),
+                    Color(red: 0.1, green: 0.1, blue: 0.15)
+                ]),
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+        )
+        .navigationTitle("Home")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    hasSeenPlayerSwitcherTooltip = true
+                    showPlayersSheet = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Text("Player: \(profileManager.currentProfile?.name ?? "Player")")
+                            .lineLimit(1)
+                        Text("▾")
+                            .font(.caption)
+                    }
+                    .font(.subheadline.weight(.medium))
+                    .foregroundColor(.white.opacity(0.95))
+                }
+                .accessibilityHint("Tap to switch players.")
             }
-            .shadow(color: .black.opacity(0.25), radius: 10, y: 6)
+        }
+        .overlay(alignment: .topTrailing) {
+            if !hasSeenPlayerSwitcherTooltip {
+                Text("Tap here to switch players.")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.85))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.white.opacity(0.15))
+                    .cornerRadius(8)
+                    .padding(.top, 56)
+                    .padding(.trailing, 16)
+                    .allowsHitTesting(false)
+            }
+        }
+        .alert(snapshotMetricInfoToShow?.title ?? "", isPresented: Binding(
+            get: { snapshotMetricInfoToShow != nil },
+            set: { if !$0 { snapshotMetricInfoToShow = nil } }
+        )) {
+            Button("OK", role: .cancel) { snapshotMetricInfoToShow = nil }
+        } message: {
+            if let msg = snapshotMetricInfoToShow?.message {
+                Text(msg)
+            }
+        }
+        .sheet(isPresented: $showPlayersSheet) {
+            PlayersSheetView(profileManager: profileManager)
         }
         .sheet(isPresented: $showHowItWorks) { HowItWorksView() }
+        .navigationDestination(isPresented: $navigateToTrainNow) {
+            introDestination(for: continueTrainingCardActivity)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
+        }
         .overlay {
             if showStatusUpgrade, let s = upgradedStatus {
                 statusUpgradeToast(status: s)
@@ -484,155 +741,240 @@ struct IntroView: View {
         .onAppear {
             showsTopToggle = false
             checkStatusUpgrade()
+            popToRootTrigger.request = false
         }
         .onDisappear { showsTopToggle = true }
     }
 
-    private var snapshotCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
+    private var playerSnapshotCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Your Snapshot")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.white)
             if hasAnyBlock {
-                HStack(alignment: .firstTextBaseline) {
-                    Text("Decision Score:")
-                        .font(.subheadline)
-                        .foregroundColor(.white.opacity(0.8))
-                    Text("\(decisionScore)")
-                        .font(.system(size: 36, weight: .bold, design: .rounded))
-                        .foregroundColor(.yellow)
-                }
-                Text("Status: \(status.rawValue)")
+                Text("Decision Score: \(decisionScore)")
                     .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.8))
+                    .foregroundColor(.white.opacity(0.9))
+                Text("Player Level: \(PlayerDevelopmentLevel.level(fromScore: decisionScore).rawValue)")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.9))
                 Text("Consistency: \(consistencyLabel.rawValue)")
                     .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.8))
+                    .foregroundColor(.white.opacity(0.9))
+                if let scan = scanEfficiencyScore {
+                    HStack(spacing: 6) {
+                        Text("Scan Efficiency: \(scan)")
+                            .font(.subheadline)
+                            .foregroundColor(.white.opacity(0.9))
+                        if let msg = MetricExplanations.message(for: "Scan Efficiency") {
+                            Button {
+                                snapshotMetricInfoToShow = ("Scan Efficiency", msg)
+                            } label: {
+                                Image(systemName: "info.circle")
+                                    .font(.subheadline)
+                                    .foregroundColor(.white.opacity(0.6))
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                        }
+                    }
+                }
             } else {
                 Text("Run your first block to get your score.")
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.8))
             }
+            Text(trainingStreakDays == 1 ? "🔥 1 Day Training Streak" : "🔥 \(trainingStreakDays) Days Training Streak")
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.9))
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var dailyTargetCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if dailyCompleted >= dailyTarget {
-                Text("Target Complete ✓")
-                    .font(.headline)
-                    .foregroundColor(.green)
-                Text("Good work today.")
+    /// Pinned at top: current training session card (recommendation + today's goal + Train Now). Coach Remote overlaid in corner.
+    private var continueTrainingPinnedCard: some View {
+        ZStack(alignment: .topTrailing) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("NEXT TRAINING")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.black.opacity(0.7))
+
+                Text(RecommendationEngine.activityTitle(continueTrainingCardActivity))
+                    .font(.title3)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.black)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text("Focus: \(focusText)")
                     .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.85))
-                Text("Come back tomorrow and keep building your decision speed.")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.6))
-                NavigationLink(destination: PBAProgressView(settingsViewModel: settingsViewModel, profileManager: profileManager)) {
-                    Text("View Progress")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(.black)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(Color.yellow)
-                        .cornerRadius(12)
-                }
-                .buttonStyle(PlainButtonStyle())
-            } else {
-                Text("Today's Target")
-                    .font(.headline)
-                    .foregroundColor(.white)
+                    .foregroundColor(.black)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(2)
+
+                Text("Coach Tip: \(coachTipText)")
+                    .font(.subheadline)
+                    .foregroundColor(.black)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(2)
+
+                Text("Today's Goal")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.black.opacity(0.7))
+                    .padding(.top, 2)
+
                 GeometryReader { g in
                     ZStack(alignment: .leading) {
                         RoundedRectangle(cornerRadius: 6)
-                            .fill(Color.white.opacity(0.2))
+                            .fill(Color.black.opacity(0.15))
                             .frame(height: 10)
                         RoundedRectangle(cornerRadius: 6)
-                            .fill(Color.yellow)
-                            .frame(width: max(0, g.size.width * CGFloat(min(dailyCompleted, dailyTarget)) / CGFloat(dailyTarget)), height: 10)
+                            .fill(Color.black.opacity(0.5))
+                            .frame(width: max(0, g.size.width * CGFloat(min(dailyCompleted, dailyTarget)) / CGFloat(max(1, dailyTarget))), height: 10)
                     }
                 }
                 .frame(height: 10)
-                Text("\(min(dailyCompleted, dailyTarget))/\(dailyTarget) blocks")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.7))
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
 
-    /// Pinned at top via safeAreaInset: title, activity, description, focus, Train Now button.
-    private var continueTrainingPinnedCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Continue Training")
-                .font(.caption)
-                .foregroundColor(.yellow)
-            Text(RecommendationEngine.activityTitle(recommendation.nextActivity))
-                .font(.title3.weight(.bold))
-                .foregroundColor(.white)
-            Text(recommendation.rationale)
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.85))
-            if let focus = focusText {
-                Text("Focus: \(focus)")
-                    .font(.footnote)
-                    .foregroundColor(.yellow.opacity(0.9))
+                Text("\(min(dailyCompleted, dailyTarget)) / \(dailyTarget) blocks complete")
+                    .font(.caption)
+                    .foregroundColor(.black.opacity(0.8))
+
+                Button {
+                    navigateToTrainNow = true
+                } label: {
+                    Text("Train Now")
+                        .font(.headline.weight(.semibold))
+                        .foregroundColor(.black)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(Color.white.opacity(0.95))
+                        .cornerRadius(12)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(PlainButtonStyle())
+                .accessibilityLabel("Train now. \(RecommendationEngine.activityTitle(continueTrainingCardActivity)). Focus: \(focusText). Coach Tip: \(coachTipText).")
+                .accessibilityHint("Double tap to start training.")
             }
-            NavigationLink(destination: introDestination(for: recommendation.nextActivity)) {
-                Text(recommendation.nextActivity == .twoMinuteTest ? "Take Test" : "Train Now")
-                    .font(.system(size: 20, weight: .bold, design: .rounded))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+            .background(Color.yellow)
+            .cornerRadius(16)
+
+            Button {
+                router.push(.coachRemote)
+            } label: {
+                Text("Coach Remote")
+                    .font(.caption.weight(.semibold))
                     .foregroundColor(.black)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 18)
-                    .background(Color.yellow)
-                    .cornerRadius(16)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.white.opacity(0.9))
+                    .cornerRadius(8)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(PlainButtonStyle())
+            .accessibilityHint("Double tap to open Coach Remote.")
+            .padding(8)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding()
-        .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color.white.opacity(0.05))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        )
+        .padding(.horizontal, 4)
+        .padding(.vertical, 4)
     }
 
     private var curriculumPreviewCard: some View {
+        Button {
+            router.push(.curriculum)
+        } label: {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Perception Training Path")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                pathRow("Playing Away From Pressure", sublabel: pathSublabel(.awayFromPressure), activity: .awayFromPressure, isRecommended: continueTrainingCardActivity == .awayFromPressure)
+                pathRow("Dribble or Pass", sublabel: pathSublabel(.dribbleOrPass), activity: .dribbleOrPass, isRecommended: continueTrainingCardActivity == .dribbleOrPass)
+                pathRow("One-Touch Passing", sublabel: pathSublabel(.oneTouchPassing), activity: .oneTouchPassing, isRecommended: continueTrainingCardActivity == .oneTouchPassing)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+
+    private var personalBestsCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Perception Training Path")
+            Text("Personal Bests")
                 .font(.subheadline.weight(.semibold))
                 .foregroundColor(.white)
-            pathRow("Escape Pressure", activity: .awayFromPressure)
-            pathRow("Choose Action", activity: .dribbleOrPass)
-            pathRow("Play Early", activity: .oneTouchPassing)
-            NavigationLink(destination: PBACurriculumView(settingsViewModel: settingsViewModel, profileManager: profileManager)) {
-                Text("Open Path")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.9))
+            let bests = profileManager.currentProfile?.personalBests ?? [:]
+            if bests.isEmpty {
+                Text("Complete a block or test to set your first best.")
+                    .font(.footnote)
+                    .foregroundColor(.white.opacity(0.7))
+            } else {
+                personalBestRow("Playing Away From Pressure", best: bests[.awayFromPressure])
+                personalBestRow("Dribble or Pass", best: bests[.dribbleOrPass])
+                personalBestRow("One-Touch Passing", best: bests[.oneTouchPassing])
+                personalBestRow("2-Minute Test", best: bests[.twoMinuteTest])
             }
-            .buttonStyle(PlainButtonStyle())
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func personalBestRow(_ title: String, best: ActivityBest?) -> some View {
+        HStack {
+            Text(title)
+                .font(.footnote)
+                .foregroundColor(.white.opacity(0.9))
+            Spacer()
+            if let b = best {
+                Text("Best: \(b.bestCorrect) / \(b.bestTotal)")
+                    .font(.footnote.weight(.medium))
+                    .foregroundColor(.yellow.opacity(0.95))
+            } else {
+                Text("—")
+                    .font(.footnote)
+                    .foregroundColor(.white.opacity(0.5))
+            }
+        }
+    }
+
+    private func pathSublabel(_ activity: ActivityKind) -> String {
+        guard progressStore.isUnlocked(activity: activity, playerId: playerId) else { return "Locked" }
+        if progressStore.isReady(activity: activity, playerId: playerId) { return "Ready to Advance" }
+        let n = progressStore.lastN(activity, n: 3, playerId: playerId).count
+        if n >= 2 { return "Almost There" }
+        return "Keep Training"
     }
 
     private var scanWarmupsCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Scan Warmups")
+            Text("Normal Scanning Activities")
                 .font(.subheadline.weight(.semibold))
                 .foregroundColor(.white)
-            Text("Warm up your scanning with the first path activity.")
+            Text("Build scanning habits. Tap any tile to open that activity.")
                 .font(.footnote)
                 .foregroundColor(.white.opacity(0.8))
-            NavigationLink(destination: AwayFromPressureRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)) {
-                Text("Start Warmup")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundColor(.white.opacity(0.9))
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                warmupTile("Color Scan", mode: .colors)
+                warmupTile("Number Scan", mode: .numbers)
+                warmupTile("Arrow Scan", mode: .colorsArrows)
+                warmupTile("Lane Scan", mode: .lanes)
+                warmupTile("Colors + Numbers", mode: .colorsNumbers)
             }
-            .buttonStyle(PlainButtonStyle())
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func warmupTile(_ title: String, mode: DisplayMode) -> some View {
+        Button {
+            warmupDisplayMode = mode
+            router.push(.warmup(warmupDisplayMode))
+        } label: {
+            Text(title)
+                .font(.caption.weight(.medium))
+                .foregroundColor(.white.opacity(0.9))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(Color.white.opacity(0.08))
+                .cornerRadius(10)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PlainButtonStyle())
     }
 
     private var twoMinuteTestCard: some View {
@@ -640,11 +982,37 @@ struct IntroView: View {
             Text("2-Minute Test")
                 .font(.subheadline.weight(.semibold))
                 .foregroundColor(.white)
-            Text("Benchmark your receiving and decision speed.")
+            Text("Benchmark your decision speed.")
                 .font(.footnote)
                 .foregroundColor(.white.opacity(0.8))
-            NavigationLink(destination: TwoMinuteRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)) {
-                Text("Take Test")
+            Button {
+                router.push(.twoMinuteRoleSelection)
+            } label: {
+                Text("Run Test")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundColor(.black)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Color.yellow)
+                    .cornerRadius(12)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(PlainButtonStyle())
+        }
+    }
+
+    private var coachRemoteCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Coach Remote")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.white)
+            Text("Use this device to run reps: next rep, PASS, log direction. Choose the activity the player is on.")
+                .font(.footnote)
+                .foregroundColor(.white.opacity(0.8))
+            Button {
+                router.push(.coachRemote)
+            } label: {
+                Text("Open Coach Remote")
                     .font(.subheadline.weight(.medium))
                     .foregroundColor(.black)
                     .frame(maxWidth: .infinity)
@@ -654,7 +1022,6 @@ struct IntroView: View {
             }
             .buttonStyle(PlainButtonStyle())
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var progressCard: some View {
@@ -662,33 +1029,50 @@ struct IntroView: View {
             Text("Progress")
                 .font(.subheadline.weight(.semibold))
                 .foregroundColor(.white)
-            Text("View your blocks and decision trends.")
+            Text("See your trends and improvements.")
                 .font(.footnote)
                 .foregroundColor(.white.opacity(0.8))
-            NavigationLink(destination: PBAProgressView(settingsViewModel: settingsViewModel, profileManager: profileManager)) {
+            Button {
+                router.push(.progress)
+            } label: {
                 Text("View Progress")
                     .font(.subheadline.weight(.medium))
                     .foregroundColor(.white.opacity(0.9))
+                    .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(PlainButtonStyle())
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func pathRow(_ title: String, activity: ActivityKind) -> some View {
+    /// Home screen: no checkmarks; only highlight the recommended next activity (●). Others show ○.
+    private func pathRow(_ title: String, sublabel: String, activity: ActivityKind, isRecommended: Bool) -> some View {
         let unlocked = progressStore.isUnlocked(activity: activity, playerId: playerId)
-        let ready = progressStore.isReady(activity: activity, playerId: playerId)
         let icon: String
-        if !unlocked { icon = "lock.fill" }
-        else if ready { icon = "checkmark.circle.fill" }
-        else { icon = "circle" }
+        let iconColor: Color
+        if !unlocked {
+            icon = "lock.fill"
+            iconColor = .white.opacity(0.4)
+        } else if isRecommended {
+            icon = "circle.fill"
+            iconColor = .yellow
+        } else {
+            icon = "circle"
+            iconColor = .white.opacity(0.5)
+        }
         return HStack(spacing: 8) {
             Image(systemName: icon)
                 .font(.subheadline)
-                .foregroundColor(unlocked ? (ready ? .green : .white.opacity(0.7)) : .white.opacity(0.4))
-            Text(title)
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(unlocked ? 0.9 : 0.5))
+                .foregroundColor(iconColor)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(unlocked ? 0.9 : 0.5))
+                Text(sublabel)
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.6))
+            }
+            Spacer(minLength: 0)
         }
     }
 
@@ -697,12 +1081,28 @@ struct IntroView: View {
         switch activity {
         case .twoMinuteTest:
             TwoMinuteRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
         case .awayFromPressure:
             AwayFromPressureRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
         case .dribbleOrPass:
             DribbleOrPassRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
         case .oneTouchPassing:
             OneTouchPassingRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
         }
     }
 
@@ -750,10 +1150,19 @@ enum TwoMinuteTestHelperSelection: Hashable {
 struct TwoMinuteRoleSelectionView: View {
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
+    @EnvironmentObject private var progressStore: ProgressStore
+    @EnvironmentObject private var playerStore: PlayerStore
+    @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
+    @EnvironmentObject private var router: AppRouter
 
     var body: some View {
         VStack(spacing: 24) {
-            Spacer(minLength: 40)
+            Spacer(minLength: 24)
+            Text("2-Minute Test")
+                .font(.system(size: 24, weight: .bold, design: .rounded))
+                .foregroundColor(.white)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 20)
             Text("Use this device as:")
                 .font(.system(size: 26, weight: .bold, design: .rounded))
                 .foregroundColor(.white)
@@ -766,7 +1175,9 @@ struct TwoMinuteRoleSelectionView: View {
                 .padding(.horizontal, 28)
 
             VStack(spacing: 16) {
-                NavigationLink(destination: TwoMinuteTestSetupView(settingsViewModel: settingsViewModel, profileManager: profileManager)) {
+                Button {
+                    router.push(.trainingModeSelection(activityTitle: "2-Minute Test"))
+                } label: {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             Image(systemName: "tv")
@@ -784,11 +1195,14 @@ struct TwoMinuteRoleSelectionView: View {
                     .padding(.horizontal, 24)
                     .background(Color.yellow)
                     .cornerRadius(18)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(PlainButtonStyle())
                 .padding(.horizontal, 28)
 
-                NavigationLink(destination: TwoMinuteCoachRemoteView(settingsViewModel: settingsViewModel, profileManager: profileManager)) {
+                Button {
+                    router.push(.twoMinuteCoachRemote)
+                } label: {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             Image(systemName: "hand.raised")
@@ -806,114 +1220,7 @@ struct TwoMinuteRoleSelectionView: View {
                     .padding(.horizontal, 24)
                     .background(Color.white.opacity(0.12))
                     .cornerRadius(18)
-                }
-                .buttonStyle(PlainButtonStyle())
-                .padding(.horizontal, 28)
-            }
-
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(
-            LinearGradient(
-                gradient: Gradient(colors: [
-                    Color(red: 0.05, green: 0.05, blue: 0.1),
-                    Color(red: 0.1, green: 0.1, blue: 0.15)
-                ]),
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-        )
-        .preferredColorScheme(.dark)
-        .navigationTitle("2-Minute Test")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-struct TwoMinuteTestSetupView: View {
-    @ObservedObject var settingsViewModel: SettingsViewModel
-    @ObservedObject var profileManager: UserProfileManager
-    @AppStorage("hasSeenTwoMinuteOnboarding") private var hasSeenTwoMinuteOnboarding = false
-    @State private var showOnboarding = false
-    @State private var difficulty: TestDifficulty = TestDifficulty.loadFromUserDefaults()
-
-    var body: some View {
-        VStack(spacing: 18) {
-            Spacer(minLength: 20)
-
-            Text("Set up")
-                .font(.system(size: 32, weight: .bold, design: .rounded))
-                .multilineTextAlignment(.center)
-                .foregroundColor(.white)
-                .padding(.horizontal, 28)
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("• Put the iPad behind the player.")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.9))
-                Text("• Player stays inside the square.")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.9))
-                Text("• Coach stands 5–7 yards in front with the ball.")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.9))
-            }
-            .padding(.top, 4)
-
-            Text("Difficulty")
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.8))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 28)
-                .padding(.top, 12)
-            Picker("Difficulty", selection: $difficulty) {
-                Text("Beginner").tag(TestDifficulty.beginner)
-                Text("Standard").tag(TestDifficulty.standard)
-                Text("Advanced").tag(TestDifficulty.advanced)
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 28)
-            .onChange(of: difficulty) { _, newValue in
-                newValue.saveToUserDefaults()
-            }
-
-            Text("How are you getting the ball?")
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.8))
-                .padding(.top, 16)
-
-            Spacer(minLength: 8)
-
-            VStack(spacing: 14) {
-                NavigationLink(destination: TwoMinuteGetReadyView(selection: .partner, config: TwoMinuteTestConfig.config(for: difficulty), settingsViewModel: settingsViewModel, profileManager: profileManager)) {
-                    HStack {
-                        Image(systemName: "person.2.fill")
-                        Text("Partner pass")
-                            .font(.system(size: 20, weight: .bold, design: .rounded))
-                    }
-                    .foregroundColor(.black)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 18)
-                    .padding(.horizontal, 20)
-                    .background(Color.yellow)
-                    .cornerRadius(18)
-                }
-                .buttonStyle(PlainButtonStyle())
-                .padding(.horizontal, 28)
-
-                NavigationLink(destination: TwoMinuteGetReadyView(selection: .wall, config: TwoMinuteTestConfig.config(for: difficulty), settingsViewModel: settingsViewModel, profileManager: profileManager)) {
-                    HStack {
-                        Image(systemName: "square.split.2x2")
-                        Text("Wall pass")
-                            .font(.system(size: 20, weight: .bold, design: .rounded))
-                    }
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 18)
-                    .padding(.horizontal, 20)
-                    .background(Color.white.opacity(0.08))
-                    .cornerRadius(18)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(PlainButtonStyle())
                 .padding(.horizontal, 28)
@@ -936,6 +1243,108 @@ struct TwoMinuteTestSetupView: View {
         .preferredColorScheme(.dark)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+struct TwoMinuteTestSetupView: View {
+    let mode: TrainingMode
+    @ObservedObject var settingsViewModel: SettingsViewModel
+    @ObservedObject var profileManager: UserProfileManager
+    @EnvironmentObject private var progressStore: ProgressStore
+    @EnvironmentObject private var playerStore: PlayerStore
+    @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
+    @EnvironmentObject private var router: AppRouter
+    @AppStorage("hasSeenTwoMinuteOnboarding") private var hasSeenTwoMinuteOnboarding = false
+    @State private var showOnboarding = false
+    @State private var difficulty: TestDifficulty = TestDifficulty.loadFromUserDefaults()
+
+    var body: some View {
+        VStack(spacing: 18) {
+            Spacer(minLength: 20)
+
+            Text("Set up")
+                .font(.system(size: 32, weight: .bold, design: .rounded))
+                .multilineTextAlignment(.center)
+                .foregroundColor(.white)
+                .padding(.horizontal, 28)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("• Put the iPad behind the player.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.9))
+                Text("• Player stays inside the square.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.9))
+                if mode == .partner {
+                    Text("• Coach stands 5–7 yards in front with the ball.")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.9))
+                }
+            }
+            .padding(.top, 4)
+
+            Text("Difficulty")
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.8))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 28)
+                .padding(.top, 12)
+            Picker("Difficulty", selection: $difficulty) {
+                Text("Beginner").tag(TestDifficulty.beginner)
+                Text("Standard").tag(TestDifficulty.standard)
+                Text("Advanced").tag(TestDifficulty.advanced)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 28)
+            .onChange(of: difficulty) { _, newValue in
+                newValue.saveToUserDefaults()
+            }
+
+            Spacer(minLength: 8)
+
+            Button {
+                router.push(.twoMinuteGetReady(mode: mode, difficulty: difficulty))
+            } label: {
+                Text("Continue")
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .foregroundColor(.black)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 18)
+                    .padding(.horizontal, 20)
+                    .background(Color.yellow)
+                    .cornerRadius(18)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(PlainButtonStyle())
+            .padding(.horizontal, 28)
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
+            LinearGradient(
+                gradient: Gradient(colors: [
+                    Color(red: 0.05, green: 0.05, blue: 0.1),
+                    Color(red: 0.1, green: 0.1, blue: 0.15)
+                ]),
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+        )
+        .preferredColorScheme(.dark)
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    router.popToRoot()
+                } label: {
+                    Image(systemName: "house.fill")
+                }
+                .foregroundColor(.white.opacity(0.9))
+            }
+        }
         .onAppear {
             if !hasSeenTwoMinuteOnboarding { showOnboarding = true }
         }
@@ -949,14 +1358,25 @@ struct TwoMinuteTestSetupView: View {
 }
 
 struct TwoMinuteGetReadyView: View {
-    let selection: TwoMinuteTestHelperSelection
+    let mode: TrainingMode
     let config: TwoMinuteTestConfig
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
+    @EnvironmentObject private var progressStore: ProgressStore
+    @EnvironmentObject private var playerStore: PlayerStore
+    @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
+    @EnvironmentObject private var router: AppRouter
+    @Environment(\.dismiss) private var dismiss
+    @State private var showLeaveAlert = false
     @State private var countdown: Int? = nil
+    @State private var countdownTimer: Timer?
+    @State private var showInstruction = false
     @State private var navigateToTest = false
+    /// Prevents startCountdown from running again when we pop back from the instruction screen (so "Start" goes to session, not back to instructions).
+    @State private var countdownHasStarted = false
 
-    private var isPartner: Bool { selection == .partner }
+    private var isPartner: Bool { mode == .partner }
+    private var activity: ActivityKind { .twoMinuteTest }
 
     var body: some View {
         VStack(spacing: 24) {
@@ -1002,8 +1422,12 @@ struct TwoMinuteGetReadyView: View {
                         Text("Passer: hold the phone. When the screen says ready, play the pass and tap PASS (or press volume) when the ball leaves your foot.")
                             .font(.subheadline)
                             .foregroundColor(.white.opacity(0.9))
+                    } else if mode == .solo {
+                        Text("Trigger each rep with a screen tap or volume button. Tap your exit direction after each rep.")
+                            .font(.subheadline)
+                            .foregroundColor(.white.opacity(0.9))
                     } else {
-                        Text("Trigger each rep yourself with the PASS button or volume when the ball bounces back.")
+                        Text("Trigger each rep with the volume button when the ball bounces back. Tap your exit direction after each rep.")
                             .font(.subheadline)
                             .foregroundColor(.white.opacity(0.9))
                     }
@@ -1027,25 +1451,69 @@ struct TwoMinuteGetReadyView: View {
             )
             .ignoresSafeArea()
         )
-        .navigationDestination(isPresented: $navigateToTest) {
-            TwoMinuteCriticalScanSessionView(config: config, settingsViewModel: settingsViewModel, profileManager: profileManager)
+        .navigationDestination(isPresented: $showInstruction) {
+            ActivityInstructionView(activity: activity) {
+                showInstruction = false
+                navigateToTest = true
+            }
         }
-        .onAppear { startCountdown() }
+        .navigationDestination(isPresented: $navigateToTest) {
+            TwoMinuteCriticalScanSessionView(config: config, mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
+        }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showLeaveAlert = true
+                } label: {
+                    Image(systemName: "house.fill")
+                }
+                .foregroundColor(.white.opacity(0.9))
+            }
+        }
+        .alert("Leave training?", isPresented: $showLeaveAlert) {
+            Button("Stay", role: .cancel) {}
+            Button("Leave", role: .destructive) {
+                router.popToRoot()
+            }
+        } message: {
+            Text("Your current block will not be saved.")
+        }
+        .onAppear {
+            onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
+            guard !countdownHasStarted else { return }
+            countdownHasStarted = true
+            startCountdown()
+        }
+        .onDisappear {
+            countdownTimer?.invalidate()
+            countdownTimer = nil
+        }
         .preferredColorScheme(.dark)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
     }
 
     private func startCountdown() {
+        countdownTimer?.invalidate()
+        countdownTimer = nil
         countdown = 3
-        _ = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { timer in
+        countdownTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { timer in
             DispatchQueue.main.async {
                 guard let n = countdown else { timer.invalidate(); return }
                 if n <= 1 {
-                    timer.invalidate()
+                    countdownTimer?.invalidate()
+                    countdownTimer = nil
                     countdown = 0
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                        navigateToTest = true
+                        if ActivityInstructionContent.shouldShowInstructions(for: activity) {
+                            showInstruction = true
+                        } else {
+                            navigateToTest = true
+                        }
                     }
                 } else {
                     countdown = n - 1
@@ -1162,19 +1630,7 @@ private struct ScanningActivitiesSectionView: View {
                 }
             }
 
-            // Critical Scan Modes
             VStack(alignment: .leading, spacing: 8) {
-                Text("Critical Scan Activities")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.8))
-                    .padding(.horizontal, 4)
-                    .environment(\.sizeCategory, .large)
-
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 2), spacing: 8) {
-                    modeButton(title: "Critical Scan Numbers", mode: .criticalScan, color: .red)
-                    modeButton(title: "Critical Scan Arrows", mode: .criticalScanArrows, color: .red)
-                }
-
                 modeButton(title: "Playing Away from Pressure", mode: .pressureResponse, color: .orange)
                 modeButton(title: "One-Touch Passing", mode: .oneTouchPassing, color: .purple)
                 modeButton(title: "4-Goal Game", mode: .fourGoalGame, color: .yellow)
@@ -1251,7 +1707,6 @@ struct MainView: View {
     @State private var selectedActionSet: ActionSet = .basic // Default to basic actions
     @State private var fourGoalLeftColor: Color = .blue
     @State private var fourGoalRightColor: Color = .white
-    @State private var selectedCriticalScanColor: Color = .blue
     
     // Helper function to get color names for the picker
     private func colorName(for color: Color) -> String {
@@ -1271,7 +1726,6 @@ struct MainView: View {
     @State private var editingActionNumber: Int = 1
     @State private var showingActionList = false
     @State private var selectedActionForNumber: Int = 1
-    @State private var selectedCriticalScanNumbers: Set<Int> = [1] // Default to only number 1
     
     // Screen protection toggle for outdoor/indoor training
     @State private var screenProtectionEnabled: Bool = true // Default to enabled for safety
@@ -1295,11 +1749,6 @@ struct MainView: View {
         "arrow.down.left",
         "arrow.down.right"
     ]
-    
-    // Critical Scan state variables
-    @State private var criticalScanPhase: String = "NORMAL"
-    @State private var currentActionNumber: Int = 1
-    @State private var criticalScanTimer: Timer?
     
     // Scanning circles for normal scan phase
     @State private var currentScanningCircleColor: Color = .white
@@ -1360,7 +1809,6 @@ struct MainView: View {
                 selectedColorSet: selectedColorSet,
                 selectedActionSet: selectedActionSet,
                 customActions: settingsViewModel.customActions,
-                selectedCriticalScanNumbers: Array(selectedCriticalScanNumbers).sorted(),
                 screenProtectionEnabled: settingsViewModel.screenProtectionEnabled,
                 numberColor: numberColor,
                 arrowColor: arrowColor,
@@ -1465,7 +1913,7 @@ struct MainView: View {
                         )
                             
                             // Number Color Selection (for modes that use numbers)
-                            if displayMode == .numbers || displayMode == .colorsNumbers || displayMode == .criticalScan {
+                            if displayMode == .numbers || displayMode == .colorsNumbers {
                                 VStack(alignment: .leading, spacing: 10) {
                                     Text("Number Color")
                                         .font(.headline)
@@ -1523,7 +1971,7 @@ struct MainView: View {
                             }
                             
                             // Arrow Color Selection (for modes that use arrows)
-                            if displayMode == .colorsArrows || displayMode == .criticalScanArrows {
+                            if displayMode == .colorsArrows {
                                 VStack(alignment: .leading, spacing: 10) {
                                     Text("Arrow Color")
                                         .font(.headline)
@@ -1583,7 +2031,7 @@ struct MainView: View {
 
                             
                             // Beep Interval Selection (for Colors, Colors + Numbers, Colors + Arrows, Numbers, Lanes, Critical Scan modes, Scanning Game, Pressure Response, One-Touch Passing, and 4-Goal Game)
-                            if displayMode == .colors || displayMode == .colorsNumbers || displayMode == .colorsArrows || displayMode == .numbers || displayMode == .lanes || displayMode == .criticalScan || displayMode == .criticalScanArrows || displayMode == .scanningGame || displayMode == .pressureResponse || displayMode == .oneTouchPassing || displayMode == .fourGoalGame {
+                            if displayMode == .colors || displayMode == .colorsNumbers || displayMode == .colorsArrows || displayMode == .numbers || displayMode == .lanes || displayMode == .scanningGame || displayMode == .pressureResponse || displayMode == .oneTouchPassing || displayMode == .fourGoalGame {
                                 VStack(alignment: .leading, spacing: 10) {
                                     Text("Beep Interval")
                                         .font(.headline)
@@ -2004,7 +2452,7 @@ struct MainView: View {
                             }
                             
                             // Time Interval Slider (only show for modes that use it)
-                            if displayMode != .criticalScan && displayMode != .criticalScanArrows && displayMode != .scanningGame && displayMode != .pressureResponse && displayMode != .oneTouchPassing && displayMode != .fourGoalGame {
+                            if displayMode != .scanningGame && displayMode != .pressureResponse && displayMode != .oneTouchPassing && displayMode != .fourGoalGame {
                                 VStack(alignment: .leading, spacing: 10) {
                                     Text(displayMode == .colors || displayMode == .colorsNumbers || displayMode == .colorsArrows || displayMode == .lanes ? "Color Changing Time Interval: \(String(format: "%.1f", changeInterval))s" : displayMode == .numbers ? "Color and Number Changing Time Interval: \(String(format: "%.1f", changeInterval))s" : "Time Interval: \(String(format: "%.1f", changeInterval))s")
                                         .font(.headline)
@@ -2027,7 +2475,7 @@ struct MainView: View {
                             }
                             
                             // Scanning Circle Time Interval (only for Critical Scan modes, Scanning Game, Pressure Response, One-Touch Passing, and 4-Goal Game)
-                            if displayMode == .criticalScan || displayMode == .criticalScanArrows || displayMode == .scanningGame || displayMode == .pressureResponse || displayMode == .oneTouchPassing || displayMode == .fourGoalGame {
+                            if displayMode == .scanningGame || displayMode == .pressureResponse || displayMode == .oneTouchPassing || displayMode == .fourGoalGame {
                                 VStack(alignment: .leading, spacing: 10) {
                                     Text("Scanning Circle Time Interval: \(String(format: "%.1f", changeInterval))s")
                                         .font(.headline)
@@ -2050,7 +2498,7 @@ struct MainView: View {
                             }
                             
                             // Critical Scan Delay Slider (only for Critical Scan mode, Scanning Game, Pressure Response, One-Touch Passing, and 4-Goal Game)
-                            if displayMode == .criticalScan || displayMode == .criticalScanArrows || displayMode == .scanningGame || displayMode == .pressureResponse || displayMode == .oneTouchPassing || displayMode == .fourGoalGame {
+                            if displayMode == .scanningGame || displayMode == .pressureResponse || displayMode == .oneTouchPassing || displayMode == .fourGoalGame {
                                 VStack(alignment: .leading, spacing: 10) {
                                     Text("Critical Scan Delay: \(String(format: "%.1f", settingsViewModel.criticalScanDelay))s")
                                         .font(.headline)
@@ -2073,7 +2521,7 @@ struct MainView: View {
                             }
                             
                             // Critical Scan Duration Slider (only for Critical Scan mode, Scanning Game, Pressure Response, One-Touch Passing, and 4-Goal Game)
-                            if displayMode == .criticalScan || displayMode == .criticalScanArrows || displayMode == .scanningGame || displayMode == .pressureResponse || displayMode == .oneTouchPassing || displayMode == .fourGoalGame {
+                            if displayMode == .scanningGame || displayMode == .pressureResponse || displayMode == .oneTouchPassing || displayMode == .fourGoalGame {
                                 VStack(alignment: .leading, spacing: 10) {
                                     Text("Critical Scan Duration: \(String(format: "%.1f", settingsViewModel.criticalScanDuration))s")
                                         .font(.headline)
@@ -2180,7 +2628,7 @@ struct MainView: View {
                             }
                             
                             // Critical Scan Reset Time Slider (only for Critical Scan mode, Scanning Game, Pressure Response, and One-Touch Passing)
-                            if displayMode == .criticalScan || displayMode == .criticalScanArrows || displayMode == .scanningGame || displayMode == .pressureResponse || displayMode == .oneTouchPassing {
+                            if displayMode == .scanningGame || displayMode == .pressureResponse || displayMode == .oneTouchPassing {
                                 VStack(alignment: .leading, spacing: 10) {
                                     Text("Reset Time: \(String(format: "%.0f", settingsViewModel.criticalScanResetTime))s")
                                         .font(.headline)
@@ -2203,7 +2651,7 @@ struct MainView: View {
                             }
                             
                             // Scanning Circle Colors (only for Critical Scan mode, Scanning Game, Pressure Response, One-Touch Passing, and 4-Goal Game)
-                            if displayMode == .criticalScan || displayMode == .criticalScanArrows || displayMode == .scanningGame || displayMode == .pressureResponse || displayMode == .oneTouchPassing || displayMode == .fourGoalGame {
+                            if displayMode == .scanningGame || displayMode == .pressureResponse || displayMode == .oneTouchPassing || displayMode == .fourGoalGame {
                                 VStack(alignment: .leading, spacing: 10) {
                                     Text("Scanning Circle Colors")
                                         .font(.headline)
@@ -2217,121 +2665,6 @@ struct MainView: View {
                                     .pickerStyle(MenuPickerStyle())
                                     .accentColor(.white)
                                     .frame(maxWidth: .infinity, alignment: .leading)
-                                }
-                                .padding()
-                                .background {
-                                    RoundedRectangle(cornerRadius: 15)
-                                        .fill(.ultraThinMaterial)
-                                        .opacity(0.7)
-                                }
-                                .padding(.horizontal)
-                            }
-                            
-                            // Number Selection (only for Critical Scan mode)
-                            if displayMode == .criticalScan {
-                                VStack(alignment: .leading, spacing: 10) {
-                                    Text("Select Numbers (1-8)")
-                                        .font(.headline)
-                                        .foregroundColor(.white)
-                                    
-                                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 40))], spacing: 8) {
-                                        ForEach(1...8, id: \.self) { number in
-                                            Button(action: {
-                                                if selectedCriticalScanNumbers.contains(number) {
-                                                    selectedCriticalScanNumbers.remove(number)
-                                                } else {
-                                                    selectedCriticalScanNumbers.insert(number)
-                                                }
-                                            }) {
-                                                Text("\(number)")
-                                                    .font(.system(size: 18, weight: .bold))
-                                                    .foregroundColor(.white)
-                                                    .frame(width: 40, height: 40)
-                                            }
-                                            .buttonStyle(SquareButtonStyle(isSelected: selectedCriticalScanNumbers.contains(number), color: .blue))
-                                        }
-                                    }
-                                }
-                                .padding()
-                                .background {
-                                    RoundedRectangle(cornerRadius: 15)
-                                        .fill(.ultraThinMaterial)
-                                        .opacity(0.7)
-                                }
-                                .padding(.horizontal)
-                            }
-                            
-                            // Arrow Selection (only for Critical Scan Arrows mode)
-                            if displayMode == .criticalScanArrows {
-                                VStack(alignment: .leading, spacing: 10) {
-                                    Text("Select Arrows")
-                                        .font(.headline)
-                                        .foregroundColor(.white)
-                                    
-                                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 60))], spacing: 8) {
-                                        ForEach(arrowDirections, id: \.self) { arrow in
-                                            Button(action: {
-                                                if selectedArrows.contains(arrow) {
-                                                    selectedArrows.remove(arrow)
-                                                } else {
-                                                    selectedArrows.insert(arrow)
-                                                }
-                                            }) {
-                                                Image(systemName: arrow)
-                                                    .font(.system(size: 24, weight: .bold))
-                                                    .foregroundColor(.white)
-                                                    .frame(width: 60, height: 60)
-                                            }
-                                            .buttonStyle(ArrowButtonStyle(isSelected: selectedArrows.contains(arrow)))
-                                        }
-                                    }
-                                }
-                                .padding()
-                                .background {
-                                    RoundedRectangle(cornerRadius: 15)
-                                        .fill(.ultraThinMaterial)
-                                        .opacity(0.7)
-                                }
-                                .padding(.horizontal)
-                            }
-                            
-                            // Custom Actions (only for Critical Scan mode)
-                            if displayMode == .criticalScan {
-                                VStack(alignment: .leading, spacing: 10) {
-                                    Text("Number Actions (\(selectedCriticalScanNumbers.count) selected)")
-                                        .font(.headline)
-                                        .foregroundColor(.white)
-                                    
-                                    VStack(spacing: 8) {
-                                        ForEach(settingsViewModel.customActions.filter { selectedCriticalScanNumbers.contains($0.number) }, id: \.number) { customAction in
-                                            Button(action: {
-                                                selectedActionForNumber = customAction.number
-                                                showingActionList = true
-                                            }) {
-                                                HStack {
-                                                    Text("\(customAction.number)")
-                                                        .font(.system(size: 18, weight: .bold))
-                                                        .foregroundColor(.white)
-                                                        .frame(width: 30)
-                                                    
-                                                    Text(customAction.action)
-                                                        .font(.system(size: 14))
-                                                        .foregroundColor(.white.opacity(0.9))
-                                                        .lineLimit(1)
-                                                        .truncationMode(.tail)
-                                                    
-                                                    Spacer()
-                                                    
-                                                    Image(systemName: "chevron.right")
-                                                        .foregroundColor(.blue)
-                                                        .font(.system(size: 14))
-                                                }
-                                                .padding(.vertical, 8)
-                                                .padding(.horizontal, 12)
-                                            }
-                                            .buttonStyle(ActionButtonStyle())
-                                        }
-                                    }
                                 }
                                 .padding()
                                 .background {
@@ -2928,12 +3261,6 @@ struct MainView: View {
         case .lanes:
             // Require at least one lane and one color
             return !selectedLanes.isEmpty && !selectedColors.isEmpty
-        case .criticalScan:
-            // Critical scan numbers mode works with default values
-            return true
-        case .criticalScanArrows:
-            // Require at least one arrow direction
-            return !selectedArrows.isEmpty
         case .scanningGame:
             // Require different team colors and valid team composition
             let totalPositions = numberOfOpponents + numberOfTeammates + numberOfOpenSpaces
@@ -2987,12 +3314,6 @@ struct MainView: View {
                 return "Please select at least one lane"
             } else if selectedColors.isEmpty {
                 return "Please select at least one color"
-            }
-        case .criticalScan:
-            return "" // Critical scan numbers mode works with defaults
-        case .criticalScanArrows:
-            if selectedArrows.isEmpty {
-                return "Please select at least one arrow direction"
             }
         case .scanningGame:
             if selectedUserTeamColor == selectedOpponentColor {
@@ -3092,7 +3413,6 @@ struct DisplayView: View {
     let selectedColorSet: ScanningColorSet
         let selectedActionSet: ActionSet
     let customActions: [CustomAction]
-    let selectedCriticalScanNumbers: [Int]
         let screenProtectionEnabled: Bool
         let numberColor: Color
         let arrowColor: Color
@@ -3144,7 +3464,6 @@ struct DisplayView: View {
     
     // Critical Scan state variables
     @State private var criticalScanPhase: String = "NORMAL"
-    @State private var currentActionNumber: Int = 1
     @State private var criticalScanTimer: Timer?
     
     // Scanning circles for normal scan phase
@@ -3154,6 +3473,7 @@ struct DisplayView: View {
     
     @State private var countdown: Int = 3
     @State private var isCountingDown: Bool = true
+    @State private var countdownTimer: Timer?
     @Environment(\.dismiss) private var dismiss
     
     // Screen protection timer for outdoor use
@@ -3214,7 +3534,7 @@ struct DisplayView: View {
     /// Larger defender in Pressure Response so movement is easy to see.
     private static let pressureResponseDefenderSizeRatio: CGFloat = 0.5
     
-        init(selectedColors: [Color], displayMode: DisplayMode, changeInterval: Double, selectedNumbers: [Int], soundEnabled: Bool, laneSpeed: Double, numberRange: Double, selectedArrows: [String], selectedBeepInterval: BeepInterval, beepMode: BeepMode, fixedBeepInterval: Double, criticalScanDelay: Double, criticalScanDuration: Double, criticalScanResetTime: Double, teammateMovementDuration: Double, opponentMovementDuration: Double, trainingPerspective: String, selectedColorSet: ScanningColorSet, selectedActionSet: ActionSet, customActions: [CustomAction], selectedCriticalScanNumbers: [Int], screenProtectionEnabled: Bool, numberColor: Color, arrowColor: Color, userTeamColor: TeamColor, opponentColor: TeamColor, playerGender: PlayerGender, numberOfOpponents: Int, numberOfTeammates: Int, numberOfOpenSpaces: Int, fourGoalLeftColor: Color, fourGoalRightColor: Color, showDisplay: Binding<Bool>, profileManager: UserProfileManager) {
+        init(selectedColors: [Color], displayMode: DisplayMode, changeInterval: Double, selectedNumbers: [Int], soundEnabled: Bool, laneSpeed: Double, numberRange: Double, selectedArrows: [String], selectedBeepInterval: BeepInterval, beepMode: BeepMode, fixedBeepInterval: Double, criticalScanDelay: Double, criticalScanDuration: Double, criticalScanResetTime: Double, teammateMovementDuration: Double, opponentMovementDuration: Double, trainingPerspective: String, selectedColorSet: ScanningColorSet, selectedActionSet: ActionSet, customActions: [CustomAction], screenProtectionEnabled: Bool, numberColor: Color, arrowColor: Color, userTeamColor: TeamColor, opponentColor: TeamColor, playerGender: PlayerGender, numberOfOpponents: Int, numberOfTeammates: Int, numberOfOpenSpaces: Int, fourGoalLeftColor: Color, fourGoalRightColor: Color, showDisplay: Binding<Bool>, profileManager: UserProfileManager) {
             self.profileManager = profileManager
         self.selectedColors = selectedColors
         self.displayMode = displayMode
@@ -3236,7 +3556,6 @@ struct DisplayView: View {
         self.selectedColorSet = selectedColorSet
             self.selectedActionSet = selectedActionSet
         self.customActions = customActions
-        self.selectedCriticalScanNumbers = selectedCriticalScanNumbers
             self._currentColor = State(initialValue: selectedColors.first ?? selectedColors.randomElement() ?? .red)
             self._currentNumberColor = State(initialValue: selectedColors.first ?? selectedColors.randomElement() ?? .red)
             self._showDisplay = showDisplay
@@ -3353,152 +3672,6 @@ struct DisplayView: View {
                         }
                         .offset(y: animationOffset)
                     }
-                } else if displayMode == .criticalScan {
-                    // Critical Scan display
-                    ZStack {
-                        // Background color based on phase
-                        if criticalScanPhase == "NORMAL" || criticalScanPhase == "BEEP" {
-                            Color.black
-                                .ignoresSafeArea()
-                        } else if criticalScanPhase == "CRITICAL" {
-                            Color.yellow
-                                .ignoresSafeArea()
-                        } else if criticalScanPhase == "RESET" {
-                            Color.blue
-                                .ignoresSafeArea()
-                        } else {
-                            Color.black
-                                .ignoresSafeArea()
-                        }
-                        
-                        VStack(spacing: 20) {
-                            if criticalScanPhase == "NORMAL" || criticalScanPhase == "BEEP" {
-                                VStack(spacing: 15) {
-                                    // Scanning circle (cycles through colors every second)
-                                    Circle()
-                                        .fill(selectedColorSet.colors[scanningColorIndex])
-                                            .frame(width: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.6, height: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.6)
-                                        .background(Color.black)
-                                        .clipShape(Circle())
-                                        .overlay(
-                                            Circle()
-                                                .stroke(Color.white, lineWidth: 4)
-                                        )
-                                    
-                                    Text("SCAN & IDENTIFY")
-                                        .font(.system(size: 40, weight: .bold))
-                                        .foregroundColor(.white)
-                                        .shadow(radius: 5)
-                                }
-                            } else if criticalScanPhase == "CRITICAL" {
-                                VStack(spacing: 15) {
-                                    Text("\(currentActionNumber)")
-                                            .font(.system(size: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.4, weight: .bold))
-                                            .foregroundColor(numberColor)
-                                        .shadow(radius: 10)
-                                    
-                                    Text("CRITICAL SCAN")
-                                        .font(.system(size: 50, weight: .bold))
-                                        .foregroundColor(.white)
-                                        .shadow(radius: 5)
-                                    
-                                    Text(customActions.first { $0.number == currentActionNumber }?.action ?? "")
-                                            .font(.system(size: 60, weight: .medium))
-                                        .foregroundColor(.white.opacity(0.8))
-                                        .multilineTextAlignment(.center)
-                                        .padding()
-                                }
-                            } else if criticalScanPhase == "RESET" {
-                                VStack(spacing: 15) {
-                                    Text("RESET")
-                                        .font(.system(size: 60, weight: .bold))
-                                        .foregroundColor(.white)
-                                        .shadow(radius: 10)
-                                    
-                                    Text("Prepare for Next Play")
-                                        .font(.system(size: 40, weight: .semibold))
-                                        .foregroundColor(.white)
-                                        .shadow(radius: 5)
-                                    
-                                    Text("Get in position • Focus • Ready")
-                                        .font(.system(size: 25, weight: .medium))
-                                        .foregroundColor(.white.opacity(0.8))
-                                        .multilineTextAlignment(.center)
-                                        .padding()
-                                }
-                            }
-                        }
-                    }
-                } else if displayMode == .criticalScanArrows {
-                    // Critical Scan Arrows display
-                    ZStack {
-                        // Background color based on phase
-                        if criticalScanPhase == "NORMAL" || criticalScanPhase == "BEEP" {
-                            Color.black
-                                .ignoresSafeArea()
-                        } else if criticalScanPhase == "CRITICAL" {
-                            Color.yellow
-                                .ignoresSafeArea()
-                        } else if criticalScanPhase == "RESET" {
-                            Color.blue
-                                .ignoresSafeArea()
-                        } else {
-                            Color.black
-                                .ignoresSafeArea()
-                        }
-                        
-                        VStack(spacing: 20) {
-                            if criticalScanPhase == "NORMAL" || criticalScanPhase == "BEEP" {
-                                VStack(spacing: 15) {
-                                    // Scanning circle (cycles through colors every second)
-                                    Circle()
-                                        .fill(selectedColorSet.colors[scanningColorIndex])
-                                            .frame(width: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.6, height: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.6)
-                                        .background(Color.black)
-                                        .clipShape(Circle())
-                                        .overlay(
-                                            Circle()
-                                                .stroke(Color.white, lineWidth: 4)
-                                        )
-                                    
-                                    Text("SCAN & IDENTIFY")
-                                        .font(.system(size: 40, weight: .bold))
-                                        .foregroundColor(.white)
-                                        .shadow(radius: 5)
-                                }
-                            } else if criticalScanPhase == "CRITICAL" {
-                                VStack(spacing: 15) {
-                                    Image(systemName: currentArrowDirection)
-                                            .font(.system(size: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.35, weight: .black))
-                                            .foregroundColor(arrowColor)
-                                        .shadow(radius: 10)
-                                    
-                                    Text("CRITICAL SCAN")
-                                        .font(.system(size: 50, weight: .bold))
-                                        .foregroundColor(.white)
-                                        .shadow(radius: 5)
-                                }
-                            } else if criticalScanPhase == "RESET" {
-                                VStack(spacing: 15) {
-                                    Text("RESET")
-                                        .font(.system(size: 60, weight: .bold))
-                                        .foregroundColor(.white)
-                                        .shadow(radius: 10)
-                                    
-                                    Text("Prepare for Next Play")
-                                        .font(.system(size: 40, weight: .semibold))
-                                        .foregroundColor(.white)
-                                        .shadow(radius: 5)
-                                    
-                                    Text("Get in position • Focus • Ready")
-                                        .font(.system(size: 25, weight: .medium))
-                                        .foregroundColor(.white.opacity(0.8))
-                                        .multilineTextAlignment(.center)
-                                        .padding()
-                                }
-                            }
-                        }
-                    }
                 } else if displayMode == .scanningGame {
                     // Scanning Game display
                     ZStack {
@@ -3526,14 +3699,10 @@ struct DisplayView: View {
                                         .foregroundColor(.white)
                                         .shadow(radius: 5)
                                         .padding(.top, 50)
-                                    // Center "you are here"
+                                    // Center marker
                                     VStack(spacing: 10) {
                                         Text("X")
                                             .font(.system(size: 80, weight: .bold))
-                                            .foregroundColor(.white)
-                                            .shadow(radius: 5)
-                                        Text("YOU ARE HERE")
-                                            .font(.system(size: 24, weight: .bold))
                                             .foregroundColor(.white)
                                             .shadow(radius: 5)
                                     }
@@ -3567,10 +3736,6 @@ struct DisplayView: View {
                                     VStack(spacing: 10) {
                                         Text("X")
                                             .font(.system(size: 80, weight: .bold))
-                                            .foregroundColor(.white)
-                                            .shadow(radius: 5)
-                                        Text("YOU ARE HERE")
-                                            .font(.system(size: 24, weight: .bold))
                                             .foregroundColor(.white)
                                             .shadow(radius: 5)
                                     }
@@ -3948,6 +4113,8 @@ struct DisplayView: View {
         .onDisappear {
             multipeerManager.stopAdvertising()
             isActive = false
+            countdownTimer?.invalidate()
+            countdownTimer = nil
             stopTimer()
             scanningGameWanderTimer?.invalidate()
             scanningGameWanderTimer = nil
@@ -3979,14 +4146,17 @@ struct DisplayView: View {
     }
     
     private func startCountdown() {
+        countdownTimer?.invalidate()
+        countdownTimer = nil
         countdown = 3
         isCountingDown = true
         
-        Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { timer in
+        countdownTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { timer in
             countdown -= 1
             
             if countdown < 0 {
-                timer.invalidate()
+                countdownTimer?.invalidate()
+                countdownTimer = nil
                 isCountingDown = false
                 startActivity()
             }
@@ -4019,19 +4189,13 @@ struct DisplayView: View {
         
         if displayMode == .colors || displayMode == .colorsNumbers || displayMode == .colorsArrows || displayMode == .numbers || displayMode == .lanes {
             startBeepTimer()
-        } else if displayMode != .criticalScan && displayMode != .criticalScanArrows && displayMode != .scanningGame && displayMode != .pressureResponse && displayMode != .oneTouchPassing {
+        } else if displayMode != .scanningGame && displayMode != .pressureResponse && displayMode != .oneTouchPassing {
             scheduleRandomBeep()
         }
         
         if displayMode == .lanes {
             assignColorsToLanes()
             startLaneAnimation()
-        } else if displayMode == .criticalScan {
-            print("🔍 Starting Critical Scan Mode")
-            startCriticalScanSequence()
-        } else if displayMode == .criticalScanArrows {
-            print("🔍 Starting Critical Scan Arrows Mode")
-            startCriticalScanArrowsSequence()
         } else if displayMode == .scanningGame {
             print("🎮 Starting Scanning Game Mode")
             startScanningGameSequence()
@@ -4216,11 +4380,11 @@ struct DisplayView: View {
         guard soundEnabled && isActive else { return }
         
         // Don't schedule beeps for Critical Scan modes or modes with their own beep timer
-        guard displayMode != .criticalScan && displayMode != .criticalScanArrows && displayMode != .fourGoalGame && displayMode != .colors && displayMode != .colorsNumbers && displayMode != .colorsArrows && displayMode != .numbers && displayMode != .lanes else { return }
+        guard displayMode != .fourGoalGame && displayMode != .colors && displayMode != .colorsNumbers && displayMode != .colorsArrows && displayMode != .numbers && displayMode != .lanes else { return }
         
         let randomInterval = Double.random(in: 10...15)
         DispatchQueue.main.asyncAfter(deadline: .now() + randomInterval) {
-            if soundEnabled && isActive && displayMode != .criticalScan && displayMode != .criticalScanArrows && displayMode != .fourGoalGame && displayMode != .colors && displayMode != .colorsNumbers && displayMode != .colorsArrows && displayMode != .numbers && displayMode != .lanes {
+            if soundEnabled && isActive && displayMode != .fourGoalGame && displayMode != .colors && displayMode != .colorsNumbers && displayMode != .colorsArrows && displayMode != .numbers && displayMode != .lanes {
                 audioPlayer?.play()
                 scheduleRandomBeep() // Schedule next beep
             }
@@ -4228,6 +4392,8 @@ struct DisplayView: View {
     }
     
     private func stopTimer() {
+        countdownTimer?.invalidate()
+        countdownTimer = nil
         timer?.invalidate()
         timer = nil
         stopBeepTimer()
@@ -4245,102 +4411,6 @@ struct DisplayView: View {
         private func stopScreenProtectionTimer() {
             screenProtectionTimer?.invalidate()
             screenProtectionTimer = nil
-        }
-        
-        private func startCriticalScanSequence() {
-            print("🔍 Starting Critical Scan Sequence")
-            
-            // Start scanning circle timer
-            scanningCircleTimer = Timer.scheduledTimer(withTimeInterval: changeInterval, repeats: true) { _ in
-                scanningColorIndex = (scanningColorIndex + 1) % selectedColorSet.colors.count
-            }
-            
-            // Schedule first critical scan
-            DispatchQueue.main.asyncAfter(deadline: .now() + getBeepInterval()) {
-                startCriticalScanPhase()
-            }
-        }
-        
-        private func startCriticalScanPhase() {
-            guard isActive else { return }
-            
-            print("🔴 Starting Critical Scan Phase")
-            criticalScanPhase = "BEEP"
-            
-            // Play critical scan sound immediately
-            if soundEnabled {
-                playCriticalScanSound()
-            }
-            
-            // Show critical phase after delay
-            DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanDelay) {
-                guard isActive else { return }
-                
-                criticalScanPhase = "CRITICAL"
-                
-                // Select random action number
-                currentActionNumber = selectedCriticalScanNumbers.randomElement() ?? 1
-                
-                // End critical phase after duration
-                DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanDuration) {
-                    startResetPhase()
-                }
-            }
-        }
-        
-        private func playCriticalScanSound() {
-            guard let soundURL = Bundle.main.url(forResource: "critical scan beep", withExtension: "wav") else {
-                print("Could not find critical scan sound file")
-                return
-            }
-            
-            do {
-                criticalScanAudioPlayer = try AVAudioPlayer(contentsOf: soundURL)
-                criticalScanAudioPlayer?.play()
-            } catch {
-                print("Could not create critical scan audio player: \(error)")
-            }
-        }
-        
-        private func startCriticalScanArrowsSequence() {
-            print("🔍 Starting Critical Scan Arrows Sequence")
-            
-            // Start scanning circle timer
-            scanningCircleTimer = Timer.scheduledTimer(withTimeInterval: changeInterval, repeats: true) { _ in
-                scanningColorIndex = (scanningColorIndex + 1) % selectedColorSet.colors.count
-            }
-            
-            // Schedule first critical scan
-            DispatchQueue.main.asyncAfter(deadline: .now() + getBeepInterval()) {
-                startCriticalScanArrowsPhase()
-            }
-        }
-        
-        private func startCriticalScanArrowsPhase() {
-            guard isActive else { return }
-            
-            print("🔴 Starting Critical Scan Arrows Phase")
-            criticalScanPhase = "BEEP"
-            
-            // Play critical scan sound immediately
-            if soundEnabled {
-                playCriticalScanSound()
-            }
-            
-            // Show critical phase after delay
-            DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanDelay) {
-                guard isActive else { return }
-                
-                criticalScanPhase = "CRITICAL"
-                
-                // Select random arrow
-                currentArrowDirection = selectedArrows.randomElement() ?? "arrow.up"
-                
-                // End critical phase after duration
-                DispatchQueue.main.asyncAfter(deadline: .now() + criticalScanDuration) {
-                    startResetPhase()
-                }
-            }
         }
         
         private func startResetPhase() {
@@ -4378,14 +4448,10 @@ struct DisplayView: View {
             criticalScanPhase = "NORMAL"
             }
             
-            // Schedule next critical scan based on display mode
-            DispatchQueue.main.asyncAfter(deadline: .now() + getBeepInterval()) {
-                if displayMode == .criticalScanArrows {
-                    startCriticalScanArrowsPhase()
-                } else if displayMode == .fourGoalGame {
+            // Schedule next round only for 4-Goal Game (pressure/one-touch use user trigger)
+            if displayMode == .fourGoalGame {
+                DispatchQueue.main.asyncAfter(deadline: .now() + getBeepInterval()) {
                     startFourGoalGamePhase()
-                } else {
-                    startCriticalScanPhase()
                 }
             }
         }
@@ -4438,6 +4504,19 @@ struct DisplayView: View {
         // Schedule first critical scan (same as other critical scan activities)
         DispatchQueue.main.asyncAfter(deadline: .now() + getBeepInterval()) {
             startFourGoalGamePhase()
+        }
+    }
+    
+    private func playCriticalScanSound() {
+        guard let soundURL = Bundle.main.url(forResource: "critical scan beep", withExtension: "wav") else {
+            print("Could not find critical scan sound file")
+            return
+        }
+        do {
+            criticalScanAudioPlayer = try AVAudioPlayer(contentsOf: soundURL)
+            criticalScanAudioPlayer?.play()
+        } catch {
+            print("Could not create critical scan audio player: \(error)")
         }
     }
     
@@ -4660,10 +4739,6 @@ struct ActivitiesGuideView: View {
                             numbersGuide
                         } else if selectedMode == .lanes {
                             lanesGuide
-                        } else if selectedMode == .criticalScan {
-                            criticalScanGuide
-                        } else if selectedMode == .criticalScanArrows {
-                            criticalScanArrowsGuide
                         } else if selectedMode == .pressureResponse {
                             pressureResponseGuide
                         } else if selectedMode == .oneTouchPassing {
@@ -4815,53 +4890,6 @@ struct ActivitiesGuideView: View {
         .cornerRadius(15)
                     }
                     
-    private var criticalScanGuide: some View {
-        VStack(alignment: .leading, spacing: 15) {
-            Text("Critical Scan Numbers Training")
-                .font(.title2)
-                .fontWeight(.bold)
-                                    .foregroundColor(.white)
-                                
-            Text("High-intensity decision-making under pressure.")
-                .foregroundColor(.white.opacity(0.8))
-            
-            VStack(alignment: .leading, spacing: 8) {
-                Text("• Normal scanning phase (white circles)")
-                Text("• Critical phase (red background + number)")
-                Text("• Execute the action for that number")
-                Text("• Reset phase (blue background)")
-                Text("• Return to normal scanning")
-                            }
-            .foregroundColor(.white.opacity(0.7))
-        }
-                            .padding()
-        .background(Color.red.opacity(0.2))
-        .cornerRadius(15)
-    }
-    
-    private var criticalScanArrowsGuide: some View {
-        VStack(alignment: .leading, spacing: 15) {
-            Text("Critical Scan Arrows Training")
-                .font(.title2)
-                .fontWeight(.bold)
-                .foregroundColor(.white)
-            
-            Text("High-intensity directional decision-making under pressure.")
-                .foregroundColor(.white.opacity(0.8))
-            
-            VStack(alignment: .leading, spacing: 8) {
-                Text("• Normal scanning phase (white circles)")
-                Text("• Critical phase (red background + arrow)")
-                Text("• Move in the direction shown")
-                Text("• Reset phase (blue background)")
-                Text("• Return to normal scanning")
-                    }
-            .foregroundColor(.white.opacity(0.7))
-                            }
-                            .padding()
-        .background(Color.red.opacity(0.2))
-        .cornerRadius(15)
-    }
     
     private var pressureResponseGuide: some View {
         VStack(alignment: .leading, spacing: 15) {

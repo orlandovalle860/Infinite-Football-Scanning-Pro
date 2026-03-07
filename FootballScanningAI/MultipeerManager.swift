@@ -17,7 +17,14 @@ extension Notification.Name {
     static let pressureResponseTrigger = Notification.Name("PressureResponseTrigger")
     /// Posted when the iPad receives a TwoMinuteMessage (PBA V2). object = TwoMinuteMessage.
     static let twoMinuteMessageReceived = Notification.Name("TwoMinuteMessageReceived")
+    /// Posted when the coach device receives session info from the iPad (e.g. hasCompletedInitialTest).
+    static let displaySessionInfoReceived = Notification.Name("DisplaySessionInfoReceived")
+    /// Posted when any screen requests return to Home (e.g. toolbar home or Leave). MainAppView listens and replaces the navigation stack.
+    static let requestPopToRoot = Notification.Name("RequestPopToRoot")
 }
+
+/// Key used for initial-test-completed state (iPad and coach devices).
+let hasCompletedInitialTestKey = "hasCompletedInitialTest"
 
 /// Service type for discovery (1–15 chars, lowercase letters/numbers/hyphens).
 private let serviceType = "fbpressure"
@@ -117,6 +124,20 @@ final class MultipeerManager: NSObject {
         }
     }
 
+    // MARK: - iPad → Coach (session info so coach hub can unlock)
+
+    /// Send session info to connected coach. Call from iPad (Display) when a peer connects.
+    func sendDisplaySessionInfo(hasCompletedInitialTest: Bool) {
+        guard isAdvertising, !session.connectedPeers.isEmpty else { return }
+        do {
+            let payload: [String: Bool] = ["hasCompletedInitialTest": hasCompletedInitialTest]
+            let json = try JSONEncoder().encode(payload)
+            var data = "display:".data(using: .utf8)!
+            data.append(json)
+            try session.send(data, toPeers: session.connectedPeers, with: .reliable)
+        } catch { /* best-effort */ }
+    }
+
 }
 
 // Explicit ObservableObject conformance (satisfies Swift 6 / strict concurrency)
@@ -157,6 +178,15 @@ extension MultipeerManager: MCSessionDelegate {
             } catch {
                 DispatchQueue.main.async {
                     self.lastError = "2-min decode: \(error.localizedDescription)"
+                }
+            }
+        } else if data.count > 8, data.prefix(8) == "display:".data(using: .utf8)! {
+            let json = data.dropFirst(8)
+            if let payload = try? JSONDecoder().decode([String: Bool].self, from: json),
+               let flag = payload["hasCompletedInitialTest"] {
+                DispatchQueue.main.async {
+                    UserDefaults.standard.set(flag, forKey: hasCompletedInitialTestKey)
+                    NotificationCenter.default.post(name: .displaySessionInfoReceived, object: nil)
                 }
             }
         }

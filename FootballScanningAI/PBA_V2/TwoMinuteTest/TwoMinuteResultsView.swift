@@ -25,9 +25,10 @@ struct TwoMinuteResultsView: View {
     @State private var navigateToCreateProfile = false
     @State private var sessionResultForSummary: SessionResult?
     @State private var isNewPersonalBestForSummary = false
+    @State private var newPersonalBestsFromBlock: [NewPersonalBest] = []
 
     private var earlyDecisions: Int { logs.filter(\.correct).count }
-    private var forwardCorrect: Int { logs.filter { $0.starGate == .up && $0.correct }.count }
+    private var forwardCorrect: Int { logs.filter { $0.ballGate == .up && $0.correct }.count }
     private let forwardTotal = 4
     private var exitCounts: [Gate: Int] {
         var c: [Gate: Int] = [.up: 0, .down: 0, .left: 0, .right: 0]
@@ -156,7 +157,7 @@ struct TwoMinuteResultsView: View {
     var body: some View {
         Group {
             if let s = sessionResultForSummary {
-                SessionSummaryView(session: s, playerName: profileManager.currentProfile?.name ?? playerStore.selectedPlayer?.name ?? "Player", isNewPersonalBest: isNewPersonalBestForSummary, profileManager: profileManager, settingsViewModel: settingsViewModel)
+                SessionSummaryView(session: s, playerName: profileManager.currentProfile?.name ?? playerStore.selectedPlayer?.name ?? "Player", isNewPersonalBest: isNewPersonalBestForSummary, newPersonalBests: newPersonalBestsFromBlock, profileManager: profileManager, settingsViewModel: settingsViewModel)
                     .environmentObject(progressStore)
                     .environmentObject(playerStore)
                     .environmentObject(popToRootTrigger)
@@ -167,13 +168,40 @@ struct TwoMinuteResultsView: View {
         }
         .onAppear {
             guard !didSave else { return }
+            guard let sessionId = CurrentSessionStore.shared.sessionId else {
+                let record = SessionRecord(
+                    id: UUID(),
+                    date: Date(),
+                    activity: .twoMinuteTest,
+                    gridSize: .fiveByFive,
+                    difficulty: difficulty,
+                    reps: 10,
+                    decisionsCompleted: logs.count,
+                    correct: earlyDecisions,
+                    forwardCorrect: forwardCorrect,
+                    speedBucket: speedBucket,
+                    bias: biasString,
+                    avgLatency: avgLatency,
+                    profile: evaluatedProfile,
+                    playerId: playerStore.selectedPlayerId
+                )
+                progressStore.add(record)
+                if let result = sessionResult {
+                    isNewPersonalBestForSummary = profileManager.wouldBeNewPersonalBest(session: result)
+                    newPersonalBestsFromBlock = profileManager.addSessionResult(result)
+                    sessionResultForSummary = result
+                }
+                didSave = true
+                return
+            }
             let record = SessionRecord(
-                id: UUID(),
+                id: sessionId,
                 date: Date(),
                 activity: .twoMinuteTest,
                 gridSize: .fiveByFive,
                 difficulty: difficulty,
                 reps: 10,
+                decisionsCompleted: logs.count,
                 correct: earlyDecisions,
                 forwardCorrect: forwardCorrect,
                 speedBucket: speedBucket,
@@ -183,9 +211,31 @@ struct TwoMinuteResultsView: View {
                 playerId: playerStore.selectedPlayerId
             )
             progressStore.add(record)
+            let decisions = logs.map { TrainingDecisionRecord.from($0) }
+            SupabaseSessionService.shared.saveSession(record: record, decisions: decisions) {
+                progressStore.markSynced(id: record.id)
+            }
+            let playerId = record.playerId ?? playerStore.selectedPlayerId
+            let activityName = record.activity.rawValue
+            for log in logs {
+                guard let sec = log.passTriggeredAt.map({ log.exitLoggedAt.timeIntervalSince($0) }) else { continue }
+                let reactionTimeMs = Int(sec * 1000)
+                if reactionTimeMs > SupabaseDecisionService.maxReactionTimeMs { continue }
+                let decision = Decision(
+                    sessionId: sessionId,
+                    playerId: playerId,
+                    activityName: activityName,
+                    stimulusType: "ball",
+                    decisionDirection: log.exitedGate.rawValue,
+                    reactionTimeMs: reactionTimeMs,
+                    correct: log.correct,
+                    createdAt: log.exitLoggedAt
+                )
+                SupabaseDecisionService.shared.saveDecision(decision)
+            }
             if let result = sessionResult {
                 isNewPersonalBestForSummary = profileManager.wouldBeNewPersonalBest(session: result)
-                profileManager.addSessionResult(result)
+                newPersonalBestsFromBlock = profileManager.addSessionResult(result)
                 sessionResultForSummary = result
             }
             didSave = true

@@ -16,6 +16,7 @@ private func lastTrainedLabel(for date: Date) -> String {
 // MARK: - Players Sheet (switch who you're training)
 struct PlayersSheetView: View {
     @ObservedObject var profileManager: UserProfileManager
+    @EnvironmentObject private var playerStore: PlayerStore
     @Environment(\.dismiss) private var dismiss
 
     @State private var isEditMode = false
@@ -23,8 +24,6 @@ struct PlayersSheetView: View {
     @State private var profileToRename: UserProfile?
     @State private var profileToRemove: UserProfile?
     @State private var showingRemoveAlert = false
-
-    private var isOnlyOnePlayer: Bool { profileManager.profiles.count <= 1 }
 
     var body: some View {
         NavigationStack {
@@ -54,11 +53,11 @@ struct PlayersSheetView: View {
                                     profile: profile,
                                     isCurrent: profileManager.currentProfile?.id == profile.id,
                                     isEditMode: isEditMode,
-                                    canRemove: !isOnlyOnePlayer,
                                     lastTrainedText: lastTrainedLabel(for: profile.lastActive),
                                     onTap: {
                                         if isEditMode { return }
                                         profileManager.switchToProfile(profile)
+                                        playerStore.selectPlayer(id: profile.id)
                                         dismiss()
                                     },
                                     onRename: { profileToRename = profile },
@@ -126,7 +125,12 @@ struct PlayersSheetView: View {
                 }
                 Button("Remove", role: .destructive) {
                     if let p = profileToRemove {
+                        ProgressStore.shared.removeSessions(forPlayerId: p.id)
                         profileManager.deleteProfile(p)
+                        playerStore.removePlayer(id: p.id)
+                        if profileManager.profiles.isEmpty {
+                            playerStore.clearAll()
+                        }
                     }
                     profileToRemove = nil
                     if profileManager.profiles.isEmpty { dismiss() }
@@ -143,62 +147,72 @@ struct PlayerRowView: View {
     let profile: UserProfile
     let isCurrent: Bool
     let isEditMode: Bool
-    let canRemove: Bool
     let lastTrainedText: String
     let onTap: () -> Void
     let onRename: () -> Void
     let onRemove: () -> Void
 
     var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(profile.name)
-                        .font(.body.weight(.semibold))
-                        .foregroundColor(.white)
-                    Text("Last trained: \(lastTrainedText)")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.7))
-                }
-                Spacer(minLength: 8)
-                if isEditMode {
-                    HStack(spacing: 12) {
-                        Button("Rename", action: onRename)
-                            .font(.subheadline.weight(.medium))
-                            .foregroundColor(.yellow)
-                        Button("Remove", action: onRemove)
-                            .font(.subheadline.weight(.medium))
-                            .foregroundColor(canRemove ? .red : .gray)
-                            .disabled(!canRemove)
-                    }
-                } else {
-                    if isCurrent {
-                        Text("Training now")
-                            .font(.caption.weight(.medium))
-                            .foregroundColor(.black)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(Color.yellow)
-                            .cornerRadius(20)
-                    }
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundColor(.white.opacity(0.5))
+        Group {
+            if isEditMode {
+                rowContent
+                    .contentShape(Rectangle())
+            } else {
+                Button(action: onTap) {
+                    rowContent
                 }
             }
-            .padding(.vertical, 14)
-            .padding(.horizontal, 16)
-            .background(Color.white.opacity(isCurrent && !isEditMode ? 0.12 : 0.06))
-            .cornerRadius(12)
         }
-        .buttonStyle(PlainButtonStyle())
-        .padding(.vertical, 4)
+        .padding(.vertical, 14)
+        .padding(.horizontal, 16)
+        .background(Color.white.opacity(isCurrent && !isEditMode ? 0.12 : 0.06))
+        .cornerRadius(12)
+    }
+
+    private var rowContent: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(profile.name)
+                    .font(.body.weight(.semibold))
+                    .foregroundColor(.white)
+                Text("Last trained: \(lastTrainedText)")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.7))
+            }
+            Spacer(minLength: 8)
+            if isEditMode {
+                HStack(spacing: 12) {
+                    Button("Rename", action: onRename)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundColor(.yellow)
+                        .buttonStyle(.borderless)
+                        Button("Remove", action: onRemove)
+                            .font(.subheadline.weight(.medium))
+                            .foregroundColor(.red)
+                            .buttonStyle(.borderless)
+                }
+            } else {
+                if isCurrent {
+                    Text("Training now")
+                        .font(.caption.weight(.medium))
+                        .foregroundColor(.black)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Color.yellow)
+                        .cornerRadius(20)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.5))
+            }
+        }
     }
 }
 
 // MARK: - Add Player
 struct AddPlayerView: View {
     @ObservedObject var profileManager: UserProfileManager
+    @EnvironmentObject private var playerStore: PlayerStore
     @Environment(\.dismiss) private var dismiss
 
     @State private var name = ""
@@ -306,13 +320,14 @@ struct AddPlayerView: View {
         let ageTrim = age.trimmingCharacters(in: .whitespacesAndNewlines)
         let teamTrim = team.trimmingCharacters(in: .whitespacesAndNewlines)
         let positionTrim = position.trimmingCharacters(in: .whitespacesAndNewlines)
-        profileManager.addProfile(
+        let newProfile = profileManager.addProfile(
             name: trimmed,
             email: nil,
             age: ageTrim.isEmpty ? nil : ageTrim,
             team: teamTrim.isEmpty ? nil : teamTrim,
             position: positionTrim.isEmpty ? nil : positionTrim
         )
+        playerStore.addPlayer(id: newProfile.id, name: trimmed)
         dismiss()
     }
 }
@@ -400,6 +415,7 @@ struct RenamePlayerView: View {
 
 #Preview("Players sheet") {
     PlayersSheetView(profileManager: UserProfileManager())
+        .environmentObject(PlayerStore())
 }
 
 #Preview("Add Player") {

@@ -43,8 +43,10 @@ struct SessionResult: Identifiable, Codable, Hashable {
     let forwardOpportunityCount: Int?
     /// Pre-Receive Decision Rate: reps where decisionTime < threshold AND firstTouchDirection == correctDirection.
     let preReceiveDecisionCount: Int?
+    /// Standard deviation of decision times within the session (seconds). Lower = more consistent. Optional for backward compatibility.
+    let decisionTimeStdDev: Double?
 
-    init(id: UUID = UUID(), date: Date = Date(), playerID: UUID, activityType: ActivityKind, correctCount: Int, totalReps: Int, speedCounts: SessionSpeedCounts, avgDecisionTime: Double? = nil, biasDirection: Gate? = nil, directionCounts: [Gate: Int] = [:], firstTouchCounts: [Gate: Int]? = nil, firstTouchMatchCount: Int? = nil, firstTouchTowardPressureCount: Int? = nil, firstTouchHesitantCount: Int? = nil, lateAdjustments: Int? = nil, notes: String? = nil, difficulty: TestDifficulty? = nil, decisionTotalScore: Double? = nil, forwardChoiceCount: Int? = nil, forwardOpportunityCount: Int? = nil, preReceiveDecisionCount: Int? = nil) {
+    init(id: UUID = UUID(), date: Date = Date(), playerID: UUID, activityType: ActivityKind, correctCount: Int, totalReps: Int, speedCounts: SessionSpeedCounts, avgDecisionTime: Double? = nil, biasDirection: Gate? = nil, directionCounts: [Gate: Int] = [:], firstTouchCounts: [Gate: Int]? = nil, firstTouchMatchCount: Int? = nil, firstTouchTowardPressureCount: Int? = nil, firstTouchHesitantCount: Int? = nil, lateAdjustments: Int? = nil, notes: String? = nil, difficulty: TestDifficulty? = nil, decisionTotalScore: Double? = nil, forwardChoiceCount: Int? = nil, forwardOpportunityCount: Int? = nil, preReceiveDecisionCount: Int? = nil, decisionTimeStdDev: Double? = nil) {
         self.id = id
         self.date = date
         self.playerID = playerID
@@ -66,6 +68,7 @@ struct SessionResult: Identifiable, Codable, Hashable {
         self.forwardChoiceCount = forwardChoiceCount
         self.forwardOpportunityCount = forwardOpportunityCount
         self.preReceiveDecisionCount = preReceiveDecisionCount
+        self.decisionTimeStdDev = decisionTimeStdDev
     }
 }
 
@@ -75,7 +78,7 @@ extension SessionResult {
         case id, date, playerID, activityType, correctCount, totalReps, speedCounts, avgDecisionTime
         case biasDirection, directionCounts, firstTouchCounts, firstTouchMatchCount
         case firstTouchTowardPressureCount, firstTouchHesitantCount, lateAdjustments, notes, difficulty
-        case decisionTotalScore, forwardChoiceCount, forwardOpportunityCount, preReceiveDecisionCount
+        case decisionTotalScore, forwardChoiceCount, forwardOpportunityCount, preReceiveDecisionCount, decisionTimeStdDev
     }
 
     init(from decoder: Decoder) throws {
@@ -101,6 +104,7 @@ extension SessionResult {
         forwardChoiceCount = try c.decodeIfPresent(Int.self, forKey: .forwardChoiceCount)
         forwardOpportunityCount = try c.decodeIfPresent(Int.self, forKey: .forwardOpportunityCount)
         preReceiveDecisionCount = try c.decodeIfPresent(Int.self, forKey: .preReceiveDecisionCount)
+        decisionTimeStdDev = try c.decodeIfPresent(Double.self, forKey: .decisionTimeStdDev)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -126,5 +130,18 @@ extension SessionResult {
         try c.encodeIfPresent(forwardChoiceCount, forKey: .forwardChoiceCount)
         try c.encodeIfPresent(forwardOpportunityCount, forKey: .forwardOpportunityCount)
         try c.encodeIfPresent(preReceiveDecisionCount, forKey: .preReceiveDecisionCount)
+        try c.encodeIfPresent(decisionTimeStdDev, forKey: .decisionTimeStdDev)
+    }
+}
+
+// MARK: - Decision time variation (for consistency metric)
+
+extension SessionResult {
+    /// Standard deviation of a non-empty array of decision times. Returns nil if count < 2.
+    static func standardDeviation(of times: [Double]) -> Double? {
+        guard times.count >= 2 else { return nil }
+        let mean = times.reduce(0, +) / Double(times.count)
+        let variance = times.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Double(times.count)
+        return variance >= 0 ? sqrt(variance) : nil
     }
 }

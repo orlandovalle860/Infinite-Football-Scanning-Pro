@@ -46,6 +46,80 @@ struct DailyTargetState {
     }
 }
 
+// MARK: - Daily Decision Goal (36 decisions per day = 3 blocks of 12)
+
+/// Tracks daily decisions completed per player. Stored in UserDefaults under key namespace `pba_daily_progress`.
+/// Each time a decision occurs in any activity, the counter is incremented (via ProgressStore.add(record) → addDecisions(record.reps)).
+/// The counter resets automatically when the calendar date changes (on next add or when read: past date returns 0).
+struct DailyDecisionProgress {
+    static let goalPerDay = 36
+    private static let dateKeyPrefix = "pba_daily_progress_date"
+    private static let countKeyPrefix = "pba_daily_progress"
+
+    /// Decisions completed today for the given player (nil = legacy/unselected). Returns 0 when the stored date is not today (automatic reset).
+    static func decisionsCompletedToday(playerId: UUID?) -> Int {
+        let dateKey = playerId.map { "\(dateKeyPrefix)_\($0.uuidString)" } ?? dateKeyPrefix
+        let countKey = playerId.map { "\(countKeyPrefix)_\($0.uuidString)" } ?? countKeyPrefix
+        let today = dateKeyString(Date())
+        if let stored = UserDefaults.standard.string(forKey: dateKey), stored == today {
+            return UserDefaults.standard.integer(forKey: countKey)
+        }
+        return 0
+    }
+
+    /// Increment today’s decision counter. Called when decisions are recorded (e.g. ProgressStore.add adds record.reps). Resets count to 0 when the calendar date has changed.
+    static func addDecisions(_ count: Int, playerId: UUID?) {
+        let dateKey = playerId.map { "\(dateKeyPrefix)_\($0.uuidString)" } ?? dateKeyPrefix
+        let countKey = playerId.map { "\(countKeyPrefix)_\($0.uuidString)" } ?? countKeyPrefix
+        let today = dateKeyString(Date())
+        if let stored = UserDefaults.standard.string(forKey: dateKey), stored != today {
+            UserDefaults.standard.set(0, forKey: countKey)
+        }
+        UserDefaults.standard.set(today, forKey: dateKey)
+        let current = UserDefaults.standard.integer(forKey: countKey)
+        UserDefaults.standard.set(current + count, forKey: countKey)
+    }
+
+    /// Remove stored daily progress for a player (e.g. when profile is deleted).
+    static func clearForPlayer(_ id: UUID) {
+        UserDefaults.standard.removeObject(forKey: "\(dateKeyPrefix)_\(id.uuidString)")
+        UserDefaults.standard.removeObject(forKey: "\(countKeyPrefix)_\(id.uuidString)")
+    }
+
+    private static func dateKeyString(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = TimeZone.current
+        return formatter.string(from: date)
+    }
+}
+
+// MARK: - Decision Consistency (within-session variation of decision speed)
+
+/// Within-session stability of decision speed. Lower variation = higher consistency.
+enum DecisionConsistencyLabel: String {
+    case high = "High"
+    case medium = "Medium"
+    case low = "Low"
+
+    /// From session result: use decisionTimeStdDev when available; otherwise infer from speed bucket distribution.
+    static func from(session: SessionResult?) -> DecisionConsistencyLabel? {
+        guard let s = session, s.totalReps > 0 else { return nil }
+        if let stdDev = s.decisionTimeStdDev {
+            if stdDev < 0.20 { return .high }
+            if stdDev < 0.45 { return .medium }
+            return .low
+        }
+        let (f, m, sl) = (s.speedCounts.fast, s.speedCounts.medium, s.speedCounts.slow)
+        let total = f + m + sl
+        guard total > 0 else { return nil }
+        let maxInOne = max(f, m, sl)
+        if Double(maxInOne) >= Double(total) * 0.83 { return .high }
+        if Double(maxInOne) >= Double(total) * 0.58 { return .medium }
+        return .low
+    }
+}
+
 // MARK: - Consistency (from last 5 blocks)
 
 enum ConsistencyLabel: String {

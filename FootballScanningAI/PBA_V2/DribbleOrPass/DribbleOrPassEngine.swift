@@ -196,46 +196,51 @@ final class DribbleOrPassEngine: ObservableObject {
         cancelTimers()
     }
 
-    func onExitLogged(repIndex: Int, gate: Gate, timestamp: Date) {
-        guard repIndex == currentRepIndex else { return }
+    /// Max reaction time (trigger → confirmation); reps above this are discarded.
+    private static let maxReactionTimeSeconds: TimeInterval = 2.0
+
+    /// Returns reaction time in seconds when rep was saved; nil when discarded.
+    func onExitLogged(repIndex: Int, gate: Gate, timestamp: Date) -> Double? {
+        guard repIndex == currentRepIndex else { return nil }
         var rIdx: Int?
         switch phase {
         case .awaitingExitLog(let ri): rIdx = ri
         case .cueVisible(let ri, _): rIdx = ri
         case .cueRevealing(let ri, _): rIdx = ri
-        default: return
+        default: return nil
         }
-        guard let ri = rIdx, ri == repIndex else { return }
+        guard let ri = rIdx, ri == repIndex else { return nil }
+        guard let triggerTime = passTriggeredAt else { return nil }
+
+        let reactionTimeSeconds = timestamp.timeIntervalSince(triggerTime)
+        if reactionTimeSeconds > Self.maxReactionTimeSeconds {
+            passTriggeredAt = nil
+            pendingFirstTouchByRep[repIndex] = nil
+            if repIndex + 1 >= plan.count { phase = .blockComplete } else { phase = .waitingForNextRep }
+            updateInstructions()
+            return nil
+        }
 
         let p = plan[repIndex]
         let correct = (gate == p.expectedCorrectGate)
-        let passTime = passTriggeredAt ?? Date()
         let pending = pendingFirstTouchByRep[repIndex]
-        let decisionTime: Double
-        let firstTouchGate: Gate?
-        if let first = pending {
-            decisionTime = first.timestamp.timeIntervalSince(passTime)
-            firstTouchGate = first.gate
-        } else {
-            decisionTime = timestamp.timeIntervalSince(passTime)
-            firstTouchGate = nil
-        }
         pendingFirstTouchByRep[repIndex] = nil
-        let speed = TimingThresholds.dribblePassDecisionSpeed(for: decisionTime)
+        let speed = TimingThresholds.dribblePassDecisionSpeed(for: reactionTimeSeconds)
         let decisionPoints = dribbleOrPassDecisionPoints(plan: p, chosenGate: gate)
         let timingBonus = dribbleOrPassTimingBonus(speed)
         let result = DribbleOrPassRepResult(
             repIndex: repIndex,
             correct: correct,
-            decisionTime: decisionTime,
+            decisionTime: reactionTimeSeconds,
             decisionSpeed: speed,
             expectedGate: p.expectedCorrectGate,
             chosenGate: gate,
             decisionPoints: decisionPoints,
             timingBonus: timingBonus,
-            firstTouchGate: firstTouchGate
+            firstTouchGate: pending?.gate
         )
         repResults.append(result)
+        passTriggeredAt = nil
 
         if repIndex + 1 >= plan.count {
             phase = .blockComplete
@@ -243,6 +248,55 @@ final class DribbleOrPassEngine: ObservableObject {
             phase = .waitingForNextRep
         }
         updateInstructions()
+        return reactionTimeSeconds
+    }
+
+    /// Called when coach taps ✕ (incorrect decision). Records rep as incorrect. Returns reaction time in seconds when saved; nil when discarded.
+    func onIncorrectDecision(repIndex: Int, timestamp: Date) -> Double? {
+        guard repIndex == currentRepIndex else { return nil }
+        var rIdx: Int?
+        switch phase {
+        case .awaitingExitLog(let ri): rIdx = ri
+        case .cueVisible(let ri, _): rIdx = ri
+        case .cueRevealing(let ri, _): rIdx = ri
+        default: return nil
+        }
+        guard let ri = rIdx, ri == repIndex else { return nil }
+        guard let triggerTime = passTriggeredAt else { return nil }
+
+        let reactionTimeSeconds = timestamp.timeIntervalSince(triggerTime)
+        if reactionTimeSeconds > Self.maxReactionTimeSeconds {
+            passTriggeredAt = nil
+            pendingFirstTouchByRep[repIndex] = nil
+            if repIndex + 1 >= plan.count { phase = .blockComplete } else { phase = .waitingForNextRep }
+            updateInstructions()
+            return nil
+        }
+
+        let p = plan[repIndex]
+        pendingFirstTouchByRep[repIndex] = nil
+        let speed = TimingThresholds.dribblePassDecisionSpeed(for: reactionTimeSeconds)
+        let result = DribbleOrPassRepResult(
+            repIndex: repIndex,
+            correct: false,
+            decisionTime: reactionTimeSeconds,
+            decisionSpeed: speed,
+            expectedGate: p.expectedCorrectGate,
+            chosenGate: .down,
+            decisionPoints: 0,
+            timingBonus: 0,
+            firstTouchGate: nil
+        )
+        repResults.append(result)
+        passTriggeredAt = nil
+
+        if repIndex + 1 >= plan.count {
+            phase = .blockComplete
+        } else {
+            phase = .waitingForNextRep
+        }
+        updateInstructions()
+        return reactionTimeSeconds
     }
 
     /// Called when coach logs first touch (before or after exit). If before exit, cached and applied when exit is logged.

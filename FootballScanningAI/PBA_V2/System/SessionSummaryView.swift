@@ -31,6 +31,8 @@ struct SessionSummaryView: View {
     let playerName: String
     /// When true, show "New Personal Best" badge (set when this session just beat the previous best).
     var isNewPersonalBest: Bool = false
+    /// New personal bests from this block (decision speed, pressure escape, forward intent). When non-empty, show celebration banner.
+    var newPersonalBests: [NewPersonalBest] = []
     /// When set (e.g. from block summary), "Back to Home" calls this to pop to Progress instead of one level.
     var onBackToHome: (() -> Void)? = nil
     @ObservedObject var profileManager: UserProfileManager
@@ -47,34 +49,89 @@ struct SessionSummaryView: View {
 
     private var activityName: String { activityDisplayName(session.activityType) }
     private var coachInsightText: String { CoachInsightGenerator.coachInsight(for: session) }
+
+    /// Display-only Decision Speed Score (0–100) derived from session correctness and avg reaction time. No backend change.
+    private var displayDecisionSpeedScore: Int? {
+        guard session.totalReps > 0 else { return nil }
+        let ms = Int((session.avgDecisionTime ?? 1.0) * 1000)
+        let reactionTimesMs = [Int](repeating: ms, count: session.totalReps)
+        let correct = (0..<session.correctCount).map { _ in true } + (0..<(session.totalReps - session.correctCount)).map { _ in false }
+        return DecisionSpeedScore.sessionScore(reactionTimesMs: reactionTimesMs, correct: correct)
+    }
+
+    private var newPersonalBestBanner: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("New Personal Best!")
+                .font(.headline.weight(.semibold))
+                .foregroundColor(.yellow)
+            ForEach(Array(newPersonalBests.enumerated()), id: \.offset) { _, best in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(best.title)
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.95))
+                    Text(best.improvementText)
+                        .font(.subheadline.monospacedDigit())
+                        .foregroundColor(.white.opacity(0.85))
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(Color.yellow.opacity(0.15))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.yellow.opacity(0.5), lineWidth: 1)
+        )
+        .cornerRadius(12)
+    }
+
     private var personalBest: ActivityBest? {
         profileManager.currentProfile?.personalBests[session.activityType]
             ?? profileManager.profiles.first(where: { $0.id == session.playerID })?.personalBests[session.activityType]
     }
 
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                Text("Session Summary")
-                    .font(.title2.bold())
-                    .foregroundColor(.white)
-                Text("\(playerName) • \(activityName)")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.8))
+    private var profiles: [UserProfile] { profileManager.profiles }
 
-                correctCard
+    var body: some View {
+        if !profiles.contains(where: { $0.id == session.playerID }) {
+            deletedPlayerPlaceholder
+        } else {
+            sessionSummaryContent
+        }
+    }
+
+    private var deletedPlayerPlaceholder: some View {
+        VStack(spacing: 16) {
+            Text("Player no longer available.")
+                .font(.headline)
+                .foregroundColor(.white.opacity(0.8))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(red: 0.08, green: 0.08, blue: 0.12))
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    router.popToRoot()
+                } label: {
+                    Image(systemName: "house.fill")
+                }
+                .foregroundColor(.white.opacity(0.9))
+            }
+        }
+    }
+
+    private var sessionSummaryContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                decisionSpeedHeroSection
+
+                performanceStatSections
+
                 if session.activityType == .awayFromPressure {
                     pressureEscapesCard
                 }
-                if isNewPersonalBest {
-                    Text("New Personal Best")
-                        .foregroundColor(.yellow)
-                        .font(.headline)
-                }
-                personalBestCard
-                decisionSpeedCard
                 biasCard
-                firstTouchCard
+
                 coachInsightCard
 
                 buttonsSection
@@ -103,6 +160,107 @@ struct SessionSummaryView: View {
         }
         .navigationDestination(isPresented: $navigateToTrainAnother) {
             trainAnotherDestination
+        }
+    }
+
+    /// 1. Decision Speed Score as main visual: large score, then "New Personal Best" / percentile, then Next Target.
+    private var decisionSpeedHeroSection: some View {
+        VStack(spacing: 12) {
+            Text("\(playerName) • \(activityName)")
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.8))
+                .frame(maxWidth: .infinity)
+
+            if let score = displayDecisionSpeedScore {
+                Text("\(score)")
+                    .font(.system(size: 56, weight: .bold, design: .rounded))
+                    .foregroundColor(.white)
+                Text("Decision Speed Score")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundColor(.white.opacity(0.8))
+
+                if !newPersonalBests.isEmpty {
+                    newPersonalBestBanner
+                } else if isNewPersonalBest {
+                    Text("New Personal Best")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.yellow)
+                }
+
+                Text("Next Target: \(score + 1)")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundColor(.yellow.opacity(0.95))
+            } else {
+                Text("—")
+                    .font(.system(size: 56, weight: .bold, design: .rounded))
+                    .foregroundColor(.white.opacity(0.5))
+                Text("Decision Speed Score")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundColor(.white.opacity(0.7))
+                if !newPersonalBests.isEmpty { newPersonalBestBanner }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+    }
+
+    /// 2. Performance stats in clean sections: Average Reaction Time, Correct Decisions, First Touch Accuracy.
+    private var performanceStatSections: some View {
+        let prev = progressStore.previous(session.activityType, playerId: session.playerID)
+        return VStack(spacing: 16) {
+            statSection(
+                label: "Average Reaction Time",
+                value: session.avgDecisionTime.map { String(format: "%.2fs", $0) } ?? "—",
+                improvement: reactionTimeImprovement(previous: prev)
+            )
+            statSection(
+                label: "Correct Decisions",
+                value: "\(session.correctCount) / \(session.totalReps)",
+                improvement: correctDecisionsImprovement(previous: prev)
+            )
+            if session.firstTouchMatchCount != nil || session.firstTouchCounts != nil {
+                let pct = session.totalReps > 0 ? Int(round(Double(session.firstTouchMatchCount ?? 0) / Double(session.totalReps) * 100)) : 0
+                statSection(
+                    label: "First Touch Accuracy",
+                    value: "\(pct)%",
+                    improvement: nil
+                )
+            }
+        }
+    }
+
+    private func reactionTimeImprovement(previous: SessionRecord?) -> String? {
+        guard let curr = session.avgDecisionTime, let prevSec = previous?.avgLatency else { return nil }
+        let diff = prevSec - curr
+        if diff > 0.01 { return "↓ \(String(format: "%.2f", diff))s faster" }
+        if diff < -0.01 { return "↑ \(String(format: "%.2f", -diff))s slower" }
+        return nil
+    }
+
+    private func correctDecisionsImprovement(previous: SessionRecord?) -> String? {
+        guard let prev = previous else { return nil }
+        let diff = session.correctCount - prev.correct
+        if diff > 0 { return "+\(diff) since last session" }
+        if diff < 0 { return "\(diff) since last session" }
+        return nil
+    }
+
+    private func statSection(label: String, value: String, improvement: String?) -> some View {
+        card {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(label)
+                    .font(.caption.weight(.medium))
+                    .foregroundColor(.white.opacity(0.75))
+                Text(value)
+                    .font(.title2.weight(.bold))
+                    .foregroundColor(.white)
+                if let improvement = improvement, !improvement.isEmpty {
+                    Text(improvement)
+                        .font(.caption)
+                        .foregroundColor(.green.opacity(0.95))
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -161,6 +319,19 @@ struct SessionSummaryView: View {
                 Text("Decision Speed")
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(.white)
+                if let avg = session.avgDecisionTime {
+                    Text(String(format: "%.2fs", avg))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white)
+                    if let band = DecisionSpeedBand.band(forSeconds: avg) {
+                        Text(band.label)
+                            .font(.caption.weight(.medium))
+                            .foregroundColor(band.color)
+                        Text(band.explanation)
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.6))
+                    }
+                }
                 HStack(spacing: 12) {
                     pill("Fast", value: session.speedCounts.fast)
                     pill("Medium", value: session.speedCounts.medium)
@@ -228,18 +399,25 @@ struct SessionSummaryView: View {
         }
     }
 
+    /// Coach Feedback: highlighted card so it stands apart from stats.
     private var coachInsightCard: some View {
-        card {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Coach Insight")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.yellow)
-                Text(coachInsightText)
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.9))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Coach Feedback")
+                .font(.headline.weight(.semibold))
+                .foregroundColor(.yellow)
+            Text(coachInsightText)
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.95))
+                .fixedSize(horizontal: false, vertical: true)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+        .background(Color.yellow.opacity(0.12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(Color.yellow.opacity(0.4), lineWidth: 1.5)
+        )
+        .cornerRadius(14)
     }
 
     private var buttonsSection: some View {
@@ -317,19 +495,19 @@ struct SessionSummaryView: View {
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
         case .awayFromPressure:
-            AwayFromPressureGetReadyView(config: AwayFromPressureConfig.config(for: session.difficulty ?? .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+            AwayFromPressureDisplaySessionView(config: AwayFromPressureConfig.config(for: session.difficulty ?? .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
         case .dribbleOrPass:
-            DribbleOrPassGetReadyView(config: DribbleOrPassConfig.defaultConfig(for: session.difficulty ?? .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+            DribbleOrPassDisplaySessionView(config: DribbleOrPassConfig.defaultConfig(for: session.difficulty ?? .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
         case .oneTouchPassing:
-            OneTouchPassingGetReadyView(config: OneTouchPassingConfig.defaultConfig(for: session.difficulty ?? .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+            OneTouchPassingDisplaySessionView(config: OneTouchPassingConfig.defaultConfig(for: session.difficulty ?? .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)

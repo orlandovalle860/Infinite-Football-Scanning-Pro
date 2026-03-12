@@ -30,9 +30,9 @@ struct PBACurriculumView: View {
     }
 
     private static let activities: [(title: String, subtitle: String, activity: ActivityKind)] = [
-        ("Playing Away From Pressure", "Read danger and escape.", .awayFromPressure),
-        ("Dribble or Pass", "Choose action under pressure.", .dribbleOrPass),
-        ("One-Touch Passing", "Decide before the ball arrives.", .oneTouchPassing)
+        ("Playing Away From Pressure", "Recognize pressure and escape quickly.", .awayFromPressure),
+        ("Dribble or Pass", "Choose the correct attacking action.", .dribbleOrPass),
+        ("One-Touch Passing", "Decide and execute instantly.", .oneTouchPassing)
     ]
 
     private let timelineIndicatorWidth: CGFloat = 48
@@ -49,6 +49,11 @@ struct PBACurriculumView: View {
         if !progressStore.isUnlocked(activity: activity, playerId: playerId) { return .locked }
         if progressStore.isReady(activity: activity, playerId: playerId) { return .completed }
         return .current
+    }
+
+    /// True when the player has completed at least one block in this activity (used for filled ● vs empty ○).
+    private func hasCompletedBlock(activity: ActivityKind) -> Bool {
+        progressStore.last(activity, playerId: playerStore.selectedPlayerId) != nil
     }
 
     /// Stage mastery 0–100 from last 3 training blocks (same formula as dashboard decision score).
@@ -71,14 +76,19 @@ struct PBACurriculumView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: rowSpacing) {
-                    Text("Perception Training Path")
-                        .font(.system(size: 34, weight: .bold))
-                        .foregroundColor(.white)
-                        .padding(.leading, timelineIndicatorWidth + 20)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Perception Training Path")
+                            .font(.system(size: 34, weight: .bold))
+                            .foregroundColor(.white)
+                        Text("Activities build on each other. Complete each step to progress.")
+                            .font(.subheadline)
+                            .foregroundColor(.white.opacity(0.8))
+                    }
+                    .padding(.leading, timelineIndicatorWidth + 20)
 
-                    curriculumRow(index: 0, title: "Playing Away From Pressure", subtitle: "Read danger and escape.", route: .awayFromPressureRoleSelection)
-                    curriculumRow(index: 1, title: "Dribble or Pass", subtitle: "Choose action under pressure.", route: .dribbleOrPassRoleSelection)
-                    curriculumRow(index: 2, title: "One-Touch Passing", subtitle: "Decide before the ball arrives.", route: .oneTouchPassingRoleSelection)
+                    curriculumRow(index: 0, title: "Playing Away From Pressure", subtitle: Self.activities[0].subtitle, route: .awayFromPressureRoleSelection)
+                    curriculumRow(index: 1, title: "Dribble or Pass", subtitle: Self.activities[1].subtitle, route: .dribbleOrPassRoleSelection)
+                    curriculumRow(index: 2, title: "One-Touch Passing", subtitle: Self.activities[2].subtitle, route: .oneTouchPassingRoleSelection)
                 }
                 .frame(maxWidth: 860, alignment: .leading)
                 .padding(.horizontal, 20)
@@ -136,7 +146,7 @@ struct PBACurriculumView: View {
                     .frame(maxHeight: .infinity)
             }
 
-            stageCircle(state: state)
+            stageCircle(index: index, state: state)
 
             if index != lastIndex {
                 ZStack(alignment: .top) {
@@ -157,27 +167,14 @@ struct PBACurriculumView: View {
         .frame(maxHeight: .infinity)
     }
 
-    @ViewBuilder
-    private func stageCircle(state: StageState) -> some View {
-        switch state {
-        case .completed:
-            ZStack {
-                Circle()
-                    .fill(Color.green)
-                Image(systemName: "checkmark")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundColor(.white)
-            }
-            .frame(width: 14, height: 14)
-        case .current:
-            Circle()
-                .fill(Color.yellow)
-                .frame(width: 14, height: 14)
-        case .locked:
-            Circle()
-                .stroke(Color.gray.opacity(0.6), lineWidth: 2)
-                .frame(width: 14, height: 14)
-        }
+    /// Progress indicator: filled ● when player has completed at least one block in this activity, empty ○ otherwise. Updates when a block is completed.
+    private func stageCircle(index: Int, state: StageState) -> some View {
+        let activity = Self.activities[index].activity
+        let filled = hasCompletedBlock(activity: activity)
+        let color: Color = state == .locked ? Self.lockedColor : (filled ? Self.completedColor : Self.currentColor)
+        return Text(filled ? "●" : "○")
+            .font(.system(size: 18, weight: .medium))
+            .foregroundColor(color)
     }
 
     /// Card: dark rounded rect, stage label, title, subtitle, mastery progress, large yellow Train button. Padding 22, corner radius 18.

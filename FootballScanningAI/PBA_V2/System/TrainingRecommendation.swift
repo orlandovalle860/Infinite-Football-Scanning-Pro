@@ -231,12 +231,14 @@ enum TrainingRecommendation {
 
     /// Full recommendation for Home: activity + focus + coachTip from the same logic.
     /// Pass lastAFPSessionResult to keep recommending Playing Away From Pressure when first-touch issues are present.
+    /// Pass decisionConsistency; when speed is good but consistency is low, recommend repeating the same activity before advancing.
     static func recommend(
         progressStore: ProgressStore,
         playerId: UUID?,
         last5: [SessionRecord],
         hasCompletedInitialTest: Bool,
-        lastAFPSessionResult: SessionResult? = nil
+        lastAFPSessionResult: SessionResult? = nil,
+        decisionConsistency: DecisionConsistencyLabel? = nil
     ) -> TrainingRecommendationResult {
         if progressStore.last(.twoMinuteTest, playerId: playerId) == nil {
             return TrainingRecommendationResult(
@@ -306,6 +308,18 @@ enum TrainingRecommendation {
             activity = .awayFromPressure
             recommendReason = .firstTouchIssues
             reason = "First-touch decisions need work—keep training this activity."
+        }
+
+        // If decision speed is good (fast or medium) but within-session consistency is low, recommend repeating the same activity before advancing.
+        let speedIsGood = (speed == .fast || speed == .medium)
+        if speedIsGood, decisionConsistency == .low {
+            if activity == .oneTouchPassing {
+                activity = .dribbleOrPass
+                reason = "Build more consistent decision speed before advancing."
+            } else if activity == .dribbleOrPass {
+                activity = .awayFromPressure
+                reason = "Build more consistent decision speed before advancing."
+            }
         }
 
         let (focus, coachTip) = focusAndCoachTip(activity: activity, reason: recommendReason, lastAFPSessionResult: lastAFPSessionResult, speed: speed, bias: bias)

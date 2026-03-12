@@ -8,6 +8,7 @@
 import SwiftUI
 import AVFoundation
 import MediaPlayer
+import MultipeerConnectivity
 
 enum TwoMinuteCoachState: Equatable {
     case ready
@@ -16,6 +17,7 @@ enum TwoMinuteCoachState: Equatable {
 }
 
 struct TwoMinuteCoachRemoteView: View {
+    @EnvironmentObject private var connectionManager: ConnectionManager
     @EnvironmentObject private var multipeerManager: MultipeerManager
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
@@ -50,7 +52,7 @@ struct TwoMinuteCoachRemoteView: View {
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(volumeTriggerOverlay)
-        .onDisappear { multipeerManager.stopBrowsing() }
+        .onDisappear { connectionManager.stopBrowsing() }
         .onChange(of: state) { _, newState in
             if case .complete = newState {
                 UserDefaults.standard.set(true, forKey: "hasCompletedInitialTest")
@@ -63,11 +65,11 @@ struct TwoMinuteCoachRemoteView: View {
 
     private var readyView: some View {
         VStack(spacing: 24) {
-            if multipeerManager.connectedPeerName == nil {
+            if connectionManager.connectedPeerName == nil {
                 connectionSection
             } else {
                 Spacer(minLength: 40)
-                if let name = multipeerManager.connectedPeerName {
+                if let name = connectionManager.connectedPeerName {
                     Text("Connected to \(name)")
                         .font(.subheadline)
                         .foregroundColor(.green)
@@ -79,8 +81,8 @@ struct TwoMinuteCoachRemoteView: View {
                     .padding(.horizontal)
 
                 Button {
-                    multipeerManager.lastError = nil
-                    multipeerManager.sendTwoMinuteMessage(.nextRep(repIndex: currentRepIndex))
+                    connectionManager.lastError = nil
+                    connectionManager.sendTwoMinuteMessage(.nextRep(repIndex: currentRepIndex))
                     state = .logging(repIndex: currentRepIndex)
                 } label: {
                     Text("NEXT REP")
@@ -105,13 +107,16 @@ struct TwoMinuteCoachRemoteView: View {
 
     private func loggingView(repIndex: Int) -> some View {
         VStack(spacing: 16) {
+            Text("Rep \(repIndex + 1) of \(totalReps)")
+                .font(.footnote)
+                .foregroundColor(.white.opacity(0.5))
             Text("When the Display beeps, tap PASS or press volume at strike.")
                 .font(.subheadline)
                 .foregroundColor(.white.opacity(0.9))
                 .multilineTextAlignment(.center)
 
             Button {
-                multipeerManager.sendTwoMinuteMessage(.passTriggered(repIndex: repIndex, timestamp: Date()))
+                connectionManager.sendTwoMinuteMessage(.passTriggered(repIndex: repIndex, timestamp: Date()))
             } label: {
                 Text("PASS")
                     .font(.system(size: 28, weight: .bold, design: .rounded))
@@ -124,7 +129,7 @@ struct TwoMinuteCoachRemoteView: View {
             .buttonStyle(PlainButtonStyle())
             .padding(.horizontal, 24)
 
-            Text("Tap arrow when player exits:")
+            Text("Tap the direction the player chose, or ✕ if incorrect.")
                 .font(.footnote)
                 .foregroundColor(.white.opacity(0.7))
 
@@ -146,13 +151,23 @@ struct TwoMinuteCoachRemoteView: View {
             HStack(spacing: 10) {
                 Button { logExit(.left) } label: { arrowLabel("arrow.left") }
                     .buttonStyle(PlainButtonStyle())
+                Button { logIncorrect() } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 28, weight: .bold))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color.red.opacity(0.7))
+                        .cornerRadius(12)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(PlainButtonStyle())
                 Button { logExit(.right) } label: { arrowLabel("arrow.right") }
                     .buttonStyle(PlainButtonStyle())
             }
             Button { logExit(.down) } label: { arrowLabel("arrow.down") }
                 .buttonStyle(PlainButtonStyle())
         }
-        .frame(height: 170)
+        .frame(height: 200)
     }
 
     private func arrowLabel(_ name: String) -> some View {
@@ -167,16 +182,19 @@ struct TwoMinuteCoachRemoteView: View {
 
     private var connectionSection: some View {
         VStack(spacing: 20) {
+            Text("Rep \(currentRepIndex + 1) of \(totalReps)")
+                .font(.footnote)
+                .foregroundColor(.white.opacity(0.5))
             Text("Connect to the device showing the grid (Display). Keep both devices nearby and allow Local Network if prompted.")
                 .font(.subheadline)
                 .foregroundColor(.white.opacity(0.9))
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
 
-            if !multipeerManager.isBrowsing {
+            if !connectionManager.isBrowsing {
                 Button("Connect to Display") {
-                    multipeerManager.lastError = nil
-                    multipeerManager.startBrowsing()
+                    connectionManager.lastError = nil
+                    connectionManager.startBrowsing()
                 }
                 .font(.headline)
                 .foregroundColor(.black)
@@ -185,23 +203,45 @@ struct TwoMinuteCoachRemoteView: View {
                 .background(Color.yellow)
                 .cornerRadius(12)
                 .padding(.horizontal, 40)
-            } else if multipeerManager.connectedPeerName == nil {
-                ProgressView()
-                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                    .scaleEffect(1.2)
-                Text("Searching for Display…")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.8))
-                Text("Make sure the other device chose \"Display\" and is on the grid screen.")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.6))
+            } else if connectionManager.connectedPeerName == nil {
+                if connectionManager.availablePeers.isEmpty {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(1.2)
+                    Text("Searching for Display…")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.8))
+                    Text("Make sure the other device chose \"Display\" and is on the grid screen.")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.6))
+                } else {
+                    Text("Select a device to connect:")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.9))
+                    List {
+                        ForEach(Array(connectionManager.availablePeers.enumerated()), id: \.offset) { _, peer in
+                            Button {
+                                connectionManager.invite(peerID: peer)
+                            } label: {
+                                HStack {
+                                    Image(systemName: "tv")
+                                        .foregroundColor(.white.opacity(0.8))
+                                    Text(peer.displayName)
+                                        .foregroundColor(.white)
+                                }
+                            }
+                        }
+                    }
+                    .scrollContentBackground(.hidden)
+                    .listStyle(.plain)
+                }
                 Button("Cancel") {
-                    multipeerManager.stopBrowsing()
+                    connectionManager.stopBrowsing()
                 }
                 .foregroundColor(.white.opacity(0.9))
             }
 
-            if let error = multipeerManager.lastError {
+            if let error = connectionManager.lastError {
                 Text(error)
                     .font(.subheadline)
                     .foregroundColor(.orange)
@@ -216,21 +256,25 @@ struct TwoMinuteCoachRemoteView: View {
 
     private var volumeTriggerOverlay: some View {
         TwoMinuteVolumeTriggerView(
-            connected: multipeerManager.connectedPeerName != nil,
+            connected: connectionManager.connectedPeerName != nil,
             enabled: volumeTriggerEnabled,
             repIndex: { if case .logging(let r) = state { return r }; return nil },
             onTrigger: {
                 if case .logging(let repIndex) = state {
-                    multipeerManager.sendTwoMinuteMessage(.passTriggered(repIndex: repIndex, timestamp: Date()))
+                    connectionManager.sendTwoMinuteMessage(.passTriggered(repIndex: repIndex, timestamp: Date()))
                 }
             }
         )
+        .id("vol-\(currentRepIndex)-\(state)")
         .allowsHitTesting(false)
         .frame(width: 1, height: 1)
     }
 
     private var completeView: some View {
         VStack(spacing: 20) {
+            Text("Rep \(totalReps) of \(totalReps)")
+                .font(.footnote)
+                .foregroundColor(.white.opacity(0.5))
             Spacer()
             Text("Test complete")
                 .font(.title2.bold())
@@ -261,7 +305,15 @@ struct TwoMinuteCoachRemoteView: View {
 
     private func logExit(_ gate: Gate) {
         if case .logging(let repIndex) = state {
-            multipeerManager.sendTwoMinuteMessage(.exitLogged(repIndex: repIndex, gate: gate, timestamp: Date()))
+            connectionManager.sendTwoMinuteMessage(.exitLogged(repIndex: repIndex, gate: gate, timestamp: Date()))
+            currentRepIndex = repIndex + 1
+            state = currentRepIndex >= totalReps ? .complete : .ready
+        }
+    }
+
+    private func logIncorrect() {
+        if case .logging(let repIndex) = state {
+            connectionManager.sendTwoMinuteMessage(.incorrectDecision(repIndex: repIndex, timestamp: Date()))
             currentRepIndex = repIndex + 1
             state = currentRepIndex >= totalReps ? .complete : .ready
         }

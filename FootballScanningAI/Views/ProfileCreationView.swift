@@ -2,8 +2,8 @@ import SwiftUI
 
 struct ProfileCreationView: View {
     @ObservedObject var profileManager: UserProfileManager
+    @EnvironmentObject private var playerStore: PlayerStore
     @State private var name: String = ""
-    @State private var email: String = ""
     @State private var showingAlert = false
     @State private var alertMessage = ""
     
@@ -22,43 +22,31 @@ struct ProfileCreationView: View {
                 .ignoresSafeArea()
                 
                 ScrollView {
-                    VStack(spacing: 30) {
-                        // Header
-                        VStack(spacing: 16) {
-                            Image(systemName: "person.circle.fill")
-                                .font(.system(size: 60))
-                                .foregroundColor(.blue)
-                            
-                            Text("Welcome to")
-                                .font(.title)
-                                .fontWeight(.bold)
+                    VStack(spacing: 24) {
+                        VStack(spacing: 12) {
+                            Image(systemName: "person.crop.circle.badge.plus")
+                                .font(.system(size: 56))
+                                .foregroundColor(.yellow)
+                            Text("Create a player profile")
+                                .font(.title2.weight(.bold))
                                 .foregroundColor(.white)
                                 .multilineTextAlignment(.center)
-                            
-                            Text("Infinite Football Scanning Pro")
-                                .font(.title)
-                                .fontWeight(.bold)
-                                .foregroundColor(.blue)
-                                .multilineTextAlignment(.center)
-                            
-                            Text("Create your first athlete profile to start training")
-                                .font(.body)
-                                .foregroundColor(.white.opacity(0.8))
+                            Text("Add a player to start training.")
+                                .font(.subheadline)
+                                .foregroundColor(.white.opacity(0.85))
                                 .multilineTextAlignment(.center)
                                 .padding(.horizontal)
                         }
                         .padding(.top, 20)
-                        
-                        // Form
-                        VStack(spacing: 20) {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Athlete Name")
-                                    .font(.headline)
+
+                        VStack(alignment: .leading, spacing: 16) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Name")
+                                    .font(.subheadline.weight(.medium))
                                     .foregroundColor(.white)
-                                
                                 TextField("", text: $name)
                                     .placeholder(when: name.isEmpty) {
-                                        Text("Enter athlete's name")
+                                        Text("Enter player's name")
                                             .foregroundColor(.gray)
                                     }
                                     .padding()
@@ -67,64 +55,27 @@ struct ProfileCreationView: View {
                                     .cornerRadius(10)
                                     .autocapitalization(.words)
                             }
-                            
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Email (Optional)")
-                                    .font(.headline)
-                                    .foregroundColor(.white)
-                                
-                                TextField("", text: $email)
-                                    .placeholder(when: email.isEmpty) {
-                                        Text("Enter email address")
-                                            .foregroundColor(.gray)
-                                    }
-                                    .padding()
-                                    .background(Color.white)
-                                    .foregroundColor(.black)
-                                    .cornerRadius(10)
-                                    .keyboardType(.emailAddress)
-                                    .autocapitalization(.none)
-                            }
                         }
                         .padding(.horizontal)
-                        
-                        // Create Profile Button
+
                         Button(action: createProfile) {
-                            HStack {
+                            HStack(spacing: 8) {
                                 Image(systemName: "person.badge.plus")
                                 Text("Create Profile")
                             }
-                            .font(.headline)
-                            .foregroundColor(.white)
+                            .font(.headline.weight(.semibold))
+                            .foregroundColor(.black)
                             .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(name.isEmpty ? Color.gray : Color.blue)
-                            .cornerRadius(15)
+                            .padding(.vertical, 16)
+                            .background(name.isEmpty ? Color.gray.opacity(0.6) : Color.yellow)
+                            .cornerRadius(14)
                         }
                         .disabled(name.isEmpty)
                         .padding(.horizontal)
-                        
-                        // Benefits
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("What you'll get:")
-                                .font(.headline)
-                                .foregroundColor(.white)
-                            
-                            BenefitRow(icon: "chart.line.uptrend.xyaxis", text: "Track training progress")
-                            BenefitRow(icon: "clock", text: "Monitor session durations")
-                            BenefitRow(icon: "gear", text: "Save preferences")
-                            BenefitRow(icon: "calendar", text: "View training history")
-                            BenefitRow(icon: "person.2", text: "Support multiple athletes")
-                        }
-                        .padding()
-                        .background(.ultraThinMaterial)
-                        .cornerRadius(15)
-                        .padding(.horizontal)
-                        
-                        // Extra space to ensure scrolling works
-                        Spacer(minLength: 200)
+                        .padding(.top, 8)
+
+                        Spacer(minLength: 40)
                     }
-                    .frame(minHeight: UIScreen.main.bounds.height + 100)
                 }
             }
             .navigationBarHidden(true)
@@ -145,10 +96,10 @@ struct ProfileCreationView: View {
         }
         
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
-        let finalEmail = trimmedEmail.isEmpty ? nil : trimmedEmail
-        
-        profileManager.createProfile(name: trimmedName, email: finalEmail)
+        profileManager.createProfile(name: trimmedName, email: nil)
+        if let newProfile = profileManager.currentProfile {
+            playerStore.addPlayer(id: newProfile.id, name: trimmedName)
+        }
     }
 }
 
@@ -168,4 +119,5 @@ extension View {
 
 #Preview {
     ProfileCreationView(profileManager: UserProfileManager())
+        .environmentObject(PlayerStore())
 } 

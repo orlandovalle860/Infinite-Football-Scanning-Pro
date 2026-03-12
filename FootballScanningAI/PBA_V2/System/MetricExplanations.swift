@@ -31,6 +31,8 @@ enum MetricExplanations {
             return "Reflects how well your recent decisions match the right option and timing."
         case "Pressure Escape Rate":
             return "Measures how effectively you handle pressure situations by choosing and executing the right escape."
+        case "Correction Rate":
+            return "How often you adjust after your first touch. Lower values indicate stronger commitment to the decision."
         default:
             return nil
         }

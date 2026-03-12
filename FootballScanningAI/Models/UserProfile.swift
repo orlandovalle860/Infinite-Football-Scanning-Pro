@@ -64,6 +64,78 @@ struct UserProfile: Codable, Identifiable {
     /// Best score per activity (e.g. Away From Pressure 11/12).
     var personalBests: [ActivityKind: ActivityBest]
 
+    // Weekly training streak (3+ sessions per week = 1 session = 2 blocks)
+    var currentWeeklyStreak: Int
+    var longestWeeklyStreak: Int
+    var blocksCompletedThisWeek: Int
+    var lastSessionDate: Date?
+    var lastWeekStart: Date?
+
+    // Personal bests (motivation metrics)
+    /// Lowest average decision time in a block (seconds). Lower is better.
+    var fastestDecisionSpeedSeconds: Double?
+    /// Highest correct % in Playing Away From Pressure. Higher is better.
+    var bestPressureEscapePercent: Double?
+    /// Highest forward intent % in Dribble or Pass. Higher is better.
+    var bestForwardIntentPercent: Double?
+
+    /// Create a profile with a specific id (e.g. to match a Supabase players row after account creation).
+    init(id: UUID, name: String, email: String? = nil, age: String? = nil, team: String? = nil, position: String? = nil) {
+        self.id = id
+        self.name = name
+        self.email = email
+        self.dateCreated = Date()
+        self.lastActive = Date()
+        self.age = age
+        self.team = team
+        self.position = position
+        self.decisionScore = nil
+        self.status = nil
+        self.consistency = nil
+        self.preferredDisplayMode = .colors
+        self.preferredColors = []
+        self.preferredNumbers = []
+        self.preferredArrows = []
+        self.preferredLanes = []
+        self.preferredBeepInterval = .medium
+        self.preferredNumberColor = "#FFFFFF"
+        self.preferredArrowColor = "#FFFFFF"
+        self.preferredColorSet = .standard
+        self.preferredActionSet = .basic
+        self.screenProtectionEnabled = true
+        self.soundEnabled = true
+        self.criticalScanDelay = 0.5
+        self.criticalScanDuration = 1.0
+        self.criticalScanResetTime = 5.0
+        self.customActions = [
+            CustomAction(number: 1, action: "Action", isCustom: false),
+            CustomAction(number: 2, action: "Action", isCustom: false),
+            CustomAction(number: 3, action: "Action", isCustom: false),
+            CustomAction(number: 4, action: "Action", isCustom: false),
+            CustomAction(number: 5, action: "Action", isCustom: false),
+            CustomAction(number: 6, action: "Action", isCustom: false),
+            CustomAction(number: 7, action: "Action", isCustom: false),
+            CustomAction(number: 8, action: "Action", isCustom: false)
+        ]
+        self.totalSessions = 0
+        self.totalTrainingTime = 0
+        self.sessionsThisWeek = 0
+        self.sessionsThisMonth = 0
+        self.longestSession = 0
+        self.averageSessionLength = 0
+        self.trainingSessions = []
+        self.sessionResults = []
+        self.personalBests = [:]
+        self.currentWeeklyStreak = 0
+        self.longestWeeklyStreak = 0
+        self.blocksCompletedThisWeek = 0
+        self.lastSessionDate = nil
+        self.lastWeekStart = nil
+        self.fastestDecisionSpeedSeconds = nil
+        self.bestPressureEscapePercent = nil
+        self.bestForwardIntentPercent = nil
+    }
+
     init(name: String, email: String? = nil, age: String? = nil, team: String? = nil, position: String? = nil, decisionScore: Int? = nil, status: String? = nil, consistency: String? = nil) {
         self.id = UUID()
         self.name = name
@@ -120,6 +192,14 @@ struct UserProfile: Codable, Identifiable {
         self.trainingSessions = []
         self.sessionResults = []
         self.personalBests = [:]
+        self.currentWeeklyStreak = 0
+        self.longestWeeklyStreak = 0
+        self.blocksCompletedThisWeek = 0
+        self.lastSessionDate = nil
+        self.lastWeekStart = nil
+        self.fastestDecisionSpeedSeconds = nil
+        self.bestPressureEscapePercent = nil
+        self.bestForwardIntentPercent = nil
     }
 
     enum CodingKeys: String, CodingKey {
@@ -131,6 +211,8 @@ struct UserProfile: Codable, Identifiable {
         case criticalScanDelay, criticalScanDuration, criticalScanResetTime, customActions
         case totalSessions, totalTrainingTime, sessionsThisWeek, sessionsThisMonth
         case longestSession, averageSessionLength, trainingSessions, sessionResults, personalBests
+        case currentWeeklyStreak, longestWeeklyStreak, blocksCompletedThisWeek, lastSessionDate, lastWeekStart
+        case fastestDecisionSpeedSeconds, bestPressureEscapePercent, bestForwardIntentPercent
     }
 
     init(from decoder: Decoder) throws {
@@ -171,6 +253,14 @@ struct UserProfile: Codable, Identifiable {
         trainingSessions = try c.decode([TrainingSession].self, forKey: .trainingSessions)
         sessionResults = try c.decodeIfPresent([SessionResult].self, forKey: .sessionResults) ?? []
         personalBests = try c.decodeIfPresent([ActivityKind: ActivityBest].self, forKey: .personalBests) ?? [:]
+        currentWeeklyStreak = try c.decodeIfPresent(Int.self, forKey: .currentWeeklyStreak) ?? 0
+        longestWeeklyStreak = try c.decodeIfPresent(Int.self, forKey: .longestWeeklyStreak) ?? 0
+        blocksCompletedThisWeek = try c.decodeIfPresent(Int.self, forKey: .blocksCompletedThisWeek) ?? 0
+        lastSessionDate = try c.decodeIfPresent(Date.self, forKey: .lastSessionDate)
+        lastWeekStart = try c.decodeIfPresent(Date.self, forKey: .lastWeekStart)
+        fastestDecisionSpeedSeconds = try c.decodeIfPresent(Double.self, forKey: .fastestDecisionSpeedSeconds)
+        bestPressureEscapePercent = try c.decodeIfPresent(Double.self, forKey: .bestPressureEscapePercent)
+        bestForwardIntentPercent = try c.decodeIfPresent(Double.self, forKey: .bestForwardIntentPercent)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -211,6 +301,14 @@ struct UserProfile: Codable, Identifiable {
         try c.encode(trainingSessions, forKey: .trainingSessions)
         try c.encode(sessionResults, forKey: .sessionResults)
         try c.encode(personalBests, forKey: .personalBests)
+        try c.encode(currentWeeklyStreak, forKey: .currentWeeklyStreak)
+        try c.encode(longestWeeklyStreak, forKey: .longestWeeklyStreak)
+        try c.encode(blocksCompletedThisWeek, forKey: .blocksCompletedThisWeek)
+        try c.encodeIfPresent(lastSessionDate, forKey: .lastSessionDate)
+        try c.encodeIfPresent(lastWeekStart, forKey: .lastWeekStart)
+        try c.encodeIfPresent(fastestDecisionSpeedSeconds, forKey: .fastestDecisionSpeedSeconds)
+        try c.encodeIfPresent(bestPressureEscapePercent, forKey: .bestPressureEscapePercent)
+        try c.encodeIfPresent(bestForwardIntentPercent, forKey: .bestForwardIntentPercent)
     }
 
     /// Update personal best for an activity when a session beats the previous best.

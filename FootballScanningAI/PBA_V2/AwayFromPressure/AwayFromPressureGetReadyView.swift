@@ -41,14 +41,18 @@ struct AwayFromPressureGetReadyView: View {
                 Text("Get ready")
                     .font(.system(size: 32, weight: .bold, design: .rounded))
                     .foregroundColor(.white)
-                Text("When you tap Begin, a countdown will start.")
+                Text("Tap Begin for directions, then Start Block to start the countdown.")
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.8))
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 28)
                 Spacer(minLength: 40)
                 Button {
-                    startCountdown()
+                    if ActivityInstructionContent.shouldShowInstructions(for: activity) {
+                        showInstruction = true
+                    } else {
+                        startCountdown()
+                    }
                 } label: {
                     Text("Begin")
                         .font(.system(size: 22, weight: .bold, design: .rounded))
@@ -102,7 +106,7 @@ struct AwayFromPressureGetReadyView: View {
         .navigationDestination(isPresented: $showInstruction) {
             ActivityInstructionView(activity: activity) {
                 showInstruction = false
-                navigateToSession = true
+                startCountdown()
             }
         }
         .navigationDestination(isPresented: $navigateToSession) {
@@ -128,11 +132,7 @@ struct AwayFromPressureGetReadyView: View {
             if remaining <= 0 {
                 timer.invalidate()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                    if ActivityInstructionContent.shouldShowInstructions(for: activity) {
-                        showInstruction = true
-                    } else {
-                        navigateToSession = true
-                    }
+                    navigateToSession = true
                 }
             }
         }

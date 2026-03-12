@@ -7,6 +7,17 @@
 
 import SwiftUI
 import Combine
+import UIKit
+
+// Show only the back chevron, not the previous screen’s title (e.g. "Home"). Avoids "2 homes" when the toolbar also has a house icon.
+extension UINavigationController {
+    open override func viewWillLayoutSubviews() {
+        super.viewWillLayoutSubviews()
+        for vc in viewControllers {
+            vc.navigationItem.backButtonDisplayMode = .minimal
+        }
+    }
+}
 
 /// When set to true, the top view dismisses. That view’s parent appears and also sees the flag, so it dismisses too—cascading back to root. Root clears the flag in onAppear.
 final class PopToRootTrigger: ObservableObject {

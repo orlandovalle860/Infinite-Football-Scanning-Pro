@@ -2,44 +2,74 @@
 //  ProgressStore.swift
 //  FootballScanningAI
 //
-//  PBA V2 — Persists session records; call load() on app launch.
+//  PBA V2 — In-memory session state; persistence is delegated to SessionDataStore. Call load() on app launch.
 //
 
 import Foundation
 import Combine
 
 final class ProgressStore: ObservableObject {
+    static let shared = ProgressStore()
+
     @Published private(set) var sessions: [SessionRecord] = []
 
-    private let key = "pba_sessions_v2"
+    /// All session reads/writes go through the data store so cloud sync can be added later without changing call sites.
+    private let dataStore: SessionDataStore
+
+    init(dataStore: SessionDataStore = LocalSessionDataStore()) {
+        self.dataStore = dataStore
+    }
 
     func load() {
-        guard let data = UserDefaults.standard.data(forKey: key) else {
-            sessions = []
-            return
-        }
-        do {
-            sessions = try JSONDecoder().decode([SessionRecord].self, from: data)
-        } catch {
-            sessions = []
-        }
+        sessions = dataStore.loadSessions()
     }
 
     private func persist() {
-        do {
-            let data = try JSONEncoder().encode(sessions)
-            UserDefaults.standard.set(data, forKey: key)
-        } catch {
-            // Fail silently for MVP
-        }
+        dataStore.saveSessions(sessions)
     }
 
     func add(_ record: SessionRecord) {
         sessions.insert(record, at: 0)
-        if record.reps == 12 {
+        if record.decisionsCompleted == 12 {
             DailyTargetState.incrementToday(playerId: record.playerId)
         }
+        DailyDecisionProgress.addDecisions(record.decisionsCompleted, playerId: record.playerId)
         persist()
+    }
+
+    /// Sessions that have not yet been uploaded to Supabase (saved locally with synced = false).
+    var unsyncedSessions: [SessionRecord] {
+        sessions.filter { !$0.synced }
+    }
+
+    /// Mark a session as synced after successful upload. Persists the updated list.
+    func markSynced(id: UUID) {
+        guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+        sessions[index] = sessions[index].with(synced: true)
+        persist()
+    }
+
+    /// Clear the unsynced sessions queue by marking all sessions as synced. Use when old sessions were saved with an outdated schema and should not be retried. Session records remain in history.
+    func clearUnsyncedSessionQueue() {
+        var changed = false
+        for index in sessions.indices where !sessions[index].synced {
+            sessions[index] = sessions[index].with(synced: true)
+            changed = true
+        }
+        if changed { persist(); recalculateProgress() }
+    }
+
+    /// Removes all session records for the given player (e.g. when the profile is deleted).
+    func removeSessions(forPlayerId id: UUID) {
+        sessions.removeAll { $0.playerId == id }
+        DailyDecisionProgress.clearForPlayer(id)
+        persist()
+        recalculateProgress()
+    }
+
+    /// Call after mutations so dependent state / UI can refresh (e.g. after removing a player).
+    func recalculateProgress() {
+        objectWillChange.send()
     }
 
     func sessions(for activity: ActivityKind) -> [SessionRecord] {
@@ -60,6 +90,19 @@ final class ProgressStore: ObservableObject {
         sessions(for: activity, playerId: playerId).first
     }
 
+    /// Session immediately before the most recent for this activity and player (for session-to-session comparison). Nil if fewer than 2 sessions.
+    func previous(_ activity: ActivityKind, playerId: UUID?) -> SessionRecord? {
+        let list = Array(sessions(for: activity, playerId: playerId).prefix(2))
+        return list.count >= 2 ? list[1] : nil
+    }
+
+    /// Best Decision Speed Score (0–100) for this activity and player from sessions table data. Nil if no sessions with a score.
+    func bestDecisionSpeedScore(activity: ActivityKind, playerId: UUID?) -> Int? {
+        sessions(for: activity, playerId: playerId)
+            .compactMap(\.decisionSpeedScore)
+            .max()
+    }
+
     func bestTwoMinuteTest() -> SessionRecord? {
         sessions(for: .twoMinuteTest).max(by: { $0.correct < $1.correct })
     }
@@ -76,11 +119,17 @@ final class ProgressStore: ObservableObject {
         Array(sessions(for: activity, playerId: playerId).prefix(n))
     }
 
-    /// Last 5 training blocks (12-rep only: awayFromPressure, dribbleOrPass, oneTouchPassing) for consistency/score.
+    /// Last 5 training blocks (12 decisions: awayFromPressure, dribbleOrPass, oneTouchPassing) for consistency/score.
     func last5TrainingBlocks(playerId: UUID?) -> [SessionRecord] {
         let training: [ActivityKind] = [.awayFromPressure, .dribbleOrPass, .oneTouchPassing]
-        let filtered = sessions.filter { training.contains($0.activity) && $0.reps == 12 && (playerId == nil || $0.playerId == playerId || $0.playerId == nil) }
+        let filtered = sessions.filter { training.contains($0.activity) && $0.decisionsCompleted == 12 && (playerId == nil || $0.playerId == playerId || $0.playerId == nil) }
         return Array(filtered.prefix(5))
+    }
+
+    /// Number of completed curriculum training blocks (AFP + DOP + OTP, 12 decisions each) for this player. Used for "Block X of Y".
+    func curriculumBlocksCompleted(playerId: UUID?) -> Int {
+        let training: [ActivityKind] = [.awayFromPressure, .dribbleOrPass, .oneTouchPassing]
+        return sessions.filter { training.contains($0.activity) && $0.decisionsCompleted == 12 && (playerId == nil || $0.playerId == playerId || $0.playerId == nil) }.count
     }
 
     // MARK: - Curriculum readiness (unlock next activity)

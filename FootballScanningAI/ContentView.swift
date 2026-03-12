@@ -281,13 +281,19 @@ struct VideoPlayerView: View {
 }
 
 struct SplashScreen: View {
+    @EnvironmentObject private var connectionManager: ConnectionManager
     @EnvironmentObject private var multipeerManager: MultipeerManager
     @State private var isActive = false
 
     var body: some View {
         if isActive {
             ContentView()
+                .environmentObject(connectionManager)
                 .environmentObject(multipeerManager)
+                .onAppear {
+                    AnalyticsManager.shared.track(.appOpened)
+                    AnalyticsManager.shared.flushIfNeeded()
+                }
         } else {
             ZStack {
                 Color.white
@@ -311,30 +317,120 @@ struct SplashScreen: View {
 struct ContentView: View {
     @StateObject private var settingsViewModel = SettingsViewModel()
     @StateObject private var profileManager = UserProfileManager()
-    @StateObject private var router = AppRouter()
+    @EnvironmentObject private var router: AppRouter
     /// Injected at root so any screen (including navigation destinations) can use @EnvironmentObject.
-    @StateObject private var progressStore = ProgressStore()
+    @ObservedObject private var progressStore = ProgressStore.shared
     @StateObject private var playerStore = PlayerStore()
     @StateObject private var popToRootTrigger = PopToRootTrigger()
     @AppStorage("hasCompletedInitialTest") private var hasCompletedInitialTest = false
     /// When this changes, MainAppView’s navigation stack is recreated so Home/Leave actually pops to root.
+    @ObservedObject private var authManager = AuthManager.shared
+    @EnvironmentObject private var connectionManager: ConnectionManager
+    @EnvironmentObject private var multipeerManager: MultipeerManager
+
     var body: some View {
         Group {
-            if profileManager.isProfileCreated {
-                MainAppView(profileManager: profileManager, settingsViewModel: settingsViewModel, router: router)
-            } else if !hasCompletedInitialTest {
-                MainAppView(profileManager: profileManager, settingsViewModel: settingsViewModel, router: router)
+            MainAppView(profileManager: profileManager, settingsViewModel: settingsViewModel, router: router)
+        }
+        .environmentObject(progressStore)
+        .environmentObject(playerStore)
+        .environmentObject(popToRootTrigger)
+        .environmentObject(router)
+        .environmentObject(connectionManager)
+        .environmentObject(multipeerManager)
+        .navigationViewStyle(.stack)
+        .environment(\.sizeCategory, .large)
+        .environment(\.colorScheme, .dark)
+    }
+}
+
+/// After Supabase sign-in: fetch players for current user. If none → Create Player (name only). If any → hydrate and show Home.
+struct PostAuthView: View {
+    @ObservedObject var profileManager: UserProfileManager
+    @ObservedObject var settingsViewModel: SettingsViewModel
+    @ObservedObject var router: AppRouter
+    @EnvironmentObject private var progressStore: ProgressStore
+    @EnvironmentObject private var playerStore: PlayerStore
+    @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
+    @EnvironmentObject private var multipeerManager: MultipeerManager
+
+    @State private var hasFetched = false
+    @State private var showCreatePlayer = false
+
+    var body: some View {
+        Group {
+            if !hasFetched {
+                ZStack {
+                    Color(red: 0.05, green: 0.05, blue: 0.1).ignoresSafeArea()
+                    VStack(spacing: 12) {
+                        ProgressView().progressViewStyle(CircularProgressViewStyle(tint: .white)).scaleEffect(1.2)
+                        Text("Loading…").font(.subheadline).foregroundColor(.white.opacity(0.8))
+                    }
+                }
+            } else if showCreatePlayer {
+                CreatePlayerAfterAuthView(
+                    profileManager: profileManager,
+                    playerStore: playerStore,
+                    twoMinuteTestResult: nil,
+                    onComplete: {
+                        showCreatePlayer = false
+                        if let first = playerStore.players.first {
+                            playerStore.selectedPlayerId = first.id
+                            playerStore.persist()
+                        }
+                    }
+                )
+                .environmentObject(progressStore)
             } else {
-                ProfileCreationView(profileManager: profileManager)
+                MainAppView(profileManager: profileManager, settingsViewModel: settingsViewModel, router: router)
             }
         }
         .environmentObject(progressStore)
         .environmentObject(playerStore)
         .environmentObject(popToRootTrigger)
         .environmentObject(router)
-        .navigationViewStyle(.stack)
-        .environment(\.sizeCategory, .large)
-        .environment(\.colorScheme, .dark)
+        .environmentObject(ConnectionManager.shared)
+        .environmentObject(multipeerManager)
+        .onAppear {
+            guard !hasFetched else { return }
+            Task {
+                do {
+                    let list = try await SupabasePlayerService.shared.fetchPlayersForCurrentUser()
+                    await MainActor.run {
+                        hasFetched = true
+                        if list.isEmpty {
+                            showCreatePlayer = true
+                        } else {
+                            hydrateStoresWithFetchedPlayers(list)
+                        }
+                    }
+                } catch {
+                    await MainActor.run {
+                        hasFetched = true
+                        showCreatePlayer = true
+                    }
+                }
+            }
+        }
+    }
+
+    private func hydrateStoresWithFetchedPlayers(_ list: [SupabasePlayer]) {
+        let ids = list.compactMap(\.uuid)
+        for p in list {
+            guard let uuid = p.uuid else { continue }
+            if !profileManager.profiles.contains(where: { $0.id == uuid }) {
+                profileManager.addProfileById(uuid, name: p.name)
+            }
+            if !playerStore.players.contains(where: { $0.id == uuid }) {
+                playerStore.addPlayer(id: uuid, name: p.name)
+            }
+        }
+        SupabasePlayerService.shared.markPlayersAsSynced(ids)
+        if let firstId = ids.first, let firstProfile = profileManager.profiles.first(where: { $0.id == firstId }) {
+            profileManager.switchToProfile(firstProfile)
+            playerStore.selectedPlayerId = firstId
+            playerStore.persist()
+        }
     }
 }
 
@@ -344,27 +440,41 @@ struct MainAppView: View {
     @ObservedObject var profileManager: UserProfileManager
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var router: AppRouter
+    @ObservedObject private var authManager = AuthManager.shared
+    @EnvironmentObject private var connectionManager: ConnectionManager
     @EnvironmentObject private var multipeerManager: MultipeerManager
     @EnvironmentObject private var progressStore: ProgressStore
     @EnvironmentObject private var playerStore: PlayerStore
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
     @State private var showsTopToggle: Bool = true
+    @State private var showLoginSheet: Bool = false
+    @State private var showCreatePlayerAfterAuth: Bool = false
+    @State private var hasHydratedPlayersForSession: Bool = false
     @AppStorage(hasCompletedInitialTestKey) private var hasCompletedInitialTest = false
     @AppStorage(coachDeviceShownHomeKey) private var coachDeviceShownHome = false
 
+    /// Launch: no players → Intro (new user); has players → Home or PlayerSelection.
     @ViewBuilder
     private var rootView: some View {
         Group {
-            if hasCompletedInitialTest || coachDeviceShownHome {
-                HomeDashboardView(
-                    profileManager: profileManager,
-                    settingsViewModel: settingsViewModel,
-                    showsTopToggle: $showsTopToggle
-                )
-            } else {
+            if playerStore.players.isEmpty {
                 IntroOnboardingView(
                     settingsViewModel: settingsViewModel,
                     profileManager: profileManager
+                )
+            } else if Config.isSupabaseConfigured, authManager.currentSession != nil, playerStore.selectedPlayerId == nil {
+                PlayerSelectionView(
+                    profileManager: profileManager,
+                    playerStore: playerStore,
+                    settingsViewModel: settingsViewModel,
+                    router: router
+                )
+            } else {
+                HomeDashboardView(
+                    profileManager: profileManager,
+                    settingsViewModel: settingsViewModel,
+                    showsTopToggle: $showsTopToggle,
+                    showLoginSheet: $showLoginSheet
                 )
             }
         }
@@ -383,15 +493,108 @@ struct MainAppView: View {
                     }
             }
         }
+        .environmentObject(connectionManager)
         .environmentObject(multipeerManager)
         .environmentObject(progressStore)
         .environmentObject(playerStore)
         .environmentObject(popToRootTrigger)
         .environmentObject(router)
+        .sheet(isPresented: $showLoginSheet) {
+            LoginView()
+                .onDisappear {
+                    if authManager.currentSession != nil { hydratePlayersIfNeeded() }
+                }
+        }
+        .sheet(isPresented: $showCreatePlayerAfterAuth) {
+            CreatePlayerAfterAuthView(
+                profileManager: profileManager,
+                playerStore: playerStore,
+                twoMinuteTestResult: nil,
+                onComplete: {
+                    showCreatePlayerAfterAuth = false
+                    if let first = playerStore.players.first {
+                        playerStore.selectedPlayerId = first.id
+                        playerStore.persist()
+                    }
+                }
+            )
+            .environmentObject(progressStore)
+        }
         .onAppear {
+            print("DEBUG SUPABASE_URL:", Bundle.main.object(forInfoDictionaryKey: "SUPABASE_URL") ?? "nil")
+            print("DEBUG SUPABASE_ANON_KEY:", Bundle.main.object(forInfoDictionaryKey: "SUPABASE_ANON_KEY") ?? "nil")
+            print("[Supabase] App main screen appeared — checking config and unsynced sessions.")
             progressStore.load()
             playerStore.load()
-            playerStore.createDefaultIfNeeded()
+            if !playerStore.players.isEmpty, !profileManager.profiles.isEmpty {
+                if let current = profileManager.currentProfile,
+                   !playerStore.players.contains(where: { $0.id == current.id }) {
+                    playerStore.addPlayer(id: current.id, name: current.name)
+                }
+            }
+            hydratePlayersIfNeeded()
+            // One-time clear of unsynced sessions and pending decisions so old data (outdated schema) is not retried.
+            let clearedKey = "SupabaseDidClearUnsyncedQueue"
+            if !UserDefaults.standard.bool(forKey: clearedKey) {
+                progressStore.clearUnsyncedSessionQueue()
+                SupabaseDecisionService.shared.clearPendingDecisionsQueue()
+                UserDefaults.standard.set(true, forKey: clearedKey)
+                print("[Supabase] Cleared unsynced sessions and pending decisions queue (one-time reset).")
+            }
+            let count = progressStore.unsyncedSessions.count
+            print("[Supabase] Configured. Retrying \(count) unsynced session(s) on launch.")
+            SupabaseSessionService.shared.retryPendingSessions(progressStore: progressStore)
+            SupabaseDecisionService.shared.retryPendingDecisions()
+            SupabasePlayerService.shared.retryPendingPlayers(profileManager: profileManager)
+        }
+        .onChange(of: authManager.currentSession != nil) { _, hasSession in
+            if !hasSession { hasHydratedPlayersForSession = false }
+            else { hydratePlayersIfNeeded() }
+        }
+        .onReceive(NetworkReachabilityObserver.shared.reachableSubject) { _ in
+            SupabaseSessionService.shared.retryPendingSessions(progressStore: progressStore)
+            SupabaseDecisionService.shared.retryPendingDecisions()
+            SupabasePlayerService.shared.retryPendingPlayers(profileManager: profileManager)
+            AnalyticsManager.shared.flushIfNeeded()
+        }
+    }
+
+    /// When signed in, fetch players from Supabase and hydrate stores once per session. If no players, offer Create Player sheet.
+    private func hydratePlayersIfNeeded() {
+        guard Config.isSupabaseConfigured, authManager.currentSession != nil, !hasHydratedPlayersForSession else { return }
+        Task {
+            do {
+                let list = try await SupabasePlayerService.shared.fetchPlayersForCurrentUser()
+                await MainActor.run {
+                    hasHydratedPlayersForSession = true
+                    if list.isEmpty {
+                        showCreatePlayerAfterAuth = true
+                    } else {
+                        hydrateStoresWithFetchedPlayers(list)
+                    }
+                }
+            } catch {
+                await MainActor.run { hasHydratedPlayersForSession = true }
+            }
+        }
+    }
+
+    private func hydrateStoresWithFetchedPlayers(_ list: [SupabasePlayer]) {
+        let ids = list.compactMap(\.uuid)
+        for p in list {
+            guard let uuid = p.uuid else { continue }
+            if !profileManager.profiles.contains(where: { $0.id == uuid }) {
+                profileManager.addProfileById(uuid, name: p.name)
+            }
+            if !playerStore.players.contains(where: { $0.id == uuid }) {
+                playerStore.addPlayer(id: uuid, name: p.name)
+            }
+        }
+        SupabasePlayerService.shared.markPlayersAsSynced(ids)
+        if let firstId = ids.first, let firstProfile = profileManager.profiles.first(where: { $0.id == firstId }) {
+            profileManager.switchToProfile(firstProfile)
+            playerStore.selectedPlayerId = firstId
+            playerStore.persist()
         }
     }
 
@@ -414,6 +617,24 @@ struct MainAppView: View {
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
+        case .dribbleOrPassCoachRemote:
+            DribbleOrPassCoachRemoteView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
+        case .awayFromPressureCoachRemote:
+            AwayFromPressureCoachRemoteView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
+        case .oneTouchPassingCoachRemote:
+            OneTouchPassingCoachRemoteView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
         case .curriculum:
             PBACurriculumView(
                 settingsViewModel: settingsViewModel,
@@ -427,7 +648,7 @@ struct MainAppView: View {
             .environmentObject(popToRootTrigger)
             .environmentObject(router)
         case .progress:
-            PlayerDashboardView(profileManager: profileManager, settingsViewModel: settingsViewModel)
+            PlayerImprovementProgressView(profileManager: profileManager, settingsViewModel: settingsViewModel)
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
@@ -448,8 +669,8 @@ struct MainAppView: View {
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
-        case .twoMinuteGetReady(let mode, let difficulty):
-            TwoMinuteGetReadyView(mode: mode, config: TwoMinuteTestConfig.config(for: difficulty), settingsViewModel: settingsViewModel, profileManager: profileManager)
+        case .twoMinuteGetReady(let mode):
+            TwoMinuteGetReadyView(mode: mode, config: TwoMinuteTestConfig.baseline, settingsViewModel: settingsViewModel, profileManager: profileManager)
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
@@ -521,7 +742,7 @@ struct MainAppView: View {
     }
 }
 
-/// SCREEN 1 — INTRO ONBOARDING. Shown when hasCompletedInitialTest == false.
+/// SCREEN 1 — INTRO. Shown when no player exists (playerStore.players.isEmpty). New users see this first.
 struct IntroOnboardingView: View {
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
@@ -535,18 +756,23 @@ struct IntroOnboardingView: View {
         ScrollView {
             VStack(spacing: 24) {
                 Spacer(minLength: 32)
-                Text("Do you know what you're going to do before the ball reaches you?")
+                Text("Do you know your next action before you receive the ball?")
                     .font(.system(size: 26, weight: .bold, design: .rounded))
                     .foregroundColor(.white)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 24)
-                Text("Elite players do.")
+                Text("Elite players decide before the ball arrives.")
                     .font(.title3)
                     .foregroundColor(.white.opacity(0.9))
-                Text("No sign-up. Just start.")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.7))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 20)
                     .padding(.top, 4)
+                Text("This quick 2-minute test measures how fast you recognize the best option before receiving the ball.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.85))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 28)
+                    .padding(.top, 8)
                 VStack(alignment: .leading, spacing: 8) {
                     Text("You only need:")
                         .font(.subheadline.weight(.semibold))
@@ -554,9 +780,15 @@ struct IntroOnboardingView: View {
                     Text("• a ball")
                         .font(.subheadline)
                         .foregroundColor(.white.opacity(0.85))
-                    Text("• a partner (or a wall)")
+                    Text("• one other person")
                         .font(.subheadline)
                         .foregroundColor(.white.opacity(0.85))
+                    Text("• two devices")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.85))
+                    Text("Best setup: display the training on an iPad and use a phone for the coach remote.")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.75))
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 32)
@@ -578,12 +810,27 @@ struct IntroOnboardingView: View {
                 .padding(.horizontal, 28)
                 Button {
                     UserDefaults.standard.set(true, forKey: coachDeviceShownHomeKey)
+                    router.push(.coachRemote)
                 } label: {
-                    Text("I'm the coach — open Coach Remote")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundColor(.white.opacity(0.9))
+                    HStack(spacing: 8) {
+                        Image(systemName: "hand.raised.fill")
+                            .font(.body.weight(.medium))
+                        Text("I'm the coach — open Coach Remote")
+                            .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(Color.white.opacity(0.18))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.white.opacity(0.35), lineWidth: 1)
+                    )
+                    .cornerRadius(12)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(PlainButtonStyle())
+                .padding(.horizontal, 28)
                 .padding(.top, 8)
                 Spacer(minLength: 32)
                 Button {
@@ -612,6 +859,9 @@ struct IntroOnboardingView: View {
         .preferredColorScheme(.dark)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            AnalyticsManager.shared.track(.introScreenViewed)
+        }
         .sheet(isPresented: $showHowItWorks) {
             HowItWorksView()
         }
@@ -644,6 +894,8 @@ struct IntroView: View {
     @ObservedObject var profileManager: UserProfileManager
     @ObservedObject var settingsViewModel: SettingsViewModel
     @Binding var showsTopToggle: Bool
+    @Binding var showLoginSheet: Bool
+    @ObservedObject private var authManager = AuthManager.shared
     @EnvironmentObject private var progressStore: ProgressStore
     @EnvironmentObject private var playerStore: PlayerStore
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
@@ -657,6 +909,8 @@ struct IntroView: View {
     @State private var isStartTrainingPressed = false
     @State private var warmupDisplayMode: DisplayMode = .colors
     @State private var snapshotMetricInfoToShow: (title: String, message: String)?
+    /// Latest session_summary for Daily Goal card (Last Score / Target). Fetched when player changes.
+    @State private var dashboardData: HomeDashboardData?
 
     private var playerId: UUID? { playerStore.selectedPlayerId }
     private var last5: [SessionRecord] { progressStore.last5TrainingBlocks(playerId: playerId) }
@@ -665,13 +919,34 @@ struct IntroView: View {
     private var status: PlayerStatus { DashboardDecisionScore.status(score: decisionScore, consistencyLabel: consistencyLabel) }
     private var dailyCompleted: Int { DailyTargetState.completedBlocksToday(playerId: playerId) }
     private var dailyTarget: Int { DailyTargetState.targetBlocksPerDay }
+    private var dailyDecisionsCompleted: Int { DailyDecisionProgress.decisionsCompletedToday(playerId: playerId) }
+    private var dailyDecisionGoal: Int { DailyDecisionProgress.goalPerDay }
     private var hasAnyBlock: Bool { !last5.isEmpty }
     private var trainingStreakDays: Int { profileManager.trainingStreakDays() }
-    private var streakLabel: String {
-        let count = trainingStreakDays
-        let dayWord = (count == 0 || count == 1) ? "Day" : "Days"
-        return "🔥 \(count) \(dayWord) Training Streak"
+    private var weeklyStreakWeeks: Int { profileManager.currentWeeklyStreak() }
+    private var sessionsThisWeek: Int { profileManager.sessionsCompletedThisWeek() }
+    private var weeklyStreakTitle: String { "🔥 \(weeklyStreakWeeks) Week Training Streak" }
+    /// Day streak for top of home: "🔥 X-Day Training Streak".
+    private var dayStreakTitle: String { "🔥 \(trainingStreakDays)-Day Training Streak" }
+    /// Button label for recommended activity: "Start 2-Minute Test" or activity name e.g. "Dribble or Pass".
+    private var recommendedActivityButtonTitle: String {
+        if pinnedActivity == .twoMinuteTest { return "Start 2-Minute Test" }
+        return RecommendationEngine.activityTitle(pinnedActivity)
     }
+    /// Most recent Decision Speed Score for the recommended activity (for home "Decision Speed Score" line). Nil if test or no session.
+    private var homeDecisionSpeedScore: Int? {
+        guard pinnedActivity != .twoMinuteTest else { return nil }
+        return progressStore.last(pinnedActivity, playerId: playerId)?.decisionSpeedScore
+    }
+    /// Change from previous session for recommended activity (for "Change from last session").
+    private var homeDecisionSpeedScoreChange: Int? {
+        guard let last = progressStore.last(pinnedActivity, playerId: playerId),
+              let prev = progressStore.previous(pinnedActivity, playerId: playerId),
+              let s1 = last.decisionSpeedScore, let s2 = prev.decisionSpeedScore else { return nil }
+        return s1 - s2
+    }
+    /// Recommended: 3 sessions (full blocks) per week.
+    private static let weeklySessionGoal: Int = 3
     @AppStorage(hasCompletedInitialTestKey) private var hasCompletedInitialTest = false
 
     private var lastAFPSessionResult: SessionResult? {
@@ -701,13 +976,15 @@ struct IntroView: View {
         return times.reduce(0, +) / Double(times.count)
     }
 
-    /// Trend for decision speed: "↑ Faster" if recent avg < older avg.
+    /// Trend for decision speed (lower is better): ↓ Improving when faster, ↑ Needs work when slower, → Stable when similar.
     private var snapshotDecisionSpeedTrend: String {
         let times = recentSessionsForSnapshot.compactMap { $0.avgDecisionTime }
         guard times.count >= 2 else { return "" }
-        let recent = times.prefix(2)
-        let newer = recent.first!, older = recent.dropFirst().first!
-        return newer < older ? "↑ Faster" : ""
+        let newer = times[0], older = times[1]
+        let diff = older - newer
+        if diff > 0.05 { return "↓ Improving" }
+        if diff < -0.05 { return "↑ Needs work" }
+        return "→ Stable"
     }
 
     /// First touch accuracy % from most recent session that has firstTouchMatchCount. Nil if none.
@@ -716,26 +993,41 @@ struct IntroView: View {
         return Int(round(Double(s.firstTouchMatchCount!) / Double(s.totalReps) * 100))
     }
 
-    /// Trend for first touch: "↑ Improving" if we have 2+ sessions with data and latest > previous.
+    /// Trend for first touch (higher is better): ↑ Improving, ↓ Needs work, or → Stable.
     private var snapshotFirstTouchTrend: String {
         let withData = recentSessionsForSnapshot.filter { $0.firstTouchMatchCount != nil && $0.totalReps > 0 }
         guard withData.count >= 2 else { return "" }
         let pct1 = Double(withData[0].firstTouchMatchCount!) / Double(withData[0].totalReps) * 100
         let pct0 = Double(withData[1].firstTouchMatchCount!) / Double(withData[1].totalReps) * 100
-        return pct1 > pct0 ? "↑ Improving" : ""
+        let diff = pct1 - pct0
+        if diff > 3 { return "↑ Improving" }
+        if diff < -3 { return "↓ Needs work" }
+        return "→ Stable"
     }
 
-    /// Trend for correct decisions from consistency label.
+    /// Trend for correct decisions (higher is better): ↑ Improving, → Stable, or ↓ Needs work from consistency label.
     private var snapshotCorrectTrend: String {
+        guard last5.count >= 2 else { return "" }
         switch consistencyLabel {
-        case .steady: return "↑ Stable"
         case .improving: return "↑ Improving"
-        case .streaky: return "↑ Variable"
+        case .steady: return "→ Stable"
+        case .streaky: return "↓ Needs work"
         }
     }
+
+    /// Static benchmark: Elite Academy average decision speed (seconds). Lower is better.
+    private static let eliteAcademyAverageDecisionSpeed: Double = 0.60
+
+    /// Best (fastest) decision speed in seconds for current player. Nil if none.
+    private var bestDecisionSpeedSeconds: Double? { profileManager.fastestDecisionSpeedSeconds() }
+    /// Decision consistency from most recent session (for recommendation).
+    private var introViewDecisionConsistency: DecisionConsistencyLabel? {
+        DecisionConsistencyLabel.from(session: mostRecentSessionResult)
+    }
+
     /// Automatic recommendation by player level with overrides for timing, bias, consistency. Updates when level/timing/bias/consistency change.
     private var trainingRecommendation: TrainingRecommendationResult {
-        TrainingRecommendation.recommend(progressStore: progressStore, playerId: playerId, last5: last5, hasCompletedInitialTest: hasCompletedInitialTest, lastAFPSessionResult: lastAFPSessionResult)
+        TrainingRecommendation.recommend(progressStore: progressStore, playerId: playerId, last5: last5, hasCompletedInitialTest: hasCompletedInitialTest, lastAFPSessionResult: lastAFPSessionResult, decisionConsistency: introViewDecisionConsistency)
     }
 
     /// Pinned row never promotes "Take Test" after the initial test; 2-Minute Test remains in the scroll.
@@ -757,9 +1049,34 @@ struct IntroView: View {
         }
     }
 
+    /// Ordered list of 3 activities for Recommended Daily Training (recommended first; no 2-Minute in plan).
+    private var dailyPlanBlocks: [ActivityKind] {
+        let trainingActivities: [ActivityKind] = [.awayFromPressure, .dribbleOrPass, .oneTouchPassing]
+        let recommended = trainingRecommendation.activity
+        guard trainingActivities.contains(recommended) else {
+            return trainingActivities
+        }
+        let rest = trainingActivities.filter { $0 != recommended }
+        return [recommended] + rest
+    }
+
+    private func dailyPlanActivityTitle(_ activity: ActivityKind) -> String {
+        switch activity {
+        case .awayFromPressure: return "Playing Away From Pressure"
+        case .dribbleOrPass: return "Dribble or Pass"
+        case .oneTouchPassing: return "One-Touch Passing"
+        case .twoMinuteTest: return "2-Minute Test"
+        }
+    }
+
     /// Focus line for pinned Train Now card (from recommendation engine).
     private var focusText: String { trainingRecommendation.focusLine }
     private var coachTipText: String { trainingRecommendation.coachTip }
+
+    /// Skill progression: next activity and message (accuracy, reaction time, decision speed score mastery).
+    private var skillProgressionRecommendation: SkillProgressionRecommendation? {
+        SkillProgressionEngine.recommendedNextActivity(progressStore: progressStore, playerId: playerId)
+    }
 
     /// Stage position for Next Training card (perception path order: AFP=1, DOP=2, OTP=3).
     private var nextTrainingStageLabel: String {
@@ -783,7 +1100,23 @@ struct IntroView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            continueTrainingPinnedCard
+            if Config.isSupabaseConfigured, authManager.currentSession == nil {
+                Button {
+                    showLoginSheet = true
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "icloud")
+                        Text("Sign in to sync your data.")
+                            .font(.subheadline.weight(.medium))
+                    }
+                    .foregroundColor(.white.opacity(0.9))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .background(Color.white.opacity(0.08))
+                }
+                .buttonStyle(.plain)
+            }
+            homeTopSection
                 .padding(.horizontal, 20)
                 .padding(.top, 10)
                 .padding(.bottom, 10)
@@ -792,22 +1125,42 @@ struct IntroView: View {
                 .shadow(color: .black.opacity(0.3), radius: 12, y: 6)
 
             ScrollView(.vertical, showsIndicators: true) {
-                VStack(spacing: 12) {
+                VStack(spacing: 16) {
                     Color.clear.frame(height: 12)
 
-                    playerSnapshotCard
+                    dailyGoalCard
                         .modifier(StartPageCardStyle())
 
-                    curriculumPreviewCard
+                    decisionSpeedScoreSection
                         .modifier(StartPageCardStyle())
 
-                    twoMinuteTestCard
+                    progressTrendSection
                         .modifier(StartPageCardStyle())
 
-                    progressCard
+                    performanceBreakdownSection
                         .modifier(StartPageCardStyle())
 
-                    scanWarmupsCard
+                    trainingStreakSection
+                        .modifier(StartPageCardStyle())
+
+                    CurriculumCard(
+                        currentBlock: progressStore.curriculumBlocksCompleted(playerId: playerId),
+                        totalBlocks: curriculumTotalBlocks,
+                        recommendedActivity: skillProgressionRecommendation?.recommendedActivity,
+                        hasCompletedInitialTest: hasCompletedInitialTest,
+                        onStartTraining: {
+                            router.push(routeForTrainNowActivity(skillProgressionRecommendation?.recommendedActivity ?? .awayFromPressure))
+                        },
+                        onStartTwoMinuteTest: {
+                            router.push(.twoMinuteRoleSelection)
+                        }
+                    )
+                    .modifier(StartPageCardStyle())
+
+                    homeProgressAndScoreSection
+                        .modifier(StartPageCardStyle())
+
+                    otherActivitiesSection
                         .modifier(StartPageCardStyle())
 
                     Spacer(minLength: 40)
@@ -853,6 +1206,21 @@ struct IntroView: View {
                         router.push(.coachRemote)
                     } label: {
                         Label("Coach Remote", systemImage: "hand.raised")
+                    }
+                    if Config.isSupabaseConfigured {
+                        if authManager.currentSession != nil {
+                            Button(role: .destructive) {
+                                Task { await AuthManager.shared.signOut() }
+                            } label: {
+                                Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+                            }
+                        } else {
+                            Button {
+                                showLoginSheet = true
+                            } label: {
+                                Label("Sign In", systemImage: "person.crop.circle.badge.plus")
+                            }
+                        }
                     }
                 } label: {
                     HStack(spacing: 4) {
@@ -900,12 +1268,192 @@ struct IntroView: View {
                 statusUpgradeToast(status: s)
             }
         }
+        .task(id: playerId?.uuidString) {
+            dashboardData = await HomeDashboardDataService.shared.fetchDashboardData(playerId: playerId)
+        }
         .onAppear {
             showsTopToggle = false
             checkStatusUpgrade()
             popToRootTrigger.request = false
+            profileManager.ensureWeeklyRolloverIfNeeded()
         }
         .onDisappear { showsTopToggle = true }
+    }
+
+    /// 1. Daily Goal card (top): Last Decision Speed Score, Target = lastScore + 1, Start Training button.
+    private var dailyGoalCard: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Today's Goal")
+                    .font(.headline.weight(.semibold))
+                    .foregroundColor(.white)
+                Text("Beat Your Score")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.85))
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 24) {
+                Text("Last Score: \(dashboardData?.latestScore.map { "\($0)" } ?? "—")")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.95))
+                Text("Target: \((dashboardData?.latestScore ?? 0) + 1)")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.yellow)
+            }
+            Button {
+                isStartTrainingPressed = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                    isStartTrainingPressed = false
+                    router.push(routeForTrainNowActivity(pinnedActivity))
+                }
+            } label: {
+                Text("Start Training")
+                    .font(.headline.weight(.semibold))
+                    .foregroundColor(.black)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                    .background(Color.yellow)
+                    .cornerRadius(14)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(PlainButtonStyle())
+            .scaleEffect(isStartTrainingPressed ? 0.98 : 1.0)
+            .animation(.spring(response: 0.25, dampingFraction: 0.6), value: isStartTrainingPressed)
+            .accessibilityLabel("Start Training")
+            .accessibilityHint("Double tap to start recommended training.")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// 2. Decision Speed Score: latest score and improvement since previous session.
+    private var decisionSpeedScoreSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Decision Speed Score")
+                .font(.subheadline.weight(.medium))
+                .foregroundColor(.white.opacity(0.9))
+            if let score = dashboardData?.latestScore {
+                Text("\(score)")
+                    .font(.title.weight(.bold))
+                    .foregroundColor(.white)
+                improvementText
+            } else {
+                Text("—")
+                    .font(.title.weight(.bold))
+                    .foregroundColor(.white.opacity(0.7))
+                Text("Complete a session to see your score.")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.7))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var improvementText: some View {
+        Group {
+            if let improvement = dashboardData?.improvement {
+                Text(improvement == 0 ? "Same as last session" : (improvement > 0 ? "+\(improvement)" : "\(improvement)") + " since last session")
+                    .font(.subheadline)
+                    .foregroundColor(improvement >= 0 ? .green : .white.opacity(0.9))
+            } else {
+                Text("First session — no comparison yet.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.7))
+            }
+        }
+    }
+
+    /// 3. Progress Trend: last 7 decision_speed_score values (oldest → newest).
+    private var progressTrendSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Progress Trend")
+                .font(.subheadline.weight(.medium))
+                .foregroundColor(.white.opacity(0.9))
+            if let trend = dashboardData?.trendScores, !trend.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(Array(trend.reversed().enumerated()), id: \.offset) { index, value in
+                            Text("\(value)")
+                                .font(.subheadline.weight(.medium))
+                                .foregroundColor(.white)
+                            if index < trend.count - 1 {
+                                Text("→")
+                                    .font(.caption)
+                                    .foregroundColor(.white.opacity(0.6))
+                            }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            } else {
+                Text("No trend data yet. Complete sessions to see your progress.")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.7))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// 4. Performance Breakdown: Accuracy %, Average Reaction Time, Fast Decision %.
+    private var performanceBreakdownSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Performance Breakdown")
+                .font(.subheadline.weight(.medium))
+                .foregroundColor(.white.opacity(0.9))
+            HStack(alignment: .top, spacing: 20) {
+                if let acc = dashboardData?.accuracy {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Accuracy")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.75))
+                        Text("\(Int(round(acc * 100)))%")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.white)
+                    }
+                }
+                if let ms = dashboardData?.avgReactionMs {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Avg Reaction")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.75))
+                        Text("\(Int(round(ms))) ms")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.white)
+                    }
+                }
+                if let fast = dashboardData?.fastPercent {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Fast Decision %")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.75))
+                        Text("\(Int(round(fast * 100)))%")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.white)
+                    }
+                }
+            }
+            if dashboardData?.accuracy == nil && dashboardData?.avgReactionMs == nil && dashboardData?.fastPercent == nil {
+                Text("Complete a session to see performance stats.")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.7))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// 5. Training Streak: current streak in days.
+    private var trainingStreakSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Training Streak")
+                .font(.subheadline.weight(.medium))
+                .foregroundColor(.white.opacity(0.9))
+            HStack(spacing: 6) {
+                Text("\(trainingStreakDays) days")
+                    .font(.title3.weight(.semibold))
+                    .foregroundColor(.white)
+                Text("🔥")
+                    .font(.title3)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var playerSnapshotCard: some View {
@@ -914,7 +1462,7 @@ struct IntroView: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundColor(.white)
             if last5.count >= 2 {
-                snapshotMetricRow(label: "Decision Speed", value: snapshotDecisionSpeedSeconds.map { String(format: "%.2fs", $0) } ?? "—", trend: snapshotDecisionSpeedTrend)
+                snapshotMetricRow(label: "Decision Speed", value: snapshotDecisionSpeedSeconds.map { String(format: "%.2fs", $0) } ?? "—", trend: snapshotDecisionSpeedTrend, leadingIcon: "bolt.fill")
                 snapshotMetricRow(label: "First Touch Accuracy", value: snapshotFirstTouchPercent.map { "\($0)%" } ?? "—", trend: snapshotFirstTouchTrend)
                 snapshotMetricRow(label: "Correct Decisions", value: "\(decisionScore)%", trend: snapshotCorrectTrend)
             } else if hasAnyBlock {
@@ -927,18 +1475,26 @@ struct IntroView: View {
                     .foregroundColor(.white.opacity(0.8))
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(streakLabel)
+                Text(weeklyStreakTitle)
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.9))
-                Text(trainingStreakDays == 0 ? "Keep it going today" : "Keep it alive today")
+                Text("\(weeklyStreakWeeks) week streak")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.95))
+                Text("Complete 3 sessions this week to keep your streak alive.")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.75))
             }
         }
     }
 
-    private func snapshotMetricRow(label: String, value: String, trend: String) -> some View {
+    private func snapshotMetricRow(label: String, value: String, trend: String, leadingIcon: String? = nil) -> some View {
         HStack {
+            if let icon = leadingIcon {
+                Image(systemName: icon)
+                    .font(.caption)
+                    .foregroundColor(.yellow)
+            }
             Text(label)
                 .font(.caption)
                 .foregroundColor(.white.opacity(0.9))
@@ -956,93 +1512,271 @@ struct IntroView: View {
         }
     }
 
-    /// Pinned at top: current training session card (recommendation + today's goal + Start Training).
-    private var continueTrainingPinnedCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("NEXT TRAINING")
-                        .font(.caption.weight(.semibold))
-                        .foregroundColor(.black.opacity(0.7))
-                    Text(nextTrainingStageLabel)
-                        .font(.caption)
-                        .foregroundColor(.black.opacity(0.7))
-                }
-
-                Text(RecommendationEngine.activityTitle(continueTrainingCardActivity))
-                    .font(.title3)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.black)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                Text("Focus: \(focusText)")
-                    .font(.subheadline)
-                    .foregroundColor(.black)
-                    .multilineTextAlignment(.leading)
-                    .lineLimit(2)
-
-                Text("Coach Tip: \(coachTipText)")
-                    .font(.footnote)
-                    .foregroundColor(.black.opacity(0.85))
-                    .multilineTextAlignment(.leading)
-                    .lineLimit(2)
-                    .padding(.top, 8)
-
-                Text("Today's Goal")
-                    .font(.caption.weight(.semibold))
-                    .foregroundColor(.black.opacity(0.7))
-                    .padding(.top, 2)
-
-                GeometryReader { g in
-                    ZStack(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(Color.black.opacity(0.15))
-                            .frame(height: 10)
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(Color.black.opacity(0.5))
-                            .frame(width: max(0, g.size.width * CGFloat(min(dailyCompleted, dailyTarget)) / CGFloat(max(1, dailyTarget))), height: 10)
+    /// Recommended Daily Training: 3 blocks (recommended first), ~10 min, Start Training launches first activity.
+    private var recommendedDailyTrainingCard: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Recommended Daily Training")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.white)
+            Text("About 10 minutes")
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.8))
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(dailyPlanBlocks.enumerated()), id: \.element) { index, activity in
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text("Block \(index + 1)")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.7))
+                            .frame(width: 52, alignment: .leading)
+                        Text(dailyPlanActivityTitle(activity))
+                            .font(.subheadline)
+                            .foregroundColor(.white.opacity(0.95))
+                        Text("— 12 reps")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.75))
                     }
                 }
-                .frame(height: 10)
-
-                Text("\(min(dailyCompleted, dailyTarget)) / \(dailyTarget) blocks complete")
-                    .font(.caption)
-                    .foregroundColor(.black.opacity(0.8))
-                Text(todayGoalEncouragement)
-                    .font(.caption)
-                    .foregroundColor(.black.opacity(0.7))
-                    .padding(.top, 2)
-
-                Button {
-                    isStartTrainingPressed = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                        isStartTrainingPressed = false
-                        router.push(routeForTrainNowActivity(continueTrainingCardActivity))
-                    }
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "play.fill")
-                            .font(.subheadline.weight(.semibold))
-                        Text("Start Training")
-                            .font(.headline.weight(.semibold))
-                    }
+            }
+            Button {
+                router.push(routeForTrainNowActivity(dailyPlanBlocks[0]))
+            } label: {
+                Text("Start Training")
+                    .font(.subheadline.weight(.semibold))
                     .foregroundColor(.black)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .background(Color.white.opacity(0.95))
+                    .padding(.vertical, 12)
+                    .background(Color.yellow)
                     .cornerRadius(12)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(PlainButtonStyle())
+        }
+    }
+
+    /// Personal Bests: Fastest Decision Speed (with band + explanation), Best Pressure Escape Rate, Best Forward Intent.
+    private var personalBestsCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("🏆 Personal Bests")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.white)
+            personalBestDecisionSpeedRow(seconds: profileManager.fastestDecisionSpeedSeconds())
+            personalBestRow(label: "Best Pressure Escape Rate", value: profileManager.bestPressureEscapePercent().map { String(format: "%.0f%%", $0) })
+            personalBestRow(label: "Best Forward Intent", value: profileManager.bestForwardIntentPercent().map { String(format: "%.0f%%", $0) })
+        }
+    }
+
+    private func personalBestDecisionSpeedRow(seconds: Double?) -> some View {
+        HStack(alignment: .top) {
+            Text("Fastest Decision Speed")
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.9))
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(seconds.map { String(format: "%.2fs", $0) } ?? "—")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundColor(.white.opacity(0.95))
+                if let sec = seconds, let band = DecisionSpeedBand.band(forSeconds: sec) {
+                    Text(band.label)
+                        .font(.caption.weight(.medium))
+                        .foregroundColor(band.color)
+                    Text(band.explanation)
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.7))
+                        .multilineTextAlignment(.trailing)
+                }
+            }
+        }
+    }
+
+    private func personalBestRow(label: String, value: String?) -> some View {
+        HStack {
+            Text(label)
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.9))
+            Spacer(minLength: 8)
+            Text(value ?? "—")
+                .font(.subheadline.monospacedDigit())
+                .foregroundColor(.white.opacity(0.95))
+        }
+    }
+
+    /// Top of Home: Streak and greeting only. Primary action moved to Recommended Training hero.
+    private var homeTopSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(dayStreakTitle)
+                .font(.headline.weight(.semibold))
+                .foregroundColor(.white)
+            Text("Hi, \(playerStore.selectedPlayer?.name ?? "Player")")
+                .font(.title3.weight(.medium))
+                .foregroundColor(.white.opacity(0.95))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+    }
+
+    /// Largest element on screen: Recommended Training title + one primary CTA button.
+    private var recommendedTrainingHeroCard: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text("Recommended Training")
+                .font(.headline.weight(.semibold))
+                .foregroundColor(.white)
+            Button {
+                isStartTrainingPressed = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                    isStartTrainingPressed = false
+                    router.push(routeForTrainNowActivity(pinnedActivity))
+                }
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "play.fill")
+                        .font(.title2.weight(.semibold))
+                    Text(recommendedActivityButtonTitle)
+                        .font(.title2.weight(.bold))
+                        .multilineTextAlignment(.center)
+                }
+                .foregroundColor(.black)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 24)
+                .background(Color.yellow)
+                .cornerRadius(16)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PlainButtonStyle())
+            .scaleEffect(isStartTrainingPressed ? 0.98 : 1.0)
+            .animation(.spring(response: 0.25, dampingFraction: 0.6), value: isStartTrainingPressed)
+            .accessibilityLabel(recommendedActivityButtonTitle)
+            .accessibilityHint("Double tap to start recommended training.")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Below recommended: Player progress, Decision Speed Score, Change from last session.
+    private var homeProgressAndScoreSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Button {
+                router.push(.progress)
+            } label: {
+                HStack {
+                    Text("Player progress")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundColor(.white.opacity(0.95))
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.white.opacity(0.6))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PlainButtonStyle())
+
+            if let score = homeDecisionSpeedScore {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("Decision Speed Score")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.85))
+                    Spacer()
+                    Text("\(score)")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white)
+                }
+            }
+
+            if let change = homeDecisionSpeedScoreChange {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("Change from last session")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.85))
+                    Spacer()
+                    Text(change == 0 ? "Same" : (change > 0 ? "+\(change)" : "\(change)"))
+                        .font(.subheadline.weight(.medium))
+                        .foregroundColor(change >= 0 ? .green : .white.opacity(0.9))
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Other activities in a smaller list: Progress, 2-Minute Test, Curriculum, Daily Training, Personal Bests, Warmups.
+    private var otherActivitiesSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Other Activities")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.white.opacity(0.9))
+
+            VStack(spacing: 8) {
+                otherActivityRow(title: "2-Minute Test", subtitle: "Benchmark your decision speed") {
+                    router.push(.twoMinuteRoleSelection)
+                }
+                Button {
+                    router.push(.curriculum)
+                } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Perception Training Path")
+                                .font(.footnote.weight(.medium))
+                                .foregroundColor(.white.opacity(0.9))
+                            Text("Playing Away From Pressure → Dribble or Pass → One-Touch Passing")
+                                .font(.caption2)
+                                .foregroundColor(.white.opacity(0.6))
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.5))
+                    }
+                    .padding(.vertical, 8)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(PlainButtonStyle())
-                .scaleEffect(isStartTrainingPressed ? 0.96 : 1.0)
-                .animation(.spring(response: 0.25, dampingFraction: 0.6), value: isStartTrainingPressed)
-                .accessibilityLabel("Start training. \(RecommendationEngine.activityTitle(continueTrainingCardActivity)). Focus: \(focusText). Coach Tip: \(coachTipText).")
-                .accessibilityHint("Double tap to start training.")
+                otherActivityRow(title: "Recommended Daily Training", subtitle: "About 10 min · 3 blocks") {
+                    router.push(routeForTrainNowActivity(dailyPlanBlocks.first ?? .awayFromPressure))
+                }
+                otherActivityRow(title: "Personal Bests", subtitle: "Fastest decision speed, escape rate, forward intent") {
+                    router.push(.progress)
+                }
+                Button {
+                    warmupDisplayMode = .colors
+                    router.push(.warmup(warmupDisplayMode))
+                } label: {
+                    HStack {
+                        Text("Scan Warmups")
+                            .font(.footnote.weight(.medium))
+                            .foregroundColor(.white.opacity(0.9))
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.5))
+                    }
+                    .padding(.vertical, 8)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
+            .padding(.vertical, 4)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(Color.yellow)
-        .cornerRadius(16)
+    }
+
+    private func otherActivityRow(title: String, subtitle: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.footnote.weight(.medium))
+                        .foregroundColor(.white.opacity(0.9))
+                    Text(subtitle)
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.6))
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.5))
+            }
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PlainButtonStyle())
     }
 
     private var curriculumPreviewCard: some View {
@@ -1064,43 +1798,6 @@ struct IntroView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(PlainButtonStyle())
-    }
-
-    private var personalBestsCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Personal Bests")
-                .font(.subheadline.weight(.semibold))
-                .foregroundColor(.white)
-            let bests = profileManager.currentProfile?.personalBests ?? [:]
-            if bests.isEmpty {
-                Text("Complete a block or test to set your first best.")
-                    .font(.footnote)
-                    .foregroundColor(.white.opacity(0.7))
-            } else {
-                personalBestRow("Playing Away From Pressure", best: bests[.awayFromPressure])
-                personalBestRow("Dribble or Pass", best: bests[.dribbleOrPass])
-                personalBestRow("One-Touch Passing", best: bests[.oneTouchPassing])
-                personalBestRow("2-Minute Test", best: bests[.twoMinuteTest])
-            }
-        }
-    }
-
-    private func personalBestRow(_ title: String, best: ActivityBest?) -> some View {
-        HStack {
-            Text(title)
-                .font(.footnote)
-                .foregroundColor(.white.opacity(0.9))
-            Spacer()
-            if let b = best {
-                Text("Best: \(b.bestCorrect) / \(b.bestTotal)")
-                    .font(.footnote.weight(.medium))
-                    .foregroundColor(.yellow.opacity(0.95))
-            } else {
-                Text("—")
-                    .font(.footnote)
-                    .foregroundColor(.white.opacity(0.5))
-            }
-        }
     }
 
     private func pathSublabel(_ activity: ActivityKind) -> String {
@@ -1191,6 +1888,54 @@ struct IntroView: View {
             }
             .buttonStyle(PlainButtonStyle())
         }
+    }
+
+    /// Recommended Next Activity from skill progression (mastery: accuracy, reaction time, decision speed score). Shown only after 2-Minute Test.
+    @ViewBuilder
+    private var recommendedNextActivityCard: some View {
+        if let rec = skillProgressionRecommendation {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Recommended Next Activity")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                Text(rec.message)
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.9))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// Primary stat at top of Home: Decision Speed (average), Best, and Elite Academy benchmark.
+    private var decisionSpeedPrimaryCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Decision Speed")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.white)
+            Text(snapshotDecisionSpeedSeconds.map { String(format: "%.2fs", $0) } ?? "—")
+                .font(.system(size: 32, weight: .bold, design: .rounded))
+                .foregroundColor(.white)
+            HStack(spacing: 16) {
+                HStack(spacing: 4) {
+                    Text("Best:")
+                        .font(.footnote)
+                        .foregroundColor(.white.opacity(0.85))
+                    Text(bestDecisionSpeedSeconds.map { String(format: "%.2fs", $0) } ?? "—")
+                        .font(.footnote.weight(.medium))
+                        .foregroundColor(.white)
+                }
+                HStack(spacing: 4) {
+                    Text("Elite Avg:")
+                        .font(.footnote)
+                        .foregroundColor(.white.opacity(0.85))
+                    Text(String(format: "%.2fs", Self.eliteAcademyAverageDecisionSpeed))
+                        .font(.footnote.weight(.medium))
+                        .foregroundColor(.white.opacity(0.95))
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var progressCard: some View {
@@ -1353,7 +2098,7 @@ struct TwoMinuteRoleSelectionView: View {
                             Text("Display")
                                 .font(.system(size: 20, weight: .bold, design: .rounded))
                         }
-                        Text("This device shows the grid and star. Place it behind the player.")
+                        Text("This device shows the grid and ball. Place it behind the player.")
                             .font(.footnote)
                             .foregroundColor(.black.opacity(0.8))
                             .multilineTextAlignment(.leading)
@@ -1370,7 +2115,7 @@ struct TwoMinuteRoleSelectionView: View {
                 .padding(.horizontal, 28)
 
                 Button {
-                    router.push(.twoMinuteCoachRemote)
+                    router.push(.coachRemote)
                 } label: {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
@@ -1378,7 +2123,7 @@ struct TwoMinuteRoleSelectionView: View {
                             Text("Coach remote")
                                 .font(.system(size: 20, weight: .bold, design: .rounded))
                         }
-                        Text("This device starts each rep and logs exit direction. Tap Connect to Display first.")
+                        Text("Choose which activity the player is on, then tap it. Tap Connect to Display first.")
                             .font(.footnote)
                             .foregroundColor(.white.opacity(0.9))
                             .multilineTextAlignment(.leading)
@@ -1425,7 +2170,6 @@ struct TwoMinuteTestSetupView: View {
     @EnvironmentObject private var router: AppRouter
     @AppStorage("hasSeenTwoMinuteOnboarding") private var hasSeenTwoMinuteOnboarding = false
     @State private var showOnboarding = false
-    @State private var difficulty: TestDifficulty = TestDifficulty.loadFromUserDefaults()
 
     var body: some View {
         VStack(spacing: 18) {
@@ -1441,7 +2185,7 @@ struct TwoMinuteTestSetupView: View {
                 Text("• Put the iPad behind the player.")
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.9))
-                Text("• Player stays inside the square.")
+                Text("• Player stays inside of a 5×5 square.")
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.9))
                 if mode == .partner {
@@ -1452,27 +2196,11 @@ struct TwoMinuteTestSetupView: View {
             }
             .padding(.top, 4)
 
-            Text("Difficulty")
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.8))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 28)
-                .padding(.top, 12)
-            Picker("Difficulty", selection: $difficulty) {
-                Text("Beginner").tag(TestDifficulty.beginner)
-                Text("Standard").tag(TestDifficulty.standard)
-                Text("Advanced").tag(TestDifficulty.advanced)
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 28)
-            .onChange(of: difficulty) { _, newValue in
-                newValue.saveToUserDefaults()
-            }
-
             Spacer(minLength: 8)
 
             Button {
-                router.push(.twoMinuteGetReady(mode: mode, difficulty: difficulty))
+                popToRootTrigger.request = false
+                router.push(.twoMinuteGetReady(mode: mode))
             } label: {
                 Text("Continue")
                     .font(.system(size: 20, weight: .bold, design: .rounded))
@@ -1526,6 +2254,7 @@ struct TwoMinuteTestSetupView: View {
     }
 }
 
+/// Two-Minute: Setup → this view shows Instructions or Session (no separate Get Ready screen).
 struct TwoMinuteGetReadyView: View {
     let mode: TrainingMode
     let config: TwoMinuteTestConfig
@@ -1537,101 +2266,26 @@ struct TwoMinuteGetReadyView: View {
     @EnvironmentObject private var router: AppRouter
     @Environment(\.dismiss) private var dismiss
     @State private var showLeaveAlert = false
-    @State private var countdown: Int? = nil
-    @State private var countdownTimer: Timer?
-    @State private var showInstruction = false
-    @State private var navigateToTest = false
-    /// Prevents startCountdown from running again when we pop back from the instruction screen (so "Start" goes to session, not back to instructions).
-    @State private var countdownHasStarted = false
 
-    private var isPartner: Bool { mode == .partner }
-    private var activity: ActivityKind { .twoMinuteTest }
+    private enum Phase {
+        case instructions
+        case session
+    }
+    @State private var phase: Phase = ActivityInstructionContent.shouldShowInstructions(for: .twoMinuteTest) ? .instructions : .session
 
     var body: some View {
-        VStack(spacing: 24) {
-            if let n = countdown, n > 0 {
-                Text("\(n)")
-                    .font(.system(size: 80, weight: .bold, design: .rounded))
-                    .foregroundColor(.white)
-                Spacer()
-            } else if countdown == 0 {
-                Text("Go")
-                    .font(.system(size: 44, weight: .bold, design: .rounded))
-                    .foregroundColor(.yellow)
-                Spacer()
+        Group {
+            if phase == .session {
+                TwoMinuteCriticalScanSessionView(config: config, mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                    .environmentObject(progressStore)
+                    .environmentObject(playerStore)
+                    .environmentObject(popToRootTrigger)
+                    .environmentObject(router)
             } else {
-                Spacer(minLength: 20)
-                Text("Get ready")
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
-                    .foregroundColor(.white)
-
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Player instructions (the whole time):")
-                        .font(.subheadline.bold())
-                        .foregroundColor(.white.opacity(0.95))
-                    Text("• Keep moving inside the square.")
-                        .font(.subheadline)
-                        .foregroundColor(.white.opacity(0.9))
-                    Text("• Check both shoulders often.")
-                        .font(.subheadline)
-                        .foregroundColor(.white.opacity(0.9))
-                    Text("• When you receive, your first touch must take you out through the correct side.")
-                        .font(.subheadline)
-                        .foregroundColor(.white.opacity(0.9))
-                    Text("Don't stand still — shuffle, open your hips, check shoulders.")
-                        .font(.footnote)
-                        .foregroundColor(.white.opacity(0.75))
-                        .italic()
+                ActivityInstructionView(activity: .twoMinuteTest) {
+                    phase = .session
                 }
-                .padding(.horizontal, 28)
-                .multilineTextAlignment(.leading)
-
-                VStack(alignment: .leading, spacing: 16) {
-                    if isPartner {
-                        Text("Passer: hold the phone. When the screen says ready, play the pass and tap PASS (or press volume) when the ball leaves your foot.")
-                            .font(.subheadline)
-                            .foregroundColor(.white.opacity(0.9))
-                    } else if mode == .solo {
-                        Text("Trigger each rep with a screen tap or volume button. Tap your exit direction after each rep.")
-                            .font(.subheadline)
-                            .foregroundColor(.white.opacity(0.9))
-                    } else {
-                        Text("Trigger each rep with the volume button when the ball bounces back. Tap your exit direction after each rep.")
-                            .font(.subheadline)
-                            .foregroundColor(.white.opacity(0.9))
-                    }
-                }
-                .padding(.horizontal, 28)
-                .padding(.top, 8)
-                .multilineTextAlignment(.leading)
-
-                Spacer()
             }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(
-            LinearGradient(
-                gradient: Gradient(colors: [
-                    Color(red: 0.05, green: 0.05, blue: 0.1),
-                    Color(red: 0.1, green: 0.1, blue: 0.15)
-                ]),
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-        )
-        .navigationDestination(isPresented: $showInstruction) {
-            ActivityInstructionView(activity: activity) {
-                showInstruction = false
-                navigateToTest = true
-            }
-        }
-        .navigationDestination(isPresented: $navigateToTest) {
-            TwoMinuteCriticalScanSessionView(config: config, mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(popToRootTrigger)
-                .environmentObject(router)
         }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -1653,42 +2307,10 @@ struct TwoMinuteGetReadyView: View {
         }
         .onAppear {
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
-            guard !countdownHasStarted else { return }
-            countdownHasStarted = true
-            startCountdown()
-        }
-        .onDisappear {
-            countdownTimer?.invalidate()
-            countdownTimer = nil
         }
         .preferredColorScheme(.dark)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-    }
-
-    private func startCountdown() {
-        countdownTimer?.invalidate()
-        countdownTimer = nil
-        countdown = 3
-        countdownTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { timer in
-            DispatchQueue.main.async {
-                guard let n = countdown else { timer.invalidate(); return }
-                if n <= 1 {
-                    countdownTimer?.invalidate()
-                    countdownTimer = nil
-                    countdown = 0
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                        if ActivityInstructionContent.shouldShowInstructions(for: activity) {
-                            showInstruction = true
-                        } else {
-                            navigateToTest = true
-                        }
-                    }
-                } else {
-                    countdown = n - 1
-                }
-            }
-        }
     }
 }
 
@@ -3556,6 +4178,8 @@ struct NumberButton: View {
 struct ContentView_Previews: PreviewProvider {
     static var previews: some View {
         ContentView()
+            .environmentObject(AppRouter())
+            .environmentObject(MultipeerManager())
     }
 }
 
@@ -4275,12 +4899,12 @@ struct DisplayView: View {
                     UIApplication.shared.isIdleTimerDisabled = true // Always prevent sleep during training
                 }
             if displayMode == .pressureResponse || displayMode == .scanningGame || displayMode == .oneTouchPassing {
-                multipeerManager.startAdvertising()
+                ConnectionManager.shared.startHosting()
             }
             startCountdown()
         }
         .onDisappear {
-            multipeerManager.stopAdvertising()
+            ConnectionManager.shared.stopHosting()
             isActive = false
             countdownTimer?.invalidate()
             countdownTimer = nil
@@ -4761,7 +5385,9 @@ struct DisplayView: View {
 }
 
 #Preview {
-        ContentView()
+    ContentView()
+        .environmentObject(AppRouter())
+        .environmentObject(MultipeerManager())
 }
 
 struct ActionListSheet: View {

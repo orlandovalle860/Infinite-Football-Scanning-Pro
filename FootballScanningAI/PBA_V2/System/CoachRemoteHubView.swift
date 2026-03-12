@@ -10,7 +10,7 @@ import SwiftUI
 struct CoachRemoteHubView: View {
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
-    @AppStorage(hasCompletedInitialTestKey) private var hasCompletedInitialTest = false
+    @EnvironmentObject private var router: AppRouter
 
     var body: some View {
         ScrollView {
@@ -19,49 +19,43 @@ struct CoachRemoteHubView: View {
                     Text("Coach Remote")
                         .font(.title2.weight(.bold))
                         .foregroundColor(.white)
-                    Text(hasCompletedInitialTest
-                         ? "Which activity is the player on? Tap the same one as the Display."
-                         : "Start with the 2-Minute Test. Other activities unlock after the test is completed once.")
+                    Text("Which activity is the player on? Tap the same one as the Display.")
                         .font(.subheadline)
                         .foregroundColor(.white.opacity(0.85))
                         .multilineTextAlignment(.leading)
                 }
                 .padding(.horizontal, 4)
 
-                if hasCompletedInitialTest {
-                    // All four in a 2x2 grid so nothing is “below the fold” or feels secondary
-                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-                        CoachRemoteGridTile(
-                            title: "Dribble or Pass",
-                            subtitle: "12 reps",
-                            icon: "arrow.triangle.branch",
-                            destination: AnyView(DribbleOrPassCoachRemoteView(settingsViewModel: settingsViewModel, profileManager: profileManager))
-                        )
-                        CoachRemoteGridTile(
-                            title: "Playing Away From Pressure",
-                            subtitle: "12 reps",
-                            icon: "exclamationmark.triangle.fill",
-                            destination: AnyView(AwayFromPressureCoachRemoteView(settingsViewModel: settingsViewModel, profileManager: profileManager))
-                        )
-                        CoachRemoteGridTile(
-                            title: "One-Touch Passing",
-                            subtitle: "12 reps",
-                            icon: "hand.tap.fill",
-                            destination: AnyView(OneTouchPassingCoachRemoteView(settingsViewModel: settingsViewModel, profileManager: profileManager))
-                        )
-                        CoachRemoteGridTile(
-                            title: "2-Minute Test",
-                            subtitle: "10 reps",
-                            icon: "star.circle.fill",
-                            destination: AnyView(TwoMinuteCoachRemoteView(settingsViewModel: settingsViewModel, profileManager: profileManager))
-                        )
-                    }
-                } else {
-                    NavigationLink(destination: TwoMinuteCoachRemoteView(settingsViewModel: settingsViewModel, profileManager: profileManager)) {
-                        CoachRemoteHubRow(title: "2-Minute Test", subtitle: "10 reps • Star in one gate", icon: "star.circle.fill")
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(PlainButtonStyle())
+                // Coach Remote: all activities available; navigation uses router so path-based stack works.
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+                    CoachRemoteGridTile(
+                        title: "Dribble or Pass",
+                        subtitle: "12 reps",
+                        icon: "arrow.triangle.branch",
+                        route: .dribbleOrPassCoachRemote,
+                        router: router
+                    )
+                    CoachRemoteGridTile(
+                        title: "Playing Away From Pressure",
+                        subtitle: "12 reps",
+                        icon: "exclamationmark.triangle.fill",
+                        route: .awayFromPressureCoachRemote,
+                        router: router
+                    )
+                    CoachRemoteGridTile(
+                        title: "One-Touch Passing",
+                        subtitle: "12 reps",
+                        icon: "hand.tap.fill",
+                        route: .oneTouchPassingCoachRemote,
+                        router: router
+                    )
+                    CoachRemoteGridTile(
+                        title: "2-Minute Test",
+                        subtitle: "10 reps",
+                        icon: "soccerball",
+                        route: .twoMinuteCoachRemote,
+                        router: router
+                    )
                 }
             }
             .padding(20)
@@ -119,10 +113,13 @@ private struct CoachRemoteGridTile: View {
     let title: String
     let subtitle: String
     let icon: String
-    let destination: AnyView
+    let route: AppRoute
+    @ObservedObject var router: AppRouter
 
     var body: some View {
-        NavigationLink(destination: destination) {
+        Button {
+            router.push(route)
+        } label: {
             VStack(alignment: .leading, spacing: 10) {
                 Image(systemName: icon)
                     .font(.title2)

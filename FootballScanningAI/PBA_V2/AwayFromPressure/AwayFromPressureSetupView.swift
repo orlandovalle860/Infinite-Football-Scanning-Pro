@@ -16,6 +16,8 @@ struct AwayFromPressureSetupView: View {
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
     @EnvironmentObject private var router: AppRouter
     @State private var difficulty: TestDifficulty = TestDifficulty.loadFromUserDefaults()
+    @State private var showInstructions = false
+    @State private var navigateToSession = false
 
     var body: some View {
         VStack(spacing: 18) {
@@ -61,12 +63,13 @@ struct AwayFromPressureSetupView: View {
 
             Spacer(minLength: 8)
 
-            NavigationLink(destination: AwayFromPressureGetReadyView(config: AwayFromPressureConfig.config(for: difficulty), mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(popToRootTrigger)
-                .environmentObject(router)
-            ) {
+            Button {
+                if ActivityInstructionContent.shouldShowInstructions(for: .awayFromPressure) {
+                    showInstructions = true
+                } else {
+                    navigateToSession = true
+                }
+            } label: {
                 Text("Continue")
                     .font(.system(size: 20, weight: .bold, design: .rounded))
                     .foregroundColor(.black)
@@ -110,6 +113,19 @@ struct AwayFromPressureSetupView: View {
         }
         .onAppear {
             print("[SetupScreen AFP] onAppear, router path count = \(router.pathCount)")
+        }
+        .navigationDestination(isPresented: $showInstructions) {
+            ActivityInstructionView(activity: .awayFromPressure) {
+                showInstructions = false
+                navigateToSession = true
+            }
+        }
+        .navigationDestination(isPresented: $navigateToSession) {
+            AwayFromPressureDisplaySessionView(config: AwayFromPressureConfig.config(for: difficulty), mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
         }
     }
 }

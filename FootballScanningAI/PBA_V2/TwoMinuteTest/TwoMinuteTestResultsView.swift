@@ -18,10 +18,14 @@ private func activityDisplayName(_ kind: ActivityKind) -> String {
 
 struct TwoMinuteTestResultsView: View {
     let result: TwoMinuteTestResult
+    /// Rep logs for saving individual decisions to Supabase; nil when shown without logs (e.g. preview).
+    var repLogs: [RepLog]? = nil
     @ObservedObject var profileManager: UserProfileManager
     @ObservedObject var settingsViewModel: SettingsViewModel
     /// When set (e.g. from fullScreenCover), "Back to Home" calls this then dismisses so the session can pop to root.
     var onDismissCover: (() -> Void)? = nil
+    /// When set (e.g. from fullScreenCover), "Start Training" pushes the recommended activity's role selection onto the cover's path instead of using trainingTarget.
+    var onStartTraining: ((ActivityKind) -> Void)? = nil
     @EnvironmentObject private var progressStore: ProgressStore
     @EnvironmentObject private var playerStore: PlayerStore
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
@@ -31,6 +35,8 @@ struct TwoMinuteTestResultsView: View {
     @State private var didSave = false
     @State private var trainingTarget: ActivityKind? = nil
     @State private var navigateToTestAgain = false
+    @State private var navigateToAccountPrompt = false
+    @State private var navigateToEmailAuth = false
     @State private var navigateToCreateProfile = false
     @State private var navigateToPlayerReport = false
 
@@ -65,9 +71,23 @@ struct TwoMinuteTestResultsView: View {
         )
     }
 
+    private static func formatDecisionTime(_ seconds: Double?) -> String {
+        guard let s = seconds else { return "—" }
+        return String(format: "%.2f seconds", s)
+    }
+
+    /// Onboarding: no profiles yet or first-time test not completed.
+    private var isOnboarding: Bool {
+        profileManager.profiles.isEmpty || !UserDefaults.standard.bool(forKey: "hasCompletedInitialTest")
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
+                if isOnboarding {
+                    onboardingResultSummary
+                    onboardingAccountCTA
+                }
                 titleSection
                 metricsCard
                 coachInsightCard
@@ -118,7 +138,44 @@ struct TwoMinuteTestResultsView: View {
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
         }
-        .navigationDestination(isPresented: $navigateToCreateProfile) {
+        .navigationDestination(isPresented: $navigateToAccountPrompt) {
+            AccountPromptView(
+                profileManager: profileManager,
+                playerStore: playerStore,
+                twoMinuteTestResult: result,
+                onContinueWithoutAccount: {
+                    navigateToAccountPrompt = false
+                    if !Config.isSupabaseConfigured {
+                        navigateToCreateProfile = true
+                    }
+                },
+                onAccountComplete: {
+                    navigateToAccountPrompt = false
+                    onDismissCover?()
+                    router.popToRoot()
+                }
+            )
+            .environmentObject(progressStore)
+            .environmentObject(popToRootTrigger)
+            .environmentObject(router)
+        }
+        .navigationDestination(isPresented: $navigateToEmailAuth) {
+            EmailAuthView(
+                profileManager: profileManager,
+                playerStore: playerStore,
+                twoMinuteTestResult: result,
+                onComplete: {
+                    navigateToEmailAuth = false
+                    onDismissCover?()
+                    router.popToRoot()
+                }
+            )
+            .environmentObject(progressStore)
+        }
+        .navigationDestination(isPresented: Binding(
+            get: { navigateToCreateProfile && !Config.isSupabaseConfigured },
+            set: { navigateToCreateProfile = $0 }
+        )) {
             CreatePlayerProfileAfterTestView(
                 profileManager: profileManager,
                 testResult: TestResultSummary(
@@ -126,12 +183,86 @@ struct TwoMinuteTestResultsView: View {
                     status: type.title,
                     consistency: "First test"
                 ),
+                twoMinuteTestResult: profileManager.profiles.isEmpty ? result : nil,
                 onComplete: onDismissCover
             )
         }
         .navigationDestination(isPresented: $navigateToPlayerReport) {
             PlayerReportView(content: PlayerReportGenerator.report(from: result))
         }
+    }
+
+    /// Top-of-screen result for onboarding: decisions count, average speed, elite benchmark.
+    private var onboardingResultSummary: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("You made \(result.totalReps) decisions in 2 minutes.")
+                .font(.title3.weight(.semibold))
+                .foregroundColor(.white)
+            Text("Average decision speed: \(Self.formatDecisionTime(result.avgDecisionTime))")
+                .font(.body)
+                .foregroundColor(.white.opacity(0.9))
+            Text("Elite academy players average about 0.60 seconds.")
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.75))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .background(Color.white.opacity(0.08))
+        .cornerRadius(16)
+    }
+
+    /// Onboarding CTA: Sign in with Apple or Continue with Email to save score and track improvement.
+    private var onboardingAccountCTA: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Save your score and track your improvement.")
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.95))
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(spacing: 12) {
+                Button {
+                    if Config.isSupabaseConfigured {
+                        navigateToAccountPrompt = true
+                    } else {
+                        navigateToCreateProfile = true
+                    }
+                } label: {
+                    Text("Sign in with Apple")
+                        .font(.headline)
+                        .foregroundColor(.black)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                        .background(Color.yellow)
+                        .cornerRadius(14)
+                }
+                .buttonStyle(PlainButtonStyle())
+
+                Button {
+                    if Config.isSupabaseConfigured {
+                        navigateToEmailAuth = true
+                    } else {
+                        navigateToCreateProfile = true
+                    }
+                } label: {
+                    Text("Continue with Email")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                        .background(Color.white.opacity(0.2))
+                        .cornerRadius(14)
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(18)
+        .overlay(
+            RoundedRectangle(cornerRadius: 18)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
     }
 
     private var titleSection: some View {
@@ -184,27 +315,52 @@ struct TwoMinuteTestResultsView: View {
 
     private var buttonsSection: some View {
         VStack(spacing: 12) {
-            if !UserDefaults.standard.bool(forKey: "hasCompletedInitialTest") {
-                Button {
-                    navigateToCreateProfile = true
-                } label: {
-                    Text("Continue to Home")
-                        .font(.headline)
-                        .foregroundColor(.black)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                        .background(Color.yellow)
-                        .cornerRadius(14)
+            // Primary account CTA is in onboardingAccountCTA when isOnboarding
+            if !isOnboarding {
+                if profileManager.profiles.isEmpty {
+                    Button {
+                        if Config.isSupabaseConfigured {
+                            navigateToAccountPrompt = true
+                        } else {
+                            navigateToCreateProfile = true
+                        }
+                    } label: {
+                        Text("Save your results and track your improvement.")
+                            .font(.headline)
+                            .foregroundColor(.black)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16)
+                            .background(Color.yellow)
+                            .cornerRadius(14)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                } else if !UserDefaults.standard.bool(forKey: "hasCompletedInitialTest") {
+                    Button {
+                        if Config.isSupabaseConfigured {
+                            navigateToAccountPrompt = true
+                        } else {
+                            navigateToCreateProfile = true
+                        }
+                    } label: {
+                        Text("Continue to Home")
+                            .font(.headline)
+                            .foregroundColor(.black)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16)
+                            .background(Color.yellow)
+                            .cornerRadius(14)
+                    }
+                    .buttonStyle(PlainButtonStyle())
                 }
-                .buttonStyle(PlainButtonStyle())
             }
 
             Button {
-                if !UserDefaults.standard.bool(forKey: "hasCompletedInitialTest") {
-                    navigateToCreateProfile = true
-                    return
+                if let onStartTraining = onStartTraining {
+                    onStartTraining(recommendation.activity)
+                } else {
+                    trainingTarget = recommendation.activity
                 }
-                trainingTarget = recommendation.activity
             } label: {
                 Text("Start Training")
                     .font(.headline)
@@ -294,6 +450,9 @@ struct TwoMinuteTestResultsView: View {
     private func saveProgressIfNeeded() {
         guard !didSave else { return }
         didSave = true
+        if profileManager.profiles.isEmpty {
+            return
+        }
         let playerId = profileManager.currentProfile?.id ?? playerStore.selectedPlayerId
         let speedBucket: SpeedBucket = {
             let (f, m, s) = (result.fastCount, result.mediumCount, result.slowCount)
@@ -302,13 +461,34 @@ struct TwoMinuteTestResultsView: View {
             return .medium
         }()
         let biasString = result.biasDirection?.userFacingName ?? "Balanced"
+        guard let sessionId = CurrentSessionStore.shared.sessionId else {
+            let record = SessionRecord(
+                id: UUID(),
+                date: Date(),
+                activity: .twoMinuteTest,
+                gridSize: .fiveByFive,
+                difficulty: result.difficulty,
+                reps: result.totalReps,
+                decisionsCompleted: result.totalReps,
+                correct: result.correctCount,
+                forwardCorrect: nil,
+                speedBucket: speedBucket,
+                bias: biasString,
+                avgLatency: result.avgDecisionTime,
+                profile: nil,
+                playerId: playerId
+            )
+            progressStore.add(record)
+            return
+        }
         let record = SessionRecord(
-            id: UUID(),
+            id: sessionId,
             date: Date(),
             activity: .twoMinuteTest,
             gridSize: .fiveByFive,
             difficulty: result.difficulty,
             reps: result.totalReps,
+            decisionsCompleted: result.totalReps,
             correct: result.correctCount,
             forwardCorrect: nil,
             speedBucket: speedBucket,
@@ -318,6 +498,29 @@ struct TwoMinuteTestResultsView: View {
             playerId: playerId
         )
         progressStore.add(record)
+        SupabaseSessionService.shared.saveSession(record: record, decisions: []) {
+            progressStore.markSynced(id: record.id)
+        }
+        if let logs = repLogs {
+            let pid = record.playerId ?? playerId
+            let activityName = record.activity.rawValue
+            for log in logs {
+                guard let sec = log.passTriggeredAt.map({ log.exitLoggedAt.timeIntervalSince($0) }) else { continue }
+                let reactionTimeMs = Int(sec * 1000)
+                if reactionTimeMs > SupabaseDecisionService.maxReactionTimeMs { continue }
+                let decision = Decision(
+                    sessionId: sessionId,
+                    playerId: pid,
+                    activityName: activityName,
+                    stimulusType: "ball",
+                    decisionDirection: log.exitedGate.rawValue,
+                    reactionTimeMs: reactionTimeMs,
+                    correct: log.correct,
+                    createdAt: log.exitLoggedAt
+                )
+                SupabaseDecisionService.shared.saveDecision(decision)
+            }
+        }
         if let pid = playerId {
             let sessionResult = SessionResult(
                 playerID: pid,

@@ -68,6 +68,33 @@ final class PlayerStore: ObservableObject {
         persist()
     }
 
+    /// Add a player with a specific id (e.g. to sync with a newly created UserProfile).
+    func addPlayer(id: UUID, name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalName = trimmed.isEmpty ? "Player" : trimmed
+        let p = Player(id: id, name: finalName, createdAt: Date())
+        players.append(p)
+        selectedPlayerId = p.id
+        persist()
+    }
+
+    /// Remove a player by id (e.g. when a profile is deleted).
+    func removePlayer(id: UUID) {
+        players.removeAll { $0.id == id }
+        if selectedPlayerId == id {
+            selectedPlayerId = players.first?.id
+        }
+        persist()
+    }
+
+    /// Clear all players and selection (e.g. when last profile is deleted). Call before routing to profile creation.
+    func clearAll() {
+        players = []
+        selectedPlayerId = nil
+        UserDefaults.standard.removeObject(forKey: playersKey)
+        UserDefaults.standard.removeObject(forKey: selectedKey)
+    }
+
     func selectPlayer(id: UUID) {
         guard players.contains(where: { $0.id == id }) else { return }
         selectedPlayerId = id

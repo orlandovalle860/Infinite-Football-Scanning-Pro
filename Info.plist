@@ -4,9 +4,11 @@
 <dict>
 	<key>NSBonjourServices</key>
 	<array>
-		<string>_fbpressure._tcp</string>
+		<string>_pba-training._tcp</string>
 	</array>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>This app uses the local network to connect the Display device (grid) and Coach device (trigger) for the 2-Minute Test and other activities. Both devices must allow access.</string>
+	<key>SUPABASE_ANON_KEY</key>
+	<string>sb_publishable_mL3-wen-A-wzwysS80OJBw_RIJB-W65</string>
+	<key>SUPABASE_URL</key>
+	<string>https://xekttcnmsplvbprflsxv.supabase.co</string>
 </dict>
 </plist>

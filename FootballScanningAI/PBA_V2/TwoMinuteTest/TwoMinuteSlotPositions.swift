@@ -2,7 +2,7 @@
 //  TwoMinuteSlotPositions.swift
 //  FootballScanningAI
 //
-//  PBA V2 — Same positions as Dribble or Pass (Middle Up/Down/Left/Right). Used so the star appears where players would be.
+//  PBA V2 — Same positions as Dribble or Pass (Middle Up/Down/Left/Right). Used so the ball appears where players would be.
 //
 
 import CoreGraphics

@@ -27,8 +27,8 @@ extension Gate {
     }
 }
 
-/// Plan for one rep: which gate shows the star.
+/// Plan for one rep: which gate shows the ball.
 struct RepPlan: Codable {
     let repIndex: Int
-    let starGate: Gate
+    let ballGate: Gate
 }

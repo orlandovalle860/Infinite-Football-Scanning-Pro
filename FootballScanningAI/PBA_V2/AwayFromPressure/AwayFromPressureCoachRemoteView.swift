@@ -8,6 +8,7 @@
 import SwiftUI
 import AVFoundation
 import MediaPlayer
+import MultipeerConnectivity
 
 enum AwayFromPressureCoachState {
     case ready
@@ -15,24 +16,21 @@ enum AwayFromPressureCoachState {
     case blockComplete
 }
 
-/// Order: PASS → first touch (optional) → exit.
+/// Order: PASS (trigger) → single decision (direction or ✕).
 private enum AFPLoggingStep {
-    case pass
-    case firstTouch
-    case exit
+    case trigger
+    case decision
 }
 
 struct AwayFromPressureCoachRemoteView: View {
+    @EnvironmentObject private var connectionManager: ConnectionManager
     @EnvironmentObject private var multipeerManager: MultipeerManager
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
     @State private var state: AwayFromPressureCoachState = .ready
     @State private var currentRepIndex = 0
     @State private var volumeTriggerEnabled = true
-    /// Order: .pass → .firstTouch (overlay) → .exit
-    @State private var loggingStep: AFPLoggingStep = .pass
-    @State private var showFirstTouchPrompt = false
-    @State private var pendingRepIndex = 0
+    @State private var loggingStep: AFPLoggingStep = .trigger
 
     private let totalReps = 12
 
@@ -61,9 +59,8 @@ struct AwayFromPressureCoachRemoteView: View {
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(volumeTriggerOverlay)
-        .overlay(firstTouchPromptOverlay)
-        .onAppear { multipeerManager.startBrowsing() }
-        .onDisappear { multipeerManager.stopBrowsing() }
+        .onAppear { connectionManager.startBrowsing() }
+        .onDisappear { connectionManager.stopBrowsing() }
         .preferredColorScheme(.dark)
         .navigationTitle("Coach — Playing Away From Pressure (12 reps)")
         .navigationBarTitleDisplayMode(.inline)
@@ -71,12 +68,12 @@ struct AwayFromPressureCoachRemoteView: View {
 
     private var readyView: some View {
         VStack(spacing: 24) {
-            if multipeerManager.connectedPeerName == nil {
+            if connectionManager.connectedPeerName == nil {
                 connectionSection
             } else {
                 Spacer(minLength: 40)
-                if multipeerManager.connectedPeerName != nil {
-                    Text("Connected to \(multipeerManager.connectedPeerName ?? "")")
+                if connectionManager.connectedPeerName != nil {
+                    Text("Connected to \(connectionManager.connectedPeerName ?? "")")
                         .font(.subheadline)
                         .foregroundColor(.green)
                 }
@@ -87,10 +84,9 @@ struct AwayFromPressureCoachRemoteView: View {
                     .padding(.horizontal)
 
                 Button {
-                    multipeerManager.lastError = nil
-                    multipeerManager.sendTwoMinuteMessage(.nextRep(repIndex: currentRepIndex))
-                    loggingStep = .pass
-                    showFirstTouchPrompt = false
+                    connectionManager.lastError = nil
+                    connectionManager.sendTwoMinuteMessage(.nextRep(repIndex: currentRepIndex))
+                    loggingStep = .trigger
                     state = .logging(repIndex: currentRepIndex)
                 } label: {
                     Text("NEXT REP")
@@ -119,16 +115,14 @@ struct AwayFromPressureCoachRemoteView: View {
                 .font(.footnote)
                 .foregroundColor(.white.opacity(0.5))
 
-            if loggingStep == .pass {
+            if loggingStep == .trigger {
                 Text("When the Display beeps, tap PASS or press volume at strike.")
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.9))
                     .multilineTextAlignment(.center)
                 Button {
-                    multipeerManager.sendTwoMinuteMessage(.passTriggered(repIndex: repIndex, timestamp: Date()))
-                    pendingRepIndex = repIndex
-                    loggingStep = .firstTouch
-                    showFirstTouchPrompt = true
+                    connectionManager.sendTwoMinuteMessage(.passTriggered(repIndex: repIndex, timestamp: Date()))
+                    loggingStep = .decision
                 } label: {
                     Text("PASS")
                         .font(.system(size: 28, weight: .bold, design: .rounded))
@@ -145,11 +139,11 @@ struct AwayFromPressureCoachRemoteView: View {
                     .foregroundColor(.white.opacity(0.5))
             }
 
-            if loggingStep == .exit {
-                Text("Tap arrow when player exits:")
+            if loggingStep == .decision {
+                Text("Tap the direction the player chose, or ✕ if incorrect.")
                     .font(.footnote)
                     .foregroundColor(.white.opacity(0.7))
-                directionPad(repIndex: repIndex)
+                decisionPad(repIndex: repIndex)
             }
 
             Spacer(minLength: 0)
@@ -157,20 +151,31 @@ struct AwayFromPressureCoachRemoteView: View {
         .padding(.horizontal, 20)
     }
 
-    private func directionPad(repIndex: Int) -> some View {
+    /// Single decision: ↑ ↓ ← → and ✕ (center). Stops timer and records direction or incorrect.
+    private func decisionPad(repIndex: Int) -> some View {
         VStack(spacing: 10) {
-            Button { logExit(repIndex: repIndex, gate: .up) } label: { arrowLabel("arrow.up") }
+            Button { logDecision(repIndex: repIndex, gate: .up) } label: { arrowLabel("arrow.up") }
                 .buttonStyle(PlainButtonStyle())
             HStack(spacing: 10) {
-                Button { logExit(repIndex: repIndex, gate: .left) } label: { arrowLabel("arrow.left") }
+                Button { logDecision(repIndex: repIndex, gate: .left) } label: { arrowLabel("arrow.left") }
                     .buttonStyle(PlainButtonStyle())
-                Button { logExit(repIndex: repIndex, gate: .right) } label: { arrowLabel("arrow.right") }
+                Button { logIncorrect(repIndex: repIndex) } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 28, weight: .bold))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color.red.opacity(0.7))
+                        .cornerRadius(12)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(PlainButtonStyle())
+                Button { logDecision(repIndex: repIndex, gate: .right) } label: { arrowLabel("arrow.right") }
                     .buttonStyle(PlainButtonStyle())
             }
-            Button { logExit(repIndex: repIndex, gate: .down) } label: { arrowLabel("arrow.down") }
+            Button { logDecision(repIndex: repIndex, gate: .down) } label: { arrowLabel("arrow.down") }
                 .buttonStyle(PlainButtonStyle())
         }
-        .frame(height: 170)
+        .frame(height: 200)
     }
 
     private func arrowLabel(_ name: String) -> some View {
@@ -185,16 +190,19 @@ struct AwayFromPressureCoachRemoteView: View {
 
     private var connectionSection: some View {
         VStack(spacing: 20) {
+            Text("Rep \(currentRepIndex + 1) of \(totalReps)")
+                .font(.footnote)
+                .foregroundColor(.white.opacity(0.5))
             Text("Connect to the device showing the grid (Display). Keep both devices nearby and allow Local Network if prompted.")
                 .font(.subheadline)
                 .foregroundColor(.white.opacity(0.9))
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
 
-            if !multipeerManager.isBrowsing {
+            if !connectionManager.isBrowsing {
                 Button("Connect to Display") {
-                    multipeerManager.lastError = nil
-                    multipeerManager.startBrowsing()
+                    connectionManager.lastError = nil
+                    connectionManager.startBrowsing()
                 }
                 .font(.headline)
                 .foregroundColor(.black)
@@ -203,23 +211,43 @@ struct AwayFromPressureCoachRemoteView: View {
                 .background(Color.yellow)
                 .cornerRadius(12)
                 .padding(.horizontal, 40)
-            } else if multipeerManager.connectedPeerName == nil {
-                ProgressView()
-                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                    .scaleEffect(1.2)
-                Text("Searching for Display…")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.8))
-                Text("Make sure the other device chose \"Display\" and is on the grid screen.")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.6))
+            } else if connectionManager.connectedPeerName == nil {
+                if connectionManager.availablePeers.isEmpty {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(1.2)
+                    Text("Searching for Display…")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.8))
+                    Text("Make sure the other device chose \"Display\" and is on the grid screen.")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.6))
+                } else {
+                    Text("Select a device to connect:")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.9))
+                    List {
+                        ForEach(Array(connectionManager.availablePeers.enumerated()), id: \.offset) { _, peer in
+                            Button {
+                                connectionManager.invite(peerID: peer)
+                            } label: {
+                                HStack {
+                                    Image(systemName: "tv").foregroundColor(.white.opacity(0.8))
+                                    Text(peer.displayName).foregroundColor(.white)
+                                }
+                            }
+                        }
+                    }
+                    .scrollContentBackground(.hidden)
+                    .listStyle(.plain)
+                }
                 Button("Cancel") {
-                    multipeerManager.stopBrowsing()
+                    connectionManager.stopBrowsing()
                 }
                 .foregroundColor(.white.opacity(0.9))
             }
 
-            if let error = multipeerManager.lastError {
+            if let error = connectionManager.lastError {
                 Text(error)
                     .font(.subheadline)
                     .foregroundColor(.orange)
@@ -232,26 +260,28 @@ struct AwayFromPressureCoachRemoteView: View {
         .padding(.top, 60)
     }
 
+    /// Volume trigger stays active for .pass and .firstTouch so an accidental PASS button tap doesn’t lock out volume.
     private var volumeTriggerOverlay: some View {
         AwayFromPressureVolumeTriggerView(
-            connected: multipeerManager.connectedPeerName != nil,
-            enabled: volumeTriggerEnabled && loggingStep == .pass,
+            connected: connectionManager.connectedPeerName != nil,
+            enabled: volumeTriggerEnabled && loggingStep == .trigger,
             repIndex: { if case .logging(let r) = state { return r }; return nil },
             onTrigger: {
-                if case .logging(let repIndex) = state, loggingStep == .pass {
-                    multipeerManager.sendTwoMinuteMessage(.passTriggered(repIndex: repIndex, timestamp: Date()))
-                    pendingRepIndex = repIndex
-                    loggingStep = .firstTouch
-                    showFirstTouchPrompt = true
-                }
+                guard case .logging(let repIndex) = state, loggingStep == .trigger else { return }
+                connectionManager.sendTwoMinuteMessage(.passTriggered(repIndex: repIndex, timestamp: Date()))
+                loggingStep = .decision
             }
         )
+        .id("vol-\(currentRepIndex)-\(loggingStep)")
         .allowsHitTesting(false)
         .frame(width: 1, height: 1)
     }
 
     private var blockCompleteView: some View {
         VStack(spacing: 20) {
+            Text("Rep \(totalReps) of \(totalReps)")
+                .font(.footnote)
+                .foregroundColor(.white.opacity(0.5))
             Spacer()
             Text("Block complete — check iPad")
                 .font(.title2.bold())
@@ -261,100 +291,22 @@ struct AwayFromPressureCoachRemoteView: View {
         }
     }
 
-    private func logExit(repIndex: Int, gate: Gate) {
-        guard case .logging(let ri) = state, ri == repIndex, loggingStep == .exit else { return }
-        multipeerManager.sendTwoMinuteMessage(.exitLogged(repIndex: repIndex, gate: gate, timestamp: Date()))
+    private func logDecision(repIndex: Int, gate: Gate) {
+        guard case .logging(let ri) = state, ri == repIndex, loggingStep == .decision else { return }
+        connectionManager.sendTwoMinuteMessage(.exitLogged(repIndex: repIndex, gate: gate, timestamp: Date()))
+        advanceToNextRep(after: repIndex)
+    }
+
+    private func logIncorrect(repIndex: Int) {
+        guard case .logging(let ri) = state, ri == repIndex, loggingStep == .decision else { return }
+        connectionManager.sendTwoMinuteMessage(.incorrectDecision(repIndex: repIndex, timestamp: Date()))
         advanceToNextRep(after: repIndex)
     }
 
     private func advanceToNextRep(after repIndex: Int) {
-        showFirstTouchPrompt = false
-        loggingStep = .pass
+        loggingStep = .trigger
         currentRepIndex = repIndex + 1
         state = currentRepIndex >= totalReps ? .blockComplete : .ready
-    }
-
-    private func logFirstTouch(_ gate: Gate) {
-        multipeerManager.sendTwoMinuteMessage(.firstTouchLogged(repIndex: pendingRepIndex, gate: gate, timestamp: Date()))
-        showFirstTouchPrompt = false
-        loggingStep = .exit
-    }
-
-    private func skipFirstTouch() {
-        showFirstTouchPrompt = false
-        loggingStep = .exit
-    }
-
-    @ViewBuilder
-    private var firstTouchPromptOverlay: some View {
-        if showFirstTouchPrompt {
-            Color.black.opacity(0.6)
-                .ignoresSafeArea()
-                .onTapGesture { }
-            VStack(spacing: 20) {
-                Text("First touch?")
-                    .font(.title2.bold())
-                    .foregroundColor(.white)
-                Text("Optional — tap direction or Skip.")
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
-                // D-pad layout: up, then left/right, then down
-                VStack(spacing: 16) {
-                    Button { logFirstTouch(.up) } label: {
-                        Image(systemName: "arrow.up")
-                            .font(.system(size: 56, weight: .bold))
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity, minHeight: 80)
-                            .background(Color.white.opacity(0.2))
-                            .cornerRadius(16)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    HStack(spacing: 16) {
-                        Button { logFirstTouch(.left) } label: {
-                            Image(systemName: "arrow.left")
-                                .font(.system(size: 56, weight: .bold))
-                                .foregroundColor(.white)
-                                .frame(maxWidth: .infinity, minHeight: 80)
-                                .background(Color.white.opacity(0.2))
-                                .cornerRadius(16)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(PlainButtonStyle())
-                        Button { logFirstTouch(.right) } label: {
-                            Image(systemName: "arrow.right")
-                                .font(.system(size: 56, weight: .bold))
-                                .foregroundColor(.white)
-                                .frame(maxWidth: .infinity, minHeight: 80)
-                                .background(Color.white.opacity(0.2))
-                                .cornerRadius(16)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(PlainButtonStyle())
-                    }
-                    Button { logFirstTouch(.down) } label: {
-                        Image(systemName: "arrow.down")
-                            .font(.system(size: 56, weight: .bold))
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity, minHeight: 80)
-                            .background(Color.white.opacity(0.2))
-                            .cornerRadius(16)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                }
-                .padding(.horizontal, 32)
-                Button("Skip") {
-                    skipFirstTouch()
-                }
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.8))
-            }
-            .padding(28)
-            .background(Color(red: 0.12, green: 0.12, blue: 0.18))
-            .cornerRadius(20)
-            .padding(40)
-        }
     }
 }
 

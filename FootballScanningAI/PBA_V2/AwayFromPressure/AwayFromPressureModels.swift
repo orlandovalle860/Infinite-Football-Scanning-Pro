@@ -10,7 +10,8 @@ import Foundation
 struct AwayFromPressureRepLog: Codable {
     let repIndex: Int
     let pressureGate: Gate
-    let exitedGate: Gate
+    /// Direction chosen; nil when coach tapped ✕ (incorrect).
+    let exitedGate: Gate?
     let startedAt: Date
     let markerShownAt: Date
     let markerHiddenAt: Date
@@ -21,7 +22,7 @@ struct AwayFromPressureRepLog: Codable {
     /// When coach logs first touch, timestamp used for decision timing (first-touch timing); nil when skipped.
     let firstTouchLoggedAt: Date?
 
-    init(repIndex: Int, pressureGate: Gate, exitedGate: Gate, startedAt: Date, markerShownAt: Date, markerHiddenAt: Date, passTriggeredAt: Date?, exitLoggedAt: Date, firstTouchGate: Gate? = nil, firstTouchLoggedAt: Date? = nil) {
+    init(repIndex: Int, pressureGate: Gate, exitedGate: Gate?, startedAt: Date, markerShownAt: Date, markerHiddenAt: Date, passTriggeredAt: Date?, exitLoggedAt: Date, firstTouchGate: Gate? = nil, firstTouchLoggedAt: Date? = nil) {
         self.repIndex = repIndex
         self.pressureGate = pressureGate
         self.exitedGate = exitedGate
@@ -38,7 +39,7 @@ struct AwayFromPressureRepLog: Codable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         repIndex = try c.decode(Int.self, forKey: .repIndex)
         pressureGate = try c.decode(Gate.self, forKey: .pressureGate)
-        exitedGate = try c.decode(Gate.self, forKey: .exitedGate)
+        exitedGate = try c.decodeIfPresent(Gate.self, forKey: .exitedGate)
         startedAt = try c.decode(Date.self, forKey: .startedAt)
         markerShownAt = try c.decode(Date.self, forKey: .markerShownAt)
         markerHiddenAt = try c.decode(Date.self, forKey: .markerHiddenAt)
@@ -52,7 +53,7 @@ struct AwayFromPressureRepLog: Codable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(repIndex, forKey: .repIndex)
         try c.encode(pressureGate, forKey: .pressureGate)
-        try c.encode(exitedGate, forKey: .exitedGate)
+        try c.encodeIfPresent(exitedGate, forKey: .exitedGate)
         try c.encode(startedAt, forKey: .startedAt)
         try c.encode(markerShownAt, forKey: .markerShownAt)
         try c.encode(markerHiddenAt, forKey: .markerHiddenAt)
@@ -79,8 +80,8 @@ struct AwayFromPressureRepLog: Codable {
 
     /// Late correction: first touch was wrong but exit was correct.
     var lateCorrection: Bool {
-        guard let ft = firstTouchGate else { return false }
+        guard let ft = firstTouchGate, let ex = exitedGate else { return false }
         let correctGate = pressureGate.opposite
-        return ft != correctGate && exitedGate == correctGate
+        return ft != correctGate && ex == correctGate
     }
 }

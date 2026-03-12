@@ -7,10 +7,10 @@
 
 import Foundation
 
-/// One completed rep: star gate, exited gate, timestamps.
+/// One completed rep: ball gate, exited gate, timestamps.
 struct RepLog: Codable {
     let repIndex: Int
-    let starGate: Gate
+    let ballGate: Gate
     let exitedGate: Gate
     let startedAt: Date
     let infoShownAt: Date
@@ -18,11 +18,11 @@ struct RepLog: Codable {
     let passTriggeredAt: Date?
     let exitLoggedAt: Date
 
-    var correct: Bool { starGate == exitedGate }
+    var correct: Bool { ballGate == exitedGate }
 
     static func from(
         repIndex: Int,
-        starGate: Gate,
+        ballGate: Gate,
         exitedGate: Gate,
         startedAt: Date,
         infoShownAt: Date,
@@ -32,7 +32,7 @@ struct RepLog: Codable {
     ) -> RepLog {
         RepLog(
             repIndex: repIndex,
-            starGate: starGate,
+            ballGate: ballGate,
             exitedGate: exitedGate,
             startedAt: startedAt,
             infoShownAt: infoShownAt,
@@ -50,12 +50,17 @@ enum TwoMinuteMessage: Codable {
     case passTriggered(repIndex: Int, timestamp: Date)
     case exitLogged(repIndex: Int, gate: Gate, timestamp: Date)
     case firstTouchLogged(repIndex: Int, gate: Gate, timestamp: Date)
+    /// Coach tapped ✕: decision incorrect; stop timer and record.
+    case incorrectDecision(repIndex: Int, timestamp: Date)
+    /// Coach device: notifies display that this session is paired so the pairing code can be hidden.
+    case coachPaired(sessionId: UUID)
 
     enum CodingKeys: String, CodingKey {
         case kind
         case repIndex
         case gate
         case timestamp
+        case sessionId
     }
 
     init(from decoder: Decoder) throws {
@@ -70,6 +75,10 @@ enum TwoMinuteMessage: Codable {
             self = .exitLogged(repIndex: try c.decode(Int.self, forKey: .repIndex), gate: try c.decode(Gate.self, forKey: .gate), timestamp: try c.decode(Date.self, forKey: .timestamp))
         case "firstTouchLogged":
             self = .firstTouchLogged(repIndex: try c.decode(Int.self, forKey: .repIndex), gate: try c.decode(Gate.self, forKey: .gate), timestamp: try c.decode(Date.self, forKey: .timestamp))
+        case "incorrectDecision":
+            self = .incorrectDecision(repIndex: try c.decode(Int.self, forKey: .repIndex), timestamp: try c.decode(Date.self, forKey: .timestamp))
+        case "coachPaired":
+            self = .coachPaired(sessionId: try c.decode(UUID.self, forKey: .sessionId))
         default:
             throw DecodingError.dataCorruptedError(forKey: .kind, in: c, debugDescription: "Unknown kind: \(kind)")
         }
@@ -95,6 +104,13 @@ enum TwoMinuteMessage: Codable {
             try c.encode(repIndex, forKey: .repIndex)
             try c.encode(gate, forKey: .gate)
             try c.encode(timestamp, forKey: .timestamp)
+        case .incorrectDecision(let repIndex, let timestamp):
+            try c.encode("incorrectDecision", forKey: .kind)
+            try c.encode(repIndex, forKey: .repIndex)
+            try c.encode(timestamp, forKey: .timestamp)
+        case .coachPaired(let sessionId):
+            try c.encode("coachPaired", forKey: .kind)
+            try c.encode(sessionId, forKey: .sessionId)
         }
     }
 }

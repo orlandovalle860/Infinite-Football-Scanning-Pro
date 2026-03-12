@@ -19,6 +19,7 @@ struct PBAProgressView: View {
     @State private var navigateToAwayFromPressure = false
     @State private var navigateToTwoMinuteTest = false
     @State private var navigateToDribbleOrPass = false
+    @State private var navigateToDevelopmentSnapshot = false
     @State private var selectedSessionResult: SessionResult?
 
     private var selectedPlayerId: UUID? { playerStore.selectedPlayerId }
@@ -35,6 +36,13 @@ struct PBAProgressView: View {
                         .foregroundColor(.white)
                     Spacer()
                     HStack(spacing: 8) {
+                        Button {
+                            navigateToDevelopmentSnapshot = true
+                        } label: {
+                            Text("Development Snapshot")
+                                .font(.footnote)
+                                .foregroundColor(.white.opacity(0.9))
+                        }
                         Text(playerStore.selectedPlayer?.name ?? "Player 1")
                             .font(.subheadline)
                             .foregroundColor(.white.opacity(0.8))
@@ -87,6 +95,13 @@ struct PBAProgressView: View {
         }
         .navigationDestination(isPresented: $navigateToDribbleOrPass) {
             DribbleOrPassRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
+        }
+        .navigationDestination(isPresented: $navigateToDevelopmentSnapshot) {
+            PlayerDevelopmentSnapshotView(profileManager: profileManager, settingsViewModel: settingsViewModel)
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
@@ -356,8 +371,14 @@ struct PBAProgressView: View {
         profileManager.recentTrainSessions(limit: 20).first { $0.activityType == .awayFromPressure }
     }
     @AppStorage(hasCompletedInitialTestKey) private var hasCompletedInitialTest = false
+    private var decisionConsistencyForRecommendation: DecisionConsistencyLabel? {
+        guard let profile = profileManager.currentProfile else { return nil }
+        let sessions = profile.sessionResults.sorted { $0.date > $1.date }
+        return DecisionConsistencyLabel.from(session: sessions.first)
+    }
+
     private var trainingRecommendation: TrainingRecommendationResult {
-        TrainingRecommendation.recommend(progressStore: progressStore, playerId: selectedPlayerId, last5: last5Training, hasCompletedInitialTest: hasCompletedInitialTest, lastAFPSessionResult: lastAFPSessionResult)
+        TrainingRecommendation.recommend(progressStore: progressStore, playerId: selectedPlayerId, last5: last5Training, hasCompletedInitialTest: hasCompletedInitialTest, lastAFPSessionResult: lastAFPSessionResult, decisionConsistency: decisionConsistencyForRecommendation)
     }
 
     @ViewBuilder

@@ -15,6 +15,7 @@ struct OneTouchPassingDisplaySessionView: View {
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
     @StateObject private var engine: OneTouchPassingEngine
+    @EnvironmentObject private var connectionManager: ConnectionManager
     @EnvironmentObject private var multipeerManager: MultipeerManager
     @EnvironmentObject private var progressStore: ProgressStore
     @EnvironmentObject private var playerStore: PlayerStore
@@ -42,6 +43,7 @@ struct OneTouchPassingDisplaySessionView: View {
             layoutWithGates
             statusOverlay
                 .opacity(hasGatesVisible || engine.showCheckCue ? 0.25 : 1)
+            repCountOverlay
             if mode != .partner {
                 SessionVolumeTriggerView(enabled: canVolumeTrigger) { handleWallSoloTrigger() }
                     .allowsHitTesting(false)
@@ -70,8 +72,16 @@ struct OneTouchPassingDisplaySessionView: View {
             case .passTriggered(let repIndex, let timestamp):
                 engine.onPassTrigger(repIndex: repIndex, timestamp: timestamp)
             case .exitLogged(let repIndex, let gate, let timestamp):
-                engine.onExitLogged(repIndex: repIndex, gate: gate, timestamp: timestamp)
+                if engine.onExitLogged(repIndex: repIndex, gate: gate, timestamp: timestamp) != nil, let result = engine.repResults.last {
+                    saveDecisionForRep(result: result)
+                }
             case .firstTouchLogged: break
+            case .incorrectDecision(let repIndex, let timestamp):
+                if engine.onIncorrectDecision(repIndex: repIndex, timestamp: timestamp) != nil, let result = engine.repResults.last {
+                    saveDecisionForRep(result: result)
+                }
+            case .coachPaired:
+                break
             }
         }
         .onChange(of: engine.phase) { _, newPhase in
@@ -82,21 +92,30 @@ struct OneTouchPassingDisplaySessionView: View {
         }
         .onAppear {
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
-            if mode == .partner { multipeerManager.startAdvertising() }
+            if mode == .partner { connectionManager.startHosting() }
             activateAudioSession()
             subscribeToAudioInterruption()
+            AnalyticsManager.shared.track(.trainingSessionStarted, playerId: playerStore.selectedPlayerId)
+            Task {
+                guard let sessionId = await SupabaseSessionService.shared.createSessionForDrill(activity: .oneTouchPassing, blockSize: 12, playerId: playerStore.selectedPlayerId ?? profileManager.currentProfile?.id) else { return }
+                let activityId = await SupabaseSessionService.shared.createSessionActivity(sessionId: sessionId, activityId: ActivityKind.oneTouchPassing.sessionActivityActivityId, blockNumber: 1)
+                await MainActor.run {
+                    CurrentSessionStore.shared.setSessionIdOnly(sessionId)
+                    if let activityId = activityId { CurrentSessionStore.shared.setCurrentSessionActivityId(activityId) }
+                }
+            }
         }
         .onDisappear {
-            if mode == .partner { multipeerManager.stopAdvertising() }
+            if mode == .partner { connectionManager.stopHosting() }
             unsubscribeFromAudioInterruption()
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .background { engine.applicationDidEnterBackground() }
         }
-        .onChange(of: multipeerManager.connectedPeerName) { _, name in
+        .onChange(of: connectionManager.connectedPeerName) { _, name in
             guard mode == .partner, name != nil else { return }
             let flag = UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey)
-            multipeerManager.sendDisplaySessionInfo(hasCompletedInitialTest: flag)
+            connectionManager.sendDisplaySessionInfo(hasCompletedInitialTest: flag)
         }
         .preferredColorScheme(.dark)
         .navigationTitle("")
@@ -114,11 +133,18 @@ struct OneTouchPassingDisplaySessionView: View {
         .alert("Leave training?", isPresented: $showLeaveAlert) {
             Button("Stay", role: .cancel) {}
             Button("Leave", role: .destructive) {
+                if let id = CurrentSessionStore.shared.currentSessionActivityId {
+                    Task {
+                        await SupabaseSessionService.shared.endSessionActivity(sessionActivityId: id)
+                        await MainActor.run { CurrentSessionStore.shared.clear() }
+                    }
+                }
                 router.popToRoot()
             }
         } message: {
             Text("Your current block will not be saved.")
         }
+        .sessionCountdown()
     }
 
     private var canVolumeTrigger: Bool {
@@ -151,6 +177,34 @@ struct OneTouchPassingDisplaySessionView: View {
         case .awaitingExitLog(let ri), .cueVisible(let ri, _): return ri
         default: return nil
         }
+    }
+
+    private static let totalReps = 12
+
+    private var repCountOverlay: some View {
+        VStack {
+            HStack {
+                Text(repCountText)
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundColor(.white.opacity(0.7))
+                Spacer()
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 12)
+            Spacer()
+        }
+        .allowsHitTesting(false)
+    }
+
+    private var repCountText: String {
+        let rep: String
+        switch engine.phase {
+        case .waitingForNextRep: rep = "—"
+        case .blockComplete: rep = "\(Self.totalReps)"
+        case .armedScanning(let r, _), .showingCheck(let r), .awaitingPassTrigger(let r), .cueRevealing(let r, _), .cueVisible(let r, _), .awaitingExitLog(let r):
+            rep = "\(r + 1)"
+        }
+        return "Rep \(rep) of \(Self.totalReps)"
     }
 
     private func exitLogOverlay(repIndex: Int) -> some View {
@@ -197,8 +251,27 @@ struct OneTouchPassingDisplaySessionView: View {
     }
 
     private func logExit(repIndex: Int, gate: Gate) {
-        engine.onExitLogged(repIndex: repIndex, gate: gate, timestamp: Date())
+        if engine.onExitLogged(repIndex: repIndex, gate: gate, timestamp: Date()) != nil, let result = engine.repResults.last {
+            saveDecisionForRep(result: result)
+        }
         nextRepIndex = repIndex + 1
+    }
+
+    private func saveDecisionForRep(result: OneTouchRepResult) {
+        guard let sessionId = CurrentSessionStore.shared.sessionId else { return }
+        let reactionTimeMs = Int(result.decisionTime * 1000)
+        guard reactionTimeMs <= SupabaseDecisionService.maxReactionTimeMs else { return }
+        let decision = Decision(
+            sessionId: sessionId,
+            playerId: playerStore.selectedPlayerId ?? profileManager.currentProfile?.id,
+            activityName: ActivityKind.oneTouchPassing.rawValue,
+            stimulusType: "pass",
+            decisionDirection: result.chosenGate.rawValue,
+            reactionTimeMs: reactionTimeMs,
+            correct: result.correct,
+            createdAt: Date()
+        )
+        SupabaseDecisionService.shared.saveDecision(decision)
     }
 
     private var hasGatesVisible: Bool {
@@ -233,19 +306,7 @@ struct OneTouchPassingDisplaySessionView: View {
     private var statusOverlay: some View {
         VStack {
             if mode == .partner {
-                if let name = multipeerManager.connectedPeerName {
-                    Text("Connected to \(name)")
-                        .font(.caption)
-                        .foregroundColor(.green)
-                } else if multipeerManager.isAdvertising {
-                    Text("Advertising… Tap Connect on the coach device.")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.6))
-                } else {
-                    Text("Starting…")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.5))
-                }
+                CoachRemoteConnectionStatusView(connectionState: connectionManager.connectionState)
             } else {
                 Text(mode == .solo ? "Tap screen or volume to trigger" : "Volume button to trigger")
                     .font(.caption)

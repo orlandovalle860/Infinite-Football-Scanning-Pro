@@ -60,7 +60,7 @@ struct TwoMinuteTestResult: Identifiable, Hashable {
     let biasDirection: Gate?
     let avgDecisionTime: Double?
     let difficulty: TestDifficulty
-    /// Forward Intent: reps where star was up and player chose correctly.
+    /// Forward Intent: reps where ball was up and player chose correctly.
     let forwardChoiceCount: Int
     /// Forward Intent: reps where a forward (up) option was available.
     let forwardOpportunityCount: Int
@@ -87,8 +87,8 @@ struct TwoMinuteTestResult: Identifiable, Hashable {
         var directionCounts: [Gate: Int] = [.up: 0, .down: 0, .left: 0, .right: 0]
         var totalTime: Double = 0
         var timeCount = 0
-        let forwardOpportunityCount = logs.filter { $0.starGate == .up }.count
-        let forwardChoiceCount = logs.filter { $0.starGate == .up && $0.correct }.count
+        let forwardOpportunityCount = logs.filter { $0.ballGate == .up }.count
+        let forwardChoiceCount = logs.filter { $0.ballGate == .up && $0.correct }.count
 
         for log in logs {
             let t = log.exitLoggedAt.timeIntervalSince(log.passTriggeredAt ?? log.infoShownAt)
@@ -118,6 +118,17 @@ struct TwoMinuteTestResult: Identifiable, Hashable {
             forwardChoiceCount: forwardChoiceCount,
             forwardOpportunityCount: forwardOpportunityCount
         )
+    }
+}
+
+/// Bundles result and rep logs for presentation (e.g. fullScreenCover) so decisions can be saved when session is saved.
+struct TwoMinuteResultItem: Identifiable, Equatable {
+    let result: TwoMinuteTestResult
+    let logs: [RepLog]
+    var id: UUID { result.id }
+
+    static func == (lhs: TwoMinuteResultItem, rhs: TwoMinuteResultItem) -> Bool {
+        lhs.id == rhs.id
     }
 }
 

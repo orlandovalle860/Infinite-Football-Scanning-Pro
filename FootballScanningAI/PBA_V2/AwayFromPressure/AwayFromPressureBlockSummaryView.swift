@@ -26,8 +26,20 @@ struct AwayFromPressureBlockSummaryView: View {
     @State private var navigateToProgress = false
     @State private var sessionResultForSummary: SessionResult?
     @State private var isNewPersonalBestForSummary = false
+    @State private var newPersonalBestsFromBlock: [NewPersonalBest] = []
+    @State private var decisionSpeedPercentile: Int?
+    @State private var previousSessionForComparison: SessionRecord?
+    @State private var personalBestScore: Int?
+    @State private var isNewPersonalBestForDecisionSpeed = false
 
     private var correctCount: Int { logs.filter(\.correct).count }
+
+    /// Decision Speed Score (0–100) from correctness and reaction times; nil when no reps. Missing time treated as 2s.
+    private var decisionSpeedScoreValue: Int? {
+        let ms = logs.map { Int(($0.decisionTimeSeconds ?? 2.0) * 1000) }
+        let correct = logs.map(\.correct)
+        return DecisionSpeedScore.sessionScore(reactionTimesMs: ms, correct: correct)
+    }
 
     private var performanceLabel: String {
         if correctCount >= 10 { return "Strong block" }
@@ -62,7 +74,7 @@ struct AwayFromPressureBlockSummaryView: View {
     }
     private var biasString: String {
         var c: [Gate: Int] = [.up: 0, .down: 0, .left: 0, .right: 0]
-        for log in logs { c[log.exitedGate, default: 0] += 1 }
+        for log in logs { if let g = log.exitedGate { c[g, default: 0] += 1 } }
         let u = c[.up] ?? 0, d = c[.down] ?? 0, l = c[.left] ?? 0, r = c[.right] ?? 0
         let maxC = max(u, d, l, r)
         if u == maxC && u > d && u > l && u > r { return "Up" }
@@ -88,7 +100,7 @@ struct AwayFromPressureBlockSummaryView: View {
 
     private var directionCounts: [Gate: Int] {
         var c: [Gate: Int] = [.up: 0, .down: 0, .left: 0, .right: 0]
-        for log in logs { c[log.exitedGate, default: 0] += 1 }
+        for log in logs { if let g = log.exitedGate { c[g, default: 0] += 1 } }
         return c
     }
 
@@ -158,6 +170,11 @@ struct AwayFromPressureBlockSummaryView: View {
         return false
     }
 
+    private var decisionTimeStdDev: Double? {
+        let times = logs.compactMap(\.decisionTimeSeconds)
+        return SessionResult.standardDeviation(of: times)
+    }
+
     private var sessionResult: SessionResult? {
         guard let playerId = profileManager.currentProfile?.id ?? playerStore.selectedPlayerId else { return nil }
         return SessionResult(
@@ -175,7 +192,8 @@ struct AwayFromPressureBlockSummaryView: View {
             firstTouchHesitantCount: firstTouchHesitantCountFromLogs,
             lateAdjustments: repsWithFirstTouchLogged >= 3 ? lateCorrectionsCount : nil,
             difficulty: config.difficulty,
-            preReceiveDecisionCount: preReceiveDecisionCountFromLogs
+            preReceiveDecisionCount: preReceiveDecisionCountFromLogs,
+            decisionTimeStdDev: decisionTimeStdDev
         )
     }
 
@@ -213,6 +231,14 @@ struct AwayFromPressureBlockSummaryView: View {
                     firstTouchAccuracy: repsWithFirstTouchLogged >= 3 ? "\(firstTouchMatchCountFromLogs ?? 0)/12" : nil,
                     decisionSpeedLabel: decisionSpeedComparisonLabel(current: speedBucket, previous: previousBlockSpeedBucket),
                     avgDecisionTimeSeconds: avgLatency,
+                    decisionSpeedScore: decisionSpeedScoreValue,
+                    decisionSpeedPercentile: decisionSpeedPercentile,
+                    previousDecisionSpeedScore: previousSessionForComparison?.decisionSpeedScore,
+                    previousAvgReactionTimeSeconds: previousSessionForComparison?.avgLatency,
+                    previousCorrect: previousSessionForComparison?.correct,
+                    previousTotal: previousSessionForComparison?.decisionsCompleted,
+                    personalBest: personalBestScore,
+                    isNewPersonalBest: isNewPersonalBestForDecisionSpeed,
                     coachFeedback: sessionFeedbackCoachSentence,
                     onContinue: { showSessionFeedback = false }
                 )
@@ -221,6 +247,7 @@ struct AwayFromPressureBlockSummaryView: View {
                     session: s,
                     playerName: profileManager.currentProfile?.name ?? "Player",
                     isNewPersonalBest: isNewPersonalBestForSummary,
+                    newPersonalBests: newPersonalBestsFromBlock,
                     profileManager: profileManager,
                     settingsViewModel: settingsViewModel
                 )
@@ -233,32 +260,93 @@ struct AwayFromPressureBlockSummaryView: View {
         }
         .onAppear {
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
+            AnalyticsManager.shared.track(.trainingSessionCompleted, playerId: playerStore.selectedPlayerId)
             guard !didSave else { return }
+            guard let sessionId = CurrentSessionStore.shared.sessionId else {
+                let record = SessionRecord(
+                    id: UUID(),
+                    date: Date(),
+                    activity: .awayFromPressure,
+                    gridSize: .fiveByFive,
+                    difficulty: config.difficulty,
+                    reps: 12,
+                    decisionsCompleted: logs.count,
+                    correct: correctCount,
+                    forwardCorrect: nil,
+                    speedBucket: speedBucket,
+                    bias: biasString,
+                    avgLatency: avgLatency,
+                    profile: nil,
+                    playerId: playerStore.selectedPlayerId,
+                    decisionSpeedScore: decisionSpeedScoreValue
+                )
+                previousSessionForComparison = progressStore.last(record.activity, playerId: record.playerId)
+                let previousBest = progressStore.bestDecisionSpeedScore(activity: record.activity, playerId: record.playerId)
+                progressStore.add(record)
+                personalBestScore = progressStore.bestDecisionSpeedScore(activity: record.activity, playerId: record.playerId)
+                isNewPersonalBestForDecisionSpeed = (decisionSpeedScoreValue ?? 0) > (previousBest ?? -1)
+                didSave = true
+                return
+            }
             let record = SessionRecord(
-                id: UUID(),
+                id: sessionId,
                 date: Date(),
                 activity: .awayFromPressure,
                 gridSize: .fiveByFive,
                 difficulty: config.difficulty,
                 reps: 12,
+                decisionsCompleted: logs.count,
                 correct: correctCount,
                 forwardCorrect: nil,
                 speedBucket: speedBucket,
                 bias: biasString,
                 avgLatency: avgLatency,
                 profile: nil,
-                playerId: playerStore.selectedPlayerId
+                playerId: playerStore.selectedPlayerId,
+                decisionSpeedScore: decisionSpeedScoreValue
             )
+            previousSessionForComparison = progressStore.last(record.activity, playerId: record.playerId)
+            let previousBest = progressStore.bestDecisionSpeedScore(activity: record.activity, playerId: record.playerId)
             progressStore.add(record)
+            personalBestScore = progressStore.bestDecisionSpeedScore(activity: record.activity, playerId: record.playerId)
+            isNewPersonalBestForDecisionSpeed = (decisionSpeedScoreValue ?? 0) > (previousBest ?? -1)
+            let decisions = logs.map { TrainingDecisionRecord.from($0) }
+            SupabaseSessionService.shared.saveSession(record: record, decisions: decisions) {
+                progressStore.markSynced(id: record.id)
+            }
+            let playerId = record.playerId ?? playerStore.selectedPlayerId
+            let activityName = record.activity.rawValue
+            for log in logs {
+                guard let sec = log.decisionTimeSeconds else { continue }
+                let reactionTimeMs = Int(sec * 1000)
+                if reactionTimeMs > SupabaseDecisionService.maxReactionTimeMs { continue }
+                let decision = Decision(
+                    sessionId: sessionId,
+                    playerId: playerId,
+                    activityName: activityName,
+                    stimulusType: "defender",
+                    decisionDirection: log.exitedGate?.rawValue ?? "incorrect",
+                    reactionTimeMs: reactionTimeMs,
+                    correct: log.correct,
+                    createdAt: log.exitLoggedAt
+                )
+                SupabaseDecisionService.shared.saveDecision(decision)
+            }
             if let result = sessionResult {
                 isNewPersonalBestForSummary = profileManager.wouldBeNewPersonalBest(session: result)
-                profileManager.addSessionResult(result)
+                newPersonalBestsFromBlock = profileManager.addSessionResult(result)
                 sessionResultForSummary = result
+            }
+            if let score = decisionSpeedScoreValue {
+                Task {
+                    let p = await SupabaseSessionService.shared.decisionSpeedPercentile(activityName: ActivityKind.awayFromPressure.rawValue, currentScore: score)
+                    await MainActor.run { decisionSpeedPercentile = p }
+                }
             }
             didSave = true
         }
         .navigationDestination(isPresented: $navigateToNewBlock) {
-            AwayFromPressureGetReadyView(config: config, mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+            AwayFromPressureDisplaySessionView(config: config, mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)

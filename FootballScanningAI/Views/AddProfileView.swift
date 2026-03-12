@@ -5,7 +5,6 @@ struct AddProfileView: View {
     @Environment(\.dismiss) private var dismiss
     
     @State private var name: String = ""
-    @State private var email: String = ""
     @State private var showingAlert = false
     @State private var alertMessage = ""
     
@@ -64,28 +63,6 @@ struct AddProfileView: View {
                                         .cornerRadius(8)
                                 }
                             }
-                            
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("Email (Optional)")
-                                    .font(.headline)
-                                    .foregroundColor(.white)
-                                
-                                ZStack(alignment: .leading) {
-                                    if email.isEmpty {
-                                        Text("Enter email address")
-                                            .foregroundColor(.gray)
-                                            .padding(.horizontal, 16)
-                                            .padding(.vertical, 12)
-                                    }
-                                    TextField("", text: $email)
-                                        .padding()
-                                        .background(Color.white)
-                                        .foregroundColor(.black)
-                                        .cornerRadius(8)
-                                        .keyboardType(.emailAddress)
-                                        .autocapitalization(.none)
-                                }
-                            }
                         }
                         .padding(.horizontal)
                         
@@ -140,7 +117,6 @@ struct AddProfileView: View {
     
     private func createProfile() {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
         
         guard !trimmedName.isEmpty else {
             alertMessage = "Please enter a name for the athlete."
@@ -155,9 +131,8 @@ struct AddProfileView: View {
             return
         }
         
-        // Create the profile
-        let emailToUse = trimmedEmail.isEmpty ? nil : trimmedEmail
-        profileManager.addProfile(name: trimmedName, email: emailToUse)
+        // Create the profile (email belongs to user account, not player)
+        profileManager.addProfile(name: trimmedName, email: nil)
         
         alertMessage = "Profile for \(trimmedName) created successfully!"
         showingAlert = true

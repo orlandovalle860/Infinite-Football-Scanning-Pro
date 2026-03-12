@@ -17,7 +17,10 @@ struct TestResultSummary {
 struct CreatePlayerProfileAfterTestView: View {
     @ObservedObject var profileManager: UserProfileManager
     @EnvironmentObject private var playerStore: PlayerStore
+    @EnvironmentObject private var progressStore: ProgressStore
     let testResult: TestResultSummary?
+    /// When set, the full 2-min result to save to the new profile (used when user had no profile before the test).
+    var twoMinuteTestResult: TwoMinuteTestResult? = nil
     /// When set (e.g. from 2-min results in fullScreenCover), called after save/skip so the cover can dismiss.
     var onComplete: (() -> Void)? = nil
     @AppStorage("hasCompletedInitialTest") private var hasCompletedInitialTest = false
@@ -37,7 +40,7 @@ struct CreatePlayerProfileAfterTestView: View {
                 Text("Create Player Profile")
                     .font(.title2.bold())
                     .foregroundColor(.white)
-                Text("Save your results and track progress. You can add more details later.")
+                Text("Save your results and track your improvement.")
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.8))
 
@@ -136,11 +139,12 @@ struct CreatePlayerProfileAfterTestView: View {
             status: testResult?.status,
             consistency: testResult?.consistency
         )
-        if playerStore.selectedPlayer != nil {
-            playerStore.renameSelected(to: trimmedName)
-        } else {
-            playerStore.addPlayer(name: trimmedName)
+        guard let newProfile = profileManager.currentProfile else { return }
+        playerStore.addPlayer(id: newProfile.id, name: trimmedName)
+        if let r = twoMinuteTestResult {
+            saveTestResultToProfile(r, playerId: newProfile.id)
         }
+        AnalyticsManager.shared.track(.playerCreated, playerId: newProfile.id)
         hasCompletedInitialTest = true
         onComplete?()
     }
@@ -148,7 +152,6 @@ struct CreatePlayerProfileAfterTestView: View {
     private func skipAndContinue() {
         profileManager.createProfile(
             name: "Player",
-            email: nil,
             age: nil,
             team: nil,
             position: nil,
@@ -156,10 +159,57 @@ struct CreatePlayerProfileAfterTestView: View {
             status: testResult?.status,
             consistency: testResult?.consistency
         )
-        if playerStore.selectedPlayer == nil {
-            playerStore.addPlayer(name: "Player")
+        guard let newProfile = profileManager.currentProfile else { return }
+        playerStore.addPlayer(id: newProfile.id, name: "Player")
+        if let r = twoMinuteTestResult {
+            saveTestResultToProfile(r, playerId: newProfile.id)
         }
+        AnalyticsManager.shared.track(.playerCreated, playerId: newProfile.id)
         hasCompletedInitialTest = true
         onComplete?()
+    }
+
+    private func saveTestResultToProfile(_ result: TwoMinuteTestResult, playerId: UUID) {
+        let speedBucket: SpeedBucket = {
+            let (f, m, s) = (result.fastCount, result.mediumCount, result.slowCount)
+            if f >= m && f >= s { return .fast }
+            if s >= f && s >= m { return .slow }
+            return .medium
+        }()
+        let biasString = result.biasDirection?.userFacingName ?? "Balanced"
+        let record = SessionRecord(
+            id: UUID(),
+            date: Date(),
+            activity: .twoMinuteTest,
+            gridSize: .fiveByFive,
+            difficulty: result.difficulty,
+            reps: result.totalReps,
+            decisionsCompleted: result.totalReps,
+            correct: result.correctCount,
+            forwardCorrect: nil,
+            speedBucket: speedBucket,
+            bias: biasString,
+            avgLatency: result.avgDecisionTime,
+            profile: nil,
+            playerId: playerId
+        )
+        progressStore.add(record)
+        SupabaseSessionService.shared.saveSession(record: record, decisions: []) {
+            progressStore.markSynced(id: record.id)
+        }
+        let sessionResult = SessionResult(
+            playerID: playerId,
+            activityType: .twoMinuteTest,
+            correctCount: result.correctCount,
+            totalReps: result.totalReps,
+            speedCounts: SessionSpeedCounts(fast: result.fastCount, medium: result.mediumCount, slow: result.slowCount),
+            avgDecisionTime: result.avgDecisionTime,
+            biasDirection: result.biasDirection,
+            directionCounts: result.directionCounts,
+            difficulty: result.difficulty,
+            forwardChoiceCount: result.forwardChoiceCount,
+            forwardOpportunityCount: result.forwardOpportunityCount
+        )
+        profileManager.addSessionResult(sessionResult)
     }
 }

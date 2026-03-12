@@ -38,4 +38,27 @@ struct TimingThresholds {
         if time <= dribblePassMediumUpper { return .medium }
         return .slow
     }
+
+    /// 2-Minute Test: Fast < 1.5s, Medium < 3.0s, Slow >= 3.0s.
+    static let twoMinuteFast: Double = 1.5
+    static let twoMinuteMediumUpper: Double = 3.0
+
+    /// Classify decision time into fast/medium/slow by activity. Used for session_summary and consistency with UI.
+    static func speedBucket(for time: Double, activity: ActivityKind) -> SpeedBucket {
+        switch activity {
+        case .twoMinuteTest:
+            if time < twoMinuteFast { return .fast }
+            if time < twoMinuteMediumUpper { return .medium }
+            return .slow
+        case .awayFromPressure:
+            return pressureSpeedBucket(for: time)
+        case .dribbleOrPass, .oneTouchPassing:
+            let ds = dribblePassDecisionSpeed(for: time)
+            switch ds {
+            case .fast: return .fast
+            case .medium: return .medium
+            case .slow: return .slow
+            }
+        }
+    }
 }

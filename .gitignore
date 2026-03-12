@@ -1,0 +1,3 @@
+# Supabase credentials — never commit
+Secrets.xcconfig
+Secrets copy.xcconfig

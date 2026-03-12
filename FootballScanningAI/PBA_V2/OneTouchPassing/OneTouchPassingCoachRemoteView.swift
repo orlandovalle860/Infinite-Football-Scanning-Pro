@@ -8,6 +8,7 @@
 import SwiftUI
 import AVFoundation
 import MediaPlayer
+import MultipeerConnectivity
 
 enum OneTouchPassingCoachState {
     case ready
@@ -16,6 +17,7 @@ enum OneTouchPassingCoachState {
 }
 
 struct OneTouchPassingCoachRemoteView: View {
+    @EnvironmentObject private var connectionManager: ConnectionManager
     @EnvironmentObject private var multipeerManager: MultipeerManager
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
@@ -48,8 +50,8 @@ struct OneTouchPassingCoachRemoteView: View {
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(volumeTriggerOverlay)
-        .onAppear { multipeerManager.startBrowsing() }
-        .onDisappear { multipeerManager.stopBrowsing() }
+        .onAppear { connectionManager.startBrowsing() }
+        .onDisappear { connectionManager.stopBrowsing() }
         .preferredColorScheme(.dark)
         .navigationTitle("Coach — One-Touch Passing (12 reps)")
         .navigationBarTitleDisplayMode(.inline)
@@ -57,11 +59,11 @@ struct OneTouchPassingCoachRemoteView: View {
 
     private var readyView: some View {
         VStack(spacing: 24) {
-            if multipeerManager.connectedPeerName == nil {
+            if connectionManager.connectedPeerName == nil {
                 connectionSection
             } else {
                 Spacer(minLength: 40)
-                Text("Connected to \(multipeerManager.connectedPeerName ?? "")")
+                Text("Connected to \(connectionManager.connectedPeerName ?? "")")
                     .font(.subheadline)
                     .foregroundColor(.green)
                 Text("Tap NEXT REP to start the next rep on the Display.")
@@ -70,8 +72,8 @@ struct OneTouchPassingCoachRemoteView: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal)
                 Button {
-                    multipeerManager.lastError = nil
-                    multipeerManager.sendTwoMinuteMessage(.nextRep(repIndex: currentRepIndex))
+                    connectionManager.lastError = nil
+                    connectionManager.sendTwoMinuteMessage(.nextRep(repIndex: currentRepIndex))
                     state = .logging(repIndex: currentRepIndex)
                 } label: {
                     Text("NEXT REP")
@@ -102,7 +104,7 @@ struct OneTouchPassingCoachRemoteView: View {
                 .foregroundColor(.white.opacity(0.9))
                 .multilineTextAlignment(.center)
             Button {
-                multipeerManager.sendTwoMinuteMessage(.passTriggered(repIndex: repIndex, timestamp: Date()))
+                connectionManager.sendTwoMinuteMessage(.passTriggered(repIndex: repIndex, timestamp: Date()))
             } label: {
                 Text("PASS")
                     .font(.system(size: 28, weight: .bold, design: .rounded))
@@ -114,10 +116,9 @@ struct OneTouchPassingCoachRemoteView: View {
             }
             .buttonStyle(PlainButtonStyle())
             .padding(.horizontal, 24)
-            Text("Log the direction the player passed. Any green is correct.")
+            Text("Tap the direction the player chose, or ✕ if incorrect.")
                 .font(.footnote)
                 .foregroundColor(.white.opacity(0.7))
-            // D-pad layout, compact so it fits without scrolling in any orientation
             directionPad
             Text("Volume button also triggers pass.")
                 .font(.caption)
@@ -127,30 +128,42 @@ struct OneTouchPassingCoachRemoteView: View {
         .padding(.horizontal, 20)
     }
 
-    /// Compact D-pad that fits on screen without scrolling in any orientation.
     private var directionPad: some View {
         VStack(spacing: 10) {
             directionButton(gate: .up)
             HStack(spacing: 10) {
                 directionButton(gate: .left)
+                Button { logIncorrect() } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 28, weight: .bold))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color.red.opacity(0.7))
+                        .cornerRadius(12)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(PlainButtonStyle())
                 directionButton(gate: .right)
             }
             directionButton(gate: .down)
         }
-        .frame(height: 170)
+        .frame(height: 200)
     }
 
     private var connectionSection: some View {
         VStack(spacing: 20) {
+            Text("Rep \(currentRepIndex + 1) of \(totalReps)")
+                .font(.footnote)
+                .foregroundColor(.white.opacity(0.5))
             Text("Connect to the device showing the grid (Display).")
                 .font(.subheadline)
                 .foregroundColor(.white.opacity(0.9))
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
-            if !multipeerManager.isBrowsing {
+            if !connectionManager.isBrowsing {
                 Button("Connect to Display") {
-                    multipeerManager.lastError = nil
-                    multipeerManager.startBrowsing()
+                    connectionManager.lastError = nil
+                    connectionManager.startBrowsing()
                 }
                 .font(.headline)
                 .foregroundColor(.black)
@@ -159,12 +172,28 @@ struct OneTouchPassingCoachRemoteView: View {
                 .background(Color.yellow)
                 .cornerRadius(12)
                 .padding(.horizontal, 40)
-            } else if multipeerManager.connectedPeerName == nil {
-                ProgressView().progressViewStyle(CircularProgressViewStyle(tint: .white)).scaleEffect(1.2)
-                Text("Searching for Display…").font(.subheadline).foregroundColor(.white.opacity(0.8))
-                Button("Cancel") { multipeerManager.stopBrowsing() }.foregroundColor(.white.opacity(0.9))
+            } else if connectionManager.connectedPeerName == nil {
+                if connectionManager.availablePeers.isEmpty {
+                    ProgressView().progressViewStyle(CircularProgressViewStyle(tint: .white)).scaleEffect(1.2)
+                    Text("Searching for Display…").font(.subheadline).foregroundColor(.white.opacity(0.8))
+                } else {
+                    Text("Select a device to connect:").font(.subheadline).foregroundColor(.white.opacity(0.9))
+                    List {
+                        ForEach(Array(connectionManager.availablePeers.enumerated()), id: \.offset) { _, peer in
+                            Button { connectionManager.invite(peerID: peer) } label: {
+                                HStack {
+                                    Image(systemName: "tv").foregroundColor(.white.opacity(0.8))
+                                    Text(peer.displayName).foregroundColor(.white)
+                                }
+                            }
+                        }
+                    }
+                    .scrollContentBackground(.hidden)
+                    .listStyle(.plain)
+                }
+                Button("Cancel") { connectionManager.stopBrowsing() }.foregroundColor(.white.opacity(0.9))
             }
-            if let error = multipeerManager.lastError {
+            if let error = connectionManager.lastError {
                 Text(error).font(.subheadline).foregroundColor(.orange).multilineTextAlignment(.center).padding(.horizontal)
             }
             Spacer()
@@ -174,21 +203,25 @@ struct OneTouchPassingCoachRemoteView: View {
 
     private var volumeTriggerOverlay: some View {
         OneTouchPassingVolumeTriggerView(
-            connected: multipeerManager.connectedPeerName != nil,
+            connected: connectionManager.connectedPeerName != nil,
             enabled: volumeTriggerEnabled,
             repIndex: { if case .logging(let r) = state { return r }; return nil },
             onTrigger: {
                 if case .logging(let repIndex) = state {
-                    multipeerManager.sendTwoMinuteMessage(.passTriggered(repIndex: repIndex, timestamp: Date()))
+                    connectionManager.sendTwoMinuteMessage(.passTriggered(repIndex: repIndex, timestamp: Date()))
                 }
             }
         )
+        .id("vol-\(currentRepIndex)-\(state)")
         .allowsHitTesting(false)
         .frame(width: 1, height: 1)
     }
 
     private var blockCompleteView: some View {
         VStack(spacing: 20) {
+            Text("Rep \(totalReps) of \(totalReps)")
+                .font(.footnote)
+                .foregroundColor(.white.opacity(0.5))
             Spacer()
             Text("Block complete — check iPad")
                 .font(.title2.bold())
@@ -220,7 +253,14 @@ struct OneTouchPassingCoachRemoteView: View {
 
     private func logExit(_ gate: Gate) {
         guard case .logging(let repIndex) = state else { return }
-        multipeerManager.sendTwoMinuteMessage(.exitLogged(repIndex: repIndex, gate: gate, timestamp: Date()))
+        connectionManager.sendTwoMinuteMessage(.exitLogged(repIndex: repIndex, gate: gate, timestamp: Date()))
+        currentRepIndex = repIndex + 1
+        state = currentRepIndex >= totalReps ? .blockComplete : .ready
+    }
+
+    private func logIncorrect() {
+        guard case .logging(let repIndex) = state else { return }
+        connectionManager.sendTwoMinuteMessage(.incorrectDecision(repIndex: repIndex, timestamp: Date()))
         currentRepIndex = repIndex + 1
         state = currentRepIndex >= totalReps ? .blockComplete : .ready
     }

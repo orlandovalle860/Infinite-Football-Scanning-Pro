@@ -2,6 +2,35 @@ import Foundation
 import SwiftUI
 import Combine
 
+/// Describes a new personal best for the celebration banner.
+enum NewPersonalBest {
+    case decisionSpeed(previous: Double?, new: Double)
+    case pressureEscape(previous: Double?, new: Double)
+    case forwardIntent(previous: Double?, new: Double)
+
+    var title: String {
+        switch self {
+        case .decisionSpeed: return "Decision Speed improved"
+        case .pressureEscape: return "Pressure Escape improved"
+        case .forwardIntent: return "Forward Intent improved"
+        }
+    }
+
+    var improvementText: String {
+        switch self {
+        case .decisionSpeed(let prev, let new):
+            let a = prev.map { String(format: "%.2fs", $0) } ?? "—"
+            return "\(a) → \(String(format: "%.2fs", new))"
+        case .pressureEscape(let prev, let new):
+            let a = prev.map { String(format: "%.0f%%", $0) } ?? "—"
+            return "\(a) → \(String(format: "%.0f%%", new))"
+        case .forwardIntent(let prev, let new):
+            let a = prev.map { String(format: "%.0f%%", $0) } ?? "—"
+            return "\(a) → \(String(format: "%.0f%%", new))"
+        }
+    }
+}
+
 class UserProfileManager: ObservableObject {
     @Published var profiles: [UserProfile] = []
     @Published var currentProfile: UserProfile?
@@ -27,17 +56,38 @@ class UserProfileManager: ObservableObject {
         currentProfile = newProfile
         isProfileCreated = true
         saveProfiles()
+        SupabasePlayerService.shared.syncPlayer(newProfile)
     }
     
     func addProfile(name: String, email: String? = nil) {
         let newProfile = UserProfile(name: name, email: email)
         profiles.append(newProfile)
         saveProfiles()
+        SupabasePlayerService.shared.syncPlayer(newProfile)
     }
 
-    /// Add a new player (optional age, team, position) without switching to them.
-    func addProfile(name: String, email: String? = nil, age: String? = nil, team: String? = nil, position: String? = nil) {
+    /// Add a new player (optional age, team, position) without switching to them. Returns the new profile.
+    @discardableResult
+    func addProfile(name: String, email: String? = nil, age: String? = nil, team: String? = nil, position: String? = nil) -> UserProfile {
         let newProfile = UserProfile(name: name, email: email, age: age, team: team, position: position)
+        profiles.append(newProfile)
+        saveProfiles()
+        SupabasePlayerService.shared.syncPlayer(newProfile)
+        return newProfile
+    }
+
+    /// Add a profile with a specific id (e.g. after inserting into Supabase from CreatePlayerAfterAuthView). Does not sync to Supabase.
+    func addProfileWithId(_ id: UUID, name: String) {
+        let newProfile = UserProfile(id: id, name: name)
+        profiles.append(newProfile)
+        currentProfile = newProfile
+        isProfileCreated = true
+        saveProfiles()
+    }
+
+    /// Add a profile by id without making it current (e.g. when hydrating from Supabase). Does not sync to Supabase.
+    func addProfileById(_ id: UUID, name: String) {
+        let newProfile = UserProfile(id: id, name: name)
         profiles.append(newProfile)
         saveProfiles()
     }
@@ -58,6 +108,7 @@ class UserProfileManager: ObservableObject {
         currentProfile = newProfile
         isProfileCreated = true
         saveProfiles()
+        SupabasePlayerService.shared.syncPlayer(newProfile)
     }
     
     func switchToProfile(_ profile: UserProfile) {
@@ -76,14 +127,142 @@ class UserProfileManager: ObservableObject {
         }
     }
     
-    func addSessionResult(_ result: SessionResult) {
-        guard let index = profiles.firstIndex(where: { $0.id == result.playerID }) else { return }
-        profiles[index].sessionResults.insert(result, at: 0)
-        profiles[index].updatePersonalBest(session: result)
+    /// Adds the session result and updates personal bests (decision speed, pressure escape, forward intent). Returns any new personal bests achieved.
+    @discardableResult
+    func addSessionResult(_ result: SessionResult) -> [NewPersonalBest] {
+        guard let index = profiles.firstIndex(where: { $0.id == result.playerID }) else { return [] }
+        var profile = profiles[index]
+        var newBests: [NewPersonalBest] = []
+
+        // Decision speed (any block with avg time; lower is better)
+        if let current = result.avgDecisionTime {
+            let previous = profile.fastestDecisionSpeedSeconds
+            if previous == nil || current < previous! {
+                let oldVal = previous
+                profile.fastestDecisionSpeedSeconds = current
+                newBests.append(.decisionSpeed(previous: oldVal, new: current))
+            }
+        }
+
+        // Pressure escape (AFP only; higher % is better)
+        if result.activityType == .awayFromPressure, result.totalReps > 0 {
+            let current = Double(result.correctCount) / Double(result.totalReps) * 100.0
+            let previous = profile.bestPressureEscapePercent
+            if previous == nil || current > previous! {
+                let oldVal = previous
+                profile.bestPressureEscapePercent = current
+                newBests.append(.pressureEscape(previous: oldVal, new: current))
+            }
+        }
+
+        // Forward intent (Dribble or Pass; higher % is better)
+        if result.activityType == .dribbleOrPass, let opp = result.forwardOpportunityCount, opp > 0, let choice = result.forwardChoiceCount {
+            let current = Double(choice) / Double(opp) * 100.0
+            let previous = profile.bestForwardIntentPercent
+            if previous == nil || current > previous! {
+                let oldVal = previous
+                profile.bestForwardIntentPercent = current
+                newBests.append(.forwardIntent(previous: oldVal, new: current))
+            }
+        }
+
+        profile.sessionResults.insert(result, at: 0)
+        profile.updatePersonalBest(session: result)
+        profiles[index] = profile
+        updateWeeklyStreakAfterBlock(profileIndex: index, sessionDate: result.date)
         if currentProfile?.id == result.playerID {
             currentProfile = profiles[index]
         }
         saveProfiles()
+        return newBests
+    }
+
+    /// Monday-based calendar for weekly boundaries (week resets every Monday).
+    private static var mondayWeekCalendar: Calendar {
+        var cal = Calendar(identifier: .gregorian)
+        cal.firstWeekday = 2 // Monday
+        return cal
+    }
+
+    private static func startOfWeekMonday(for date: Date) -> Date? {
+        let cal = Self.mondayWeekCalendar
+        let comps = cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: date)
+        return cal.date(from: comps)
+    }
+
+    /// Ensures weekly progress is rolled over when a new week (Monday) has started. Call when displaying Home or before reading streak/sessions.
+    func ensureWeeklyRolloverIfNeeded() {
+        guard let nowWeekStart = Self.startOfWeekMonday(for: Date()) else { return }
+        var didChange = false
+        for index in profiles.indices {
+            var profile = profiles[index]
+            guard let lastStart = profile.lastWeekStart, lastStart < nowWeekStart else {
+                if profile.lastWeekStart == nil {
+                    profile.lastWeekStart = nowWeekStart
+                    profiles[index] = profile
+                    didChange = true
+                }
+                continue
+            }
+            // New week: evaluate last week (1 session = 1 block, 3+ sessions keeps streak).
+            if profile.blocksCompletedThisWeek >= 3 {
+                profile.currentWeeklyStreak += 1
+                profile.longestWeeklyStreak = max(profile.longestWeeklyStreak, profile.currentWeeklyStreak)
+            } else {
+                profile.currentWeeklyStreak = 0
+            }
+            profile.blocksCompletedThisWeek = 0
+            profile.lastWeekStart = nowWeekStart
+            profiles[index] = profile
+            didChange = true
+        }
+        if didChange {
+            if let id = currentProfile?.id, let idx = profiles.firstIndex(where: { $0.id == id }) {
+                currentProfile = profiles[idx]
+            }
+            saveProfiles()
+        }
+    }
+
+    /// Weekly streak: 1 session = 1 block (36 decisions). 3+ sessions in a week keeps/extends streak. Call after adding a block (SessionResult).
+    private func updateWeeklyStreakAfterBlock(profileIndex: Int, sessionDate: Date) {
+        guard let weekStart = Self.startOfWeekMonday(for: sessionDate) else { return }
+        var profile = profiles[profileIndex]
+        if let lastStart = profile.lastWeekStart, lastStart < weekStart {
+            if profile.blocksCompletedThisWeek >= 3 {
+                profile.currentWeeklyStreak += 1
+                profile.longestWeeklyStreak = max(profile.longestWeeklyStreak, profile.currentWeeklyStreak)
+            } else {
+                profile.currentWeeklyStreak = 0
+            }
+            profile.blocksCompletedThisWeek = 0
+            profile.lastWeekStart = weekStart
+        } else if profile.lastWeekStart == nil {
+            profile.lastWeekStart = weekStart
+        }
+        profile.blocksCompletedThisWeek += 1
+        profile.lastSessionDate = sessionDate
+        profiles[profileIndex] = profile
+    }
+
+    /// Current consecutive weeks with 3+ sessions (1 session = 1 full block). Call ensureWeeklyRolloverIfNeeded() when Home appears so streak is up to date.
+    func currentWeeklyStreak() -> Int {
+        guard let profile = currentProfile else { return 0 }
+        return profile.currentWeeklyStreak
+    }
+
+    /// Longest ever consecutive weeks with 3+ sessions.
+    func longestWeeklyStreak() -> Int {
+        guard let profile = currentProfile else { return 0 }
+        return profile.longestWeeklyStreak
+    }
+
+    /// Sessions completed this week (1 session = 1 full training block, 36 decisions). Resets every Monday. Call ensureWeeklyRolloverIfNeeded() when Home appears.
+    func sessionsCompletedThisWeek() -> Int {
+        guard let profile = currentProfile else { return 0 }
+        guard let nowWeekStart = Self.startOfWeekMonday(for: Date()),
+              let lastStart = profile.lastWeekStart, lastStart == nowWeekStart else { return 0 }
+        return profile.blocksCompletedThisWeek
     }
 
     /// Returns true if this session would beat (or set) the current personal best for the activity. Call before addSessionResult to know if we should show "New Personal Best".
@@ -92,6 +271,10 @@ class UserProfileManager: ObservableObject {
         let current = profile.personalBests[session.activityType]?.bestCorrect ?? 0
         return session.correctCount > current
     }
+
+    func fastestDecisionSpeedSeconds() -> Double? { currentProfile?.fastestDecisionSpeedSeconds }
+    func bestPressureEscapePercent() -> Double? { currentProfile?.bestPressureEscapePercent }
+    func bestForwardIntentPercent() -> Double? { currentProfile?.bestForwardIntentPercent }
 
     // MARK: - Player Progress (report card)
 
@@ -337,6 +520,8 @@ class UserProfileManager: ObservableObject {
         
         if let currentProfile = currentProfile {
             userDefaults.set(currentProfile.id.uuidString, forKey: currentProfileIdKey)
+        } else {
+            userDefaults.removeObject(forKey: currentProfileIdKey)
         }
         
         userDefaults.set(isProfileCreated, forKey: isProfileCreatedKey)
@@ -347,19 +532,21 @@ class UserProfileManager: ObservableObject {
         if let data = userDefaults.data(forKey: profilesKey),
            let loadedProfiles = try? JSONDecoder().decode([UserProfile].self, from: data) {
             profiles = loadedProfiles
+        } else {
+            profiles = []
         }
         
-        // Load current profile
+        // Load current profile: only use stored id if it exists in loaded profiles
         if let currentProfileIdString = userDefaults.string(forKey: currentProfileIdKey),
            let currentProfileId = UUID(uuidString: currentProfileIdString),
            let profile = profiles.first(where: { $0.id == currentProfileId }) {
             currentProfile = profile
             isProfileCreated = true
         } else if let firstProfile = profiles.first {
-            // If no current profile is set, use the first one
             currentProfile = firstProfile
             isProfileCreated = true
         } else {
+            currentProfile = nil
             isProfileCreated = false
         }
     }

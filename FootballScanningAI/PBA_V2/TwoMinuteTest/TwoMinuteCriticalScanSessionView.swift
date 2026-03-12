@@ -2,12 +2,29 @@
 //  TwoMinuteCriticalScanSessionView.swift
 //  FootballScanningAI
 //
-//  PBA V2 — Display: same layout as Dribble or Pass (center X, four slots). Star appears at one slot when coach triggers (PASS/volume).
+//  PBA V2 — Display: same layout as Dribble or Pass (center X, four slots). Ball appears at one slot when coach triggers (PASS/volume).
 //
 
 import SwiftUI
 import AVFoundation
 import Combine
+
+/// Holds path for the results fullScreenCover so "Start Training" → role selection → Display → training mode → setup works inside the cover.
+private final class ResultsCoverPathHolder: ObservableObject {
+    @Published var path = NavigationPath()
+    func push(_ route: AppRoute) {
+        path.append(route)
+    }
+}
+
+private func routeForActivity(_ activity: ActivityKind) -> AppRoute {
+    switch activity {
+    case .twoMinuteTest: return .twoMinuteRoleSelection
+    case .awayFromPressure: return .awayFromPressureRoleSelection
+    case .dribbleOrPass: return .dribbleOrPassRoleSelection
+    case .oneTouchPassing: return .oneTouchPassingRoleSelection
+    }
+}
 
 struct TwoMinuteCriticalScanSessionView: View {
     let config: TwoMinuteTestConfig
@@ -15,18 +32,22 @@ struct TwoMinuteCriticalScanSessionView: View {
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
     @StateObject private var engine: TwoMinuteCriticalScanEngine
+    @EnvironmentObject private var connectionManager: ConnectionManager
     @EnvironmentObject private var multipeerManager: MultipeerManager
     @EnvironmentObject private var progressStore: ProgressStore
     @EnvironmentObject private var playerStore: PlayerStore
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
     @EnvironmentObject private var router: AppRouter
     @Environment(\.scenePhase) private var scenePhase
-    @State private var testResult: TwoMinuteTestResult?
+    @State private var testResultItem: TwoMinuteResultItem?
     @State private var showLeaveAlert = false
     @State private var nextRepIndex = 0
     @State private var beepPlayer: AVAudioPlayer?
     @State private var audioInterruptionObserver: NSObjectProtocol?
+    @StateObject private var sessionManager = TwoMinuteSessionManager()
+    @StateObject private var resultsCoverPathHolder = ResultsCoverPathHolder()
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var currentSessionStore = CurrentSessionStore.shared
 
     init(config: TwoMinuteTestConfig, mode: TrainingMode, settingsViewModel: SettingsViewModel, profileManager: UserProfileManager) {
         self.config = config
@@ -36,12 +57,21 @@ struct TwoMinuteCriticalScanSessionView: View {
         _engine = StateObject(wrappedValue: TwoMinuteCriticalScanEngine(config: config))
     }
 
-    var body: some View {
+    private static let totalReps = 10
+
+    private var isBallVisible: Bool {
+        if case .ballVisible = engine.phase { return true }
+        return false
+    }
+
+    private var sessionStack: some View {
         ZStack {
             Color.black.ignoresSafeArea()
             dribbleOrPassLayout
             statusOverlay
-                .opacity(isStarVisible ? 0.25 : 1)
+                .opacity(isBallVisible ? 0.25 : 1)
+            waitingForCoachOverlay
+            repCountOverlay
             if mode != .partner {
                 SessionVolumeTriggerView(enabled: canVolumeTrigger) { handleWallSoloTrigger() }
                     .allowsHitTesting(false)
@@ -56,92 +86,184 @@ struct TwoMinuteCriticalScanSessionView: View {
                     .onTapGesture { }
             }
         }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if mode == .solo { handleWallSoloTrigger() }
+    }
+
+    private var sessionContentWithCover: some View {
+        sessionStack
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if mode == .solo { handleWallSoloTrigger() }
+            }
+            .fullScreenCover(item: $testResultItem) { item in
+                NavigationStack(path: $resultsCoverPathHolder.path) {
+                    TwoMinuteTestResultsView(
+                        result: item.result,
+                        repLogs: item.logs,
+                        profileManager: profileManager,
+                        settingsViewModel: settingsViewModel,
+                        onDismissCover: { testResultItem = nil },
+                        onStartTraining: { activity in
+                            resultsCoverPathHolder.push(routeForActivity(activity))
+                        }
+                    )
+                    .environmentObject(progressStore)
+                    .environmentObject(playerStore)
+                    .environmentObject(popToRootTrigger)
+                    .environmentObject(router)
+                }
+                .navigationDestination(for: AppRoute.self) { route in
+                    resultsCoverRouteView(route, pathHolder: resultsCoverPathHolder)
+                        .environmentObject(progressStore)
+                        .environmentObject(playerStore)
+                        .environmentObject(popToRootTrigger)
+                        .environmentObject(router)
+                }
+            }
+    }
+
+    var body: some View {
+        sessionContentWithCover
+            .onReceive(NotificationCenter.default.publisher(for: .twoMinuteMessageReceived).receive(on: RunLoop.main), perform: handleTwoMinuteMessage)
+            .onChange(of: engine.phase, handlePhaseChange)
+            .onChange(of: testResultItem) { old, new in
+            handleTestResultItemChange(old: old, new: new)
+            if new == nil { resultsCoverPathHolder.path = NavigationPath() }
         }
-        .fullScreenCover(item: $testResult) { result in
-            NavigationStack {
-                TwoMinuteTestResultsView(
-                    result: result,
-                    profileManager: profileManager,
-                    settingsViewModel: settingsViewModel,
-                    onDismissCover: { testResult = nil }
+            .onChange(of: popToRootTrigger.request, handlePopToRootChange)
+            .onAppear(perform: handleOnAppear)
+            .onDisappear(perform: handleOnDisappear)
+            .onChange(of: scenePhase, handleScenePhaseChange)
+            .onChange(of: connectionManager.connectedPeerName, handleConnectedPeerChange)
+            .preferredColorScheme(.dark)
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { leaveToolbarItem }
+            .alert("Leave training?", isPresented: $showLeaveAlert) {
+                Button("Stay", role: .cancel) {}
+                Button("Leave", role: .destructive) { router.popToRoot() }
+            } message: {
+                Text("Your current block will not be saved.")
+            }
+            .sessionCountdown()
+    }
+
+    private func handleTwoMinuteMessage(_ notification: Notification) {
+        guard mode == .partner, let msg = notification.object as? TwoMinuteMessage else { return }
+        switch msg {
+        case .nextRep(let repIndex):
+            guard sessionManager.isConnected else { return }
+            engine.onNextRep(repIndex: repIndex)
+        case .passTriggered(let repIndex, let timestamp):
+            engine.onPassTrigger(repIndex: repIndex, timestamp: timestamp)
+        case .exitLogged(let repIndex, let gate, let timestamp):
+            if engine.onExitLogged(repIndex: repIndex, gate: gate, timestamp: timestamp) != nil, let log = engine.repLogs.last {
+                saveDecisionForRep(log: log)
+            }
+        case .incorrectDecision(let repIndex, let timestamp):
+            if engine.onIncorrectDecision(repIndex: repIndex, timestamp: timestamp) != nil, let log = engine.repLogs.last {
+                saveDecisionForRep(log: log)
+            }
+        case .firstTouchLogged:
+            break
+        case .coachPaired:
+            break
+        }
+    }
+
+    private func handlePhaseChange(_ oldPhase: CriticalScanPhase, _ newPhase: CriticalScanPhase) {
+        if case .complete = newPhase {
+            DispatchQueue.main.async {
+                testResultItem = TwoMinuteResultItem(
+                    result: TwoMinuteTestResult.from(logs: engine.repLogs, difficulty: config.difficulty),
+                    logs: engine.repLogs
                 )
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(popToRootTrigger)
-                .environmentObject(router)
+                AnalyticsManager.shared.track(.twoMinuteTestCompleted, playerId: playerStore.selectedPlayerId)
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .twoMinuteMessageReceived).receive(on: RunLoop.main)) { notification in
-            guard mode == .partner, let msg = notification.object as? TwoMinuteMessage else { return }
-            switch msg {
-            case .nextRep(let repIndex):
-                engine.onNextRep(repIndex: repIndex)
-            case .passTriggered(let repIndex, let timestamp):
-                engine.onPassTrigger(repIndex: repIndex, timestamp: timestamp)
-            case .exitLogged(let repIndex, let gate, let timestamp):
-                engine.onExitLogged(repIndex: repIndex, gate: gate, timestamp: timestamp)
-            case .firstTouchLogged:
-                break // Only used by Away From Pressure
+        if case .beepedAwaitingPass = newPhase { playBeep() }
+    }
+
+    private func handleTestResultItemChange(old: TwoMinuteResultItem?, new: TwoMinuteResultItem?) {
+        if old != nil && new == nil { router.popToRoot() }
+    }
+
+    private func handlePopToRootChange(old: Bool, new: Bool) {
+        if new { dismiss() }
+    }
+
+    /// When the display loads: SessionManager creates session in Supabase and generates pairing code; UI shows pairing screen. Test does not start until coach connects.
+    private func handleOnAppear() {
+        onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
+        if mode == .partner { connectionManager.startHosting() }
+        activateAudioSession()
+        subscribeToAudioInterruption()
+        AnalyticsManager.shared.track(.twoMinuteTestStarted, playerId: playerStore.selectedPlayerId)
+        Task {
+            await sessionManager.startSession(
+                activity: .twoMinuteTest,
+                blockSize: Self.totalReps,
+                playerId: playerStore.selectedPlayerId ?? profileManager.currentProfile?.id
+            )
+        }
+    }
+
+    private func handleOnDisappear() {
+        if mode == .partner { connectionManager.stopHosting() }
+        unsubscribeFromAudioInterruption()
+        sessionManager.clear()
+        if testResultItem == nil { currentSessionStore.clear() }
+    }
+
+    private func handleScenePhaseChange(old: ScenePhase, new: ScenePhase) {
+        if new == .background { engine.applicationDidEnterBackground() }
+    }
+
+    private func handleConnectedPeerChange(old: String?, name: String?) {
+        guard mode == .partner, name != nil else { return }
+        sessionManager.setConnected(true)
+        let flag = UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey)
+        connectionManager.sendDisplaySessionInfo(hasCompletedInitialTest: flag)
+    }
+
+    @ViewBuilder
+    private func resultsCoverRouteView(_ route: AppRoute, pathHolder: ResultsCoverPathHolder) -> some View {
+        switch route {
+        case .awayFromPressureRoleSelection:
+            AwayFromPressureRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+        case .awayFromPressureTrainingModeSelection:
+            TrainingModeSelectionView(activityTitle: "Playing Away From Pressure", onSelectMode: { mode in
+                pathHolder.push(.awayFromPressureSetup(mode: mode))
+            }) { _ in EmptyView() }
+        case .awayFromPressureSetup(let mode):
+            AwayFromPressureSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+        case .dribbleOrPassRoleSelection:
+            DribbleOrPassRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+        case .dribbleOrPassTrainingModeSelection:
+            TrainingModeSelectionView(activityTitle: "Dribble or Pass", onSelectMode: { mode in
+                pathHolder.push(.dribbleOrPassSetup(mode: mode))
+            }) { _ in EmptyView() }
+        case .dribbleOrPassSetup(let mode):
+            DribbleOrPassSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+        case .oneTouchPassingRoleSelection:
+            OneTouchPassingRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+        case .oneTouchPassingTrainingModeSelection:
+            TrainingModeSelectionView(activityTitle: "One-Touch Passing", onSelectMode: { mode in
+                pathHolder.push(.oneTouchPassingSetup(mode: mode))
+            }) { _ in EmptyView() }
+        case .oneTouchPassingSetup(let mode):
+            OneTouchPassingSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+        default:
+            EmptyView()
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var leaveToolbarItem: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) {
+            Button { showLeaveAlert = true } label: {
+                Image(systemName: "house.fill")
             }
-        }
-        .onChange(of: engine.phase) { _, newPhase in
-            if case .complete = newPhase {
-                DispatchQueue.main.async {
-                    testResult = TwoMinuteTestResult.from(logs: engine.repLogs, difficulty: config.difficulty)
-                }
-            }
-            if case .beepedAwaitingPass = newPhase { playBeep() }
-        }
-        .onChange(of: testResult) { old, new in
-            // When user taps "Back to Home", cover dismisses (testResult = nil). Trigger cascade so this view dismisses too.
-            if old != nil && new == nil {
-                popToRootTrigger.request = true
-            }
-        }
-        .onChange(of: popToRootTrigger.request) { _, new in
-            if new { dismiss() }
-        }
-        .onAppear {
-            onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
-            if mode == .partner { multipeerManager.startAdvertising() }
-            activateAudioSession()
-            subscribeToAudioInterruption()
-        }
-        .onDisappear {
-            if mode == .partner { multipeerManager.stopAdvertising() }
-            unsubscribeFromAudioInterruption()
-        }
-        .onChange(of: scenePhase) { _, newPhase in
-            if newPhase == .background { engine.applicationDidEnterBackground() }
-        }
-        .onChange(of: multipeerManager.connectedPeerName) { _, name in
-            guard mode == .partner, name != nil else { return }
-            let flag = UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey)
-            multipeerManager.sendDisplaySessionInfo(hasCompletedInitialTest: flag)
-        }
-        .preferredColorScheme(.dark)
-        .navigationTitle("")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showLeaveAlert = true
-                } label: {
-                    Image(systemName: "house.fill")
-                }
-                .foregroundColor(.white.opacity(0.9))
-            }
-        }
-        .alert("Leave training?", isPresented: $showLeaveAlert) {
-            Button("Stay", role: .cancel) {}
-            Button("Leave", role: .destructive) {
-                router.popToRoot()
-            }
-        } message: {
-            Text("Your current block will not be saved.")
+            .foregroundColor(.white.opacity(0.9))
         }
     }
 
@@ -156,7 +278,7 @@ struct TwoMinuteCriticalScanSessionView: View {
         switch engine.phase {
         case .waitingForNextRep:
             engine.onNextRep(repIndex: nextRepIndex)
-        case .beepedAwaitingPass(repIndex: let ri, starGate: _):
+        case .beepedAwaitingPass(repIndex: let ri, ballGate: _):
             engine.onPassTrigger(repIndex: ri, timestamp: Date())
         default:
             break
@@ -166,13 +288,13 @@ struct TwoMinuteCriticalScanSessionView: View {
     private var showExitLogButtons: Bool {
         guard mode != .partner else { return false }
         if case .awaitingExitLog = engine.phase { return true }
-        if case .starVisible = engine.phase { return true }
+        if case .ballVisible = engine.phase { return true }
         return false
     }
 
     private var repIndexForExit: Int? {
         switch engine.phase {
-        case .awaitingExitLog(let ri, _), .starVisible(let ri, _, _): return ri
+        case .awaitingExitLog(let ri, _), .ballVisible(let ri, _, _): return ri
         default: return nil
         }
     }
@@ -221,11 +343,32 @@ struct TwoMinuteCriticalScanSessionView: View {
     }
 
     private func logExit(repIndex: Int, gate: Gate) {
-        engine.onExitLogged(repIndex: repIndex, gate: gate, timestamp: Date())
+        if engine.onExitLogged(repIndex: repIndex, gate: gate, timestamp: Date()) != nil, let log = engine.repLogs.last {
+            saveDecisionForRep(log: log)
+        }
         nextRepIndex = repIndex + 1
     }
 
-    /// Same layout as Dribble or Pass: center "X" marker, no players. Star at one of four slots when visible.
+    private func saveDecisionForRep(log: RepLog) {
+        guard let sessionId = CurrentSessionStore.shared.sessionId,
+              let passTriggeredAt = log.passTriggeredAt else { return }
+        let sec = log.exitLoggedAt.timeIntervalSince(passTriggeredAt)
+        let reactionTimeMs = Int(sec * 1000)
+        guard reactionTimeMs <= SupabaseDecisionService.maxReactionTimeMs else { return }
+        let decision = Decision(
+            sessionId: sessionId,
+            playerId: playerStore.selectedPlayerId ?? profileManager.currentProfile?.id,
+            activityName: ActivityKind.twoMinuteTest.rawValue,
+            stimulusType: "ball",
+            decisionDirection: log.exitedGate.rawValue,
+            reactionTimeMs: reactionTimeMs,
+            correct: log.correct,
+            createdAt: log.exitLoggedAt
+        )
+        SupabaseDecisionService.shared.saveDecision(decision)
+    }
+
+    /// Same layout as Dribble or Pass: center "X" marker, no players. Ball at one of four slots when visible.
     private var dribbleOrPassLayout: some View {
         GeometryReader { geo in
             let positions = TwoMinuteSlotPositions.positionsForCurrentScreen()
@@ -242,12 +385,12 @@ struct TwoMinuteCriticalScanSessionView: View {
                 .position(x: center.x, y: center.y)
 
                 // Soccer ball at gate position when visible (same slots as where defenders/teammates would be)
-                if case .starVisible(_, let starGate, _) = engine.phase,
-                   let pt = positions[starGate] {
+                if case .ballVisible(_, let ballGate, _) = engine.phase,
+                   let pt = positions[ballGate] {
                     Image("SoccerBall")
                         .resizable()
                         .scaledToFit()
-                        .frame(width: 110, height: 110)
+                        .frame(width: 200, height: 200)
                         .shadow(radius: 4)
                         .position(x: pt.x, y: pt.y)
                         .zIndex(1)
@@ -257,85 +400,153 @@ struct TwoMinuteCriticalScanSessionView: View {
         }
     }
 
-    /// Peer name when connected; explicitly Optional so conditional binding is valid.
-    private var connectedPeerDisplayName: String? { multipeerManager.connectedPeerName }
-
-    private var statusOverlay: some View {
-        VStack {
+    private var connectionStatusContent: some View {
+        Group {
             if mode == .partner {
-                if let name = connectedPeerDisplayName {
-                    Text("Connected to \(name)")
-                        .font(.caption)
-                        .foregroundColor(.green)
-                } else if multipeerManager.isAdvertising {
-                    Text("Advertising… Tap Connect on the coach device.")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.6))
-                } else {
-                    Text("Starting…")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.5))
-                }
+                CoachRemoteConnectionStatusView(connectionState: connectionManager.connectionState)
             } else {
                 Text(mode == .solo ? "Tap screen or volume to trigger" : "Volume button to trigger")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.7))
             }
+        }
+    }
+
+    private var waitingForCoachOverlay: some View {
+        Group {
+            if mode == .partner, !sessionManager.isConnected {
+                if sessionManager.isCreating {
+                    VStack(spacing: 12) {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(1.2)
+                        Text("Creating session…")
+                            .font(.subheadline)
+                            .foregroundColor(.white.opacity(0.7))
+                    }
+                    .padding(.top, 220)
+                    .allowsHitTesting(false)
+                    Spacer()
+                } else if let error = sessionManager.creationError {
+                    VStack(spacing: 16) {
+                        Text(error)
+                            .font(.subheadline)
+                            .foregroundColor(.orange)
+                            .multilineTextAlignment(.center)
+                        Button("Retry") {
+                            Task {
+                                await sessionManager.startSession(
+                                    activity: .twoMinuteTest,
+                                    blockSize: Self.totalReps,
+                                    playerId: playerStore.selectedPlayerId ?? profileManager.currentProfile?.id
+                                )
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.orange)
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.top, 220)
+                    Spacer()
+                } else {
+                    VStack(spacing: 8) {
+                        Text("Waiting for Coach Remote…")
+                            .font(.title3.weight(.medium))
+                            .foregroundColor(.white.opacity(0.9))
+                        Text("Tap Connect to Display on the coach device, then select this device.")
+                            .font(.subheadline)
+                            .foregroundColor(.white.opacity(0.6))
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 32)
+                    }
+                    .padding(.top, 220)
+                    .allowsHitTesting(false)
+                    Spacer()
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .allowsHitTesting(false)
+    }
+
+    private var statusOverlay: some View {
+        VStack {
+            connectionStatusContent
             Spacer()
             TimelineView(.periodic(from: .now, by: 1)) { _ in
-                Group {
-                    if case .waitingForNextRep = engine.phase {
-                        VStack(spacing: 4) {
-                            Text("Waiting for coach…")
-                                .font(.footnote)
-                                .foregroundColor(.white.opacity(0.5))
-                            Text("Keep moving. Check both shoulders.")
-                                .font(.caption2)
-                                .foregroundColor(.white.opacity(0.4))
-                        }
-                    } else if case .armedScanning = engine.phase {
-                        VStack(spacing: 4) {
-                            Text("Keep moving. Check both shoulders.")
-                                .font(.footnote)
-                                .foregroundColor(.white.opacity(0.5))
-                            Text("Beep is coming.")
-                                .font(.caption2)
-                                .foregroundColor(.white.opacity(0.4))
-                        }
-                    } else if case .beepedAwaitingPass = engine.phase {
-                        VStack(spacing: 4) {
-                            Text("Ball is coming. Check again.")
-                                .font(.footnote)
-                                .foregroundColor(.white.opacity(0.5))
-                            Text("Coach: press PASS when it leaves your foot.")
-                                .font(.caption2)
-                                .foregroundColor(.white.opacity(0.4))
-                        }
-                    } else if case .awaitingExitLog = engine.phase {
-                        VStack(spacing: 4) {
-                            Text("Play the rep.")
-                                .font(.footnote)
-                                .foregroundColor(.white.opacity(0.5))
-                            Text("Waiting for coach log…")
-                                .font(.caption2)
-                                .foregroundColor(.white.opacity(0.4))
-                        }
-                    } else {
-                        Text(phaseStatusText)
-                            .font(.footnote)
-                            .foregroundColor(.white.opacity(0.5))
-                    }
-                }
+                phaseStatusContent
             }
             .padding(.bottom, 32)
         }
         .padding(.top, 16)
     }
 
-    /// Overlay text fades during starVisible so the star is the focus.
-    private var isStarVisible: Bool {
-        if case .starVisible = engine.phase { return true }
-        return false
+    @ViewBuilder
+    private var phaseStatusContent: some View {
+        if mode == .partner, !sessionManager.isConnected {
+            phaseVStack(title: "Waiting for Coach Remote…", subtitle: "On the coach device: tap Connect to Display, then select this device.")
+        } else {
+            switch engine.phase {
+            case .waitingForNextRep:
+                phaseVStack(title: "Waiting for coach…", subtitle: "Keep moving. Check both shoulders.")
+            case .armedScanning:
+                phaseVStack(title: "Keep moving. Check both shoulders.", subtitle: "Beep is coming.")
+            case .beepedAwaitingPass:
+                phaseVStack(title: "Ball is coming. Check again.", subtitle: "Coach: press PASS when it leaves your foot.")
+            case .awaitingExitLog:
+                phaseVStack(title: "Play the rep.", subtitle: "Waiting for coach log…")
+            default:
+                Text(phaseStatusText)
+                    .font(.footnote)
+                    .foregroundColor(.white.opacity(0.5))
+            }
+        }
+    }
+
+    private func phaseVStack(title: String, subtitle: String) -> some View {
+        VStack(spacing: 4) {
+            Text(title)
+                .font(.footnote)
+                .foregroundColor(.white.opacity(0.5))
+            Text(subtitle)
+                .font(.caption2)
+                .foregroundColor(.white.opacity(0.4))
+        }
+    }
+
+    /// Rep count and timer visible only after connection event (State 2). Hidden in State 1 (waiting for pairing).
+    private var repCountOverlay: some View {
+        Group {
+            if mode != .partner || sessionManager.isConnected {
+                VStack {
+                    HStack {
+                        Text(repCountText)
+                            .font(.subheadline.monospacedDigit())
+                            .foregroundColor(.white.opacity(0.7))
+                        Spacer()
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 12)
+                    Spacer()
+                }
+                .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private var repCountText: String {
+        let rep: String
+        if mode == .partner, !sessionManager.isConnected {
+            rep = "—"
+        } else {
+            switch engine.phase {
+            case .waitingForNextRep: rep = "\(nextRepIndex + 1)"
+            case .complete: rep = "\(Self.totalReps)"
+            case .armedScanning(let r, _, _), .beepedAwaitingPass(let r, _), .ballVisible(let r, _, _), .awaitingExitLog(let r, _):
+                rep = "\(r + 1)"
+            }
+        }
+        return "Rep \(rep) of \(Self.totalReps)"
     }
 
     private var phaseStatusText: String {
@@ -343,9 +554,10 @@ struct TwoMinuteCriticalScanSessionView: View {
         case .waitingForNextRep: return "Waiting for coach…"
         case .armedScanning(_, _, let endsAt):
             let sec = max(0, Int(endsAt.timeIntervalSinceNow.rounded(.up)))
-            return sec > 0 ? "Scan freely — beep in \(sec)s" : "Scan freely"
+            if sec > 0 { return "Scan freely — beep in \(sec)s" }
+            return "Scan freely"
         case .beepedAwaitingPass: return "Ball is coming — tap PASS on phone"
-        case .starVisible: return ""
+        case .ballVisible: return ""
         case .awaitingExitLog: return "Waiting for coach log…"
         case .complete: return ""
         }

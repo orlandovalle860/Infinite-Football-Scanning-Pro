@@ -17,6 +17,8 @@ struct DribbleOrPassSetupView: View {
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
     @EnvironmentObject private var router: AppRouter
     @State private var difficulty: TestDifficulty = .beginner
+    @State private var showInstructions = false
+    @State private var navigateToSession = false
 
     private var config: DribbleOrPassConfig {
         DribbleOrPassConfig.defaultConfig(for: difficulty)
@@ -43,12 +45,13 @@ struct DribbleOrPassSetupView: View {
                 .pickerStyle(.segmented)
                 .padding(.horizontal, 24)
 
-                NavigationLink(destination: DribbleOrPassGetReadyView(config: config, mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
-                    .environmentObject(progressStore)
-                    .environmentObject(playerStore)
-                    .environmentObject(popToRootTrigger)
-                    .environmentObject(router)
-                ) {
+                Button {
+                    if ActivityInstructionContent.shouldShowInstructions(for: .dribbleOrPass) {
+                        showInstructions = true
+                    } else {
+                        navigateToSession = true
+                    }
+                } label: {
                     Text("Begin")
                         .font(.system(size: 22, weight: .bold, design: .rounded))
                         .foregroundColor(.black)
@@ -93,6 +96,19 @@ struct DribbleOrPassSetupView: View {
         }
         .onAppear {
             print("[SetupScreen DOP] onAppear, router path count = \(router.pathCount)")
+        }
+        .navigationDestination(isPresented: $showInstructions) {
+            ActivityInstructionView(activity: .dribbleOrPass) {
+                showInstructions = false
+                navigateToSession = true
+            }
+        }
+        .navigationDestination(isPresented: $navigateToSession) {
+            DribbleOrPassDisplaySessionView(config: config, mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
         }
     }
 }

@@ -10,6 +10,7 @@ import MediaPlayer
 import SwiftUI
 
 struct PressureTriggerView: View {
+    @EnvironmentObject private var connectionManager: ConnectionManager
     @EnvironmentObject var multipeerManager: MultipeerManager
     @Environment(\.dismiss) private var dismiss
     @State private var volumeButtonTriggerEnabled = true
@@ -40,15 +41,15 @@ struct PressureTriggerView: View {
             .multilineTextAlignment(.leading)
             .padding(.horizontal)
 
-            if let error = multipeerManager.lastError {
+            if let error = connectionManager.lastError {
                 Text(error)
                     .font(.caption)
                     .foregroundColor(.orange)
                     .padding(.horizontal)
             }
 
-            if multipeerManager.connectedPeerName != nil {
-                Text("Connected to \(multipeerManager.connectedPeerName!)")
+            if connectionManager.connectedPeerName != nil {
+                Text("Connected to \(connectionManager.connectedPeerName!)")
                     .font(.subheadline)
                     .foregroundColor(.green)
             } else {
@@ -57,10 +58,10 @@ struct PressureTriggerView: View {
                     .foregroundColor(.white.opacity(0.6))
             }
 
-            if !multipeerManager.isBrowsing {
+            if !connectionManager.isBrowsing {
                 Button("Connect to iPad") {
-                    multipeerManager.lastError = nil
-                    multipeerManager.startBrowsing()
+                    connectionManager.lastError = nil
+                    connectionManager.startBrowsing()
                 }
                 .font(.headline)
                 .foregroundColor(.black)
@@ -69,7 +70,7 @@ struct PressureTriggerView: View {
                 .background(Color.white)
                 .cornerRadius(12)
                 .padding(.horizontal, 40)
-            } else if multipeerManager.connectedPeerName == nil {
+            } else if connectionManager.connectedPeerName == nil {
                 ProgressView()
                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
                     .scaleEffect(1.2)
@@ -77,19 +78,19 @@ struct PressureTriggerView: View {
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.8))
                 Button("Cancel") {
-                    multipeerManager.stopBrowsing()
+                    connectionManager.stopBrowsing()
                 }
                 .foregroundColor(.white.opacity(0.9))
             }
 
-            if multipeerManager.connectedPeerName != nil {
+            if connectionManager.connectedPeerName != nil {
                 Text("Tap below or press a volume button to trigger")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.7))
 
                 Button(action: {
-                    multipeerManager.lastError = nil
-                    multipeerManager.sendTrigger()
+                    connectionManager.lastError = nil
+                    connectionManager.sendTrigger()
                 }) {
                     Text("Pass Made")
                         .font(.system(size: 28, weight: .bold))
@@ -104,7 +105,7 @@ struct PressureTriggerView: View {
                 .padding(.top, 8)
 
                 Button(action: {
-                    multipeerManager.lastError = nil
+                    connectionManager.lastError = nil
                 }) {
                     Text("Clear error")
                         .font(.headline)
@@ -126,25 +127,25 @@ struct PressureTriggerView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black)
         .overlay(VolumeButtonTriggerView(
-            connected: multipeerManager.connectedPeerName != nil,
+            connected: connectionManager.connectedPeerName != nil,
             volumeTriggerEnabled: volumeButtonTriggerEnabled,
             onTrigger: {
-                multipeerManager.lastError = nil
-                multipeerManager.sendTrigger()
+                connectionManager.lastError = nil
+                connectionManager.sendTrigger()
             }
         ).allowsHitTesting(false).frame(width: 1, height: 1))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
                 Button("Done") {
-                    multipeerManager.stopBrowsing()
+                    connectionManager.stopBrowsing()
                     dismiss()
                 }
                 .foregroundColor(.white)
             }
         }
         .onDisappear {
-            multipeerManager.stopBrowsing()
+            connectionManager.stopBrowsing()
         }
     }
 }

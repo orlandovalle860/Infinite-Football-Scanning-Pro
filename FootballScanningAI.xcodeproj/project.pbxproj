@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		9FD2E34B2F5E200D005AED08 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 9F592DA12DFF0B7D00525BF9 /* Supabase */; };
 		9FDCE9C42E089EAD00F39677 /* critical scan beep.wav in Resources */ = {isa = PBXBuildFile; fileRef = 9FDCE9C32E089EAD00F39677 /* critical scan beep.wav */; };
 		9FE4B7D72E02687B006EF4A6 /* short-beep-351721.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = 9FE4B7D62E02687B006EF4A6 /* short-beep-351721.mp3 */; };
 /* End PBXBuildFile section */
@@ -32,9 +33,20 @@
 		9F592D6F2DFF0B7D00525BF9 /* Infinite Football Scanning Pro.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Infinite Football Scanning Pro.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		9F592D7C2DFF0B7E00525BF9 /* FootballScanningAITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FootballScanningAITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9F592D862DFF0B7E00525BF9 /* FootballScanningAIUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FootballScanningAIUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		9F592DB02DFF0B7D00525BF9 /* Secrets.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Secrets.xcconfig; sourceTree = "<group>"; };
 		9FDCE9C32E089EAD00F39677 /* critical scan beep.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "critical scan beep.wav"; sourceTree = "<group>"; };
 		9FE4B7D62E02687B006EF4A6 /* short-beep-351721.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = "short-beep-351721.mp3"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		9FD2E43B2F5E45CB005AED08 /* Exceptions for "FootballScanningAITests" folder in "FootballScanningAITests" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 9F592D7B2DFF0B7E00525BF9 /* FootballScanningAITests */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		9F592D712DFF0B7D00525BF9 /* FootballScanningAI */ = {
@@ -44,6 +56,9 @@
 		};
 		9F592D7F2DFF0B7E00525BF9 /* FootballScanningAITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				9FD2E43B2F5E45CB005AED08 /* Exceptions for "FootballScanningAITests" folder in "FootballScanningAITests" target */,
+			);
 			path = FootballScanningAITests;
 			sourceTree = "<group>";
 		};
@@ -59,6 +74,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				9FD2E34B2F5E200D005AED08 /* Supabase in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -88,6 +104,7 @@
 				9F592D7F2DFF0B7E00525BF9 /* FootballScanningAITests */,
 				9F592D892DFF0B7E00525BF9 /* FootballScanningAIUITests */,
 				9F592D702DFF0B7D00525BF9 /* Products */,
+				9F592DB02DFF0B7D00525BF9 /* Secrets.xcconfig */,
 			);
 			sourceTree = "<group>";
 		};
@@ -121,6 +138,7 @@
 			);
 			name = InfiniteFootballScanningPro;
 			packageProductDependencies = (
+				9F592DA12DFF0B7D00525BF9 /* Supabase */,
 			);
 			productName = InfiniteFootballScanningPro;
 			productReference = 9F592D6F2DFF0B7D00525BF9 /* Infinite Football Scanning Pro.app */;
@@ -204,6 +222,9 @@
 			);
 			mainGroup = 9F592D662DFF0B7D00525BF9;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				9F592DA02DFF0B7D00525BF9 /* XCRemoteSwiftPackageReference "supabase-swift" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 9F592D702DFF0B7D00525BF9 /* Products */;
 			projectDirPath = "";
@@ -405,16 +426,19 @@
 		};
 		9F592D912DFF0B7E00525BF9 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 9F592DB02DFF0B7D00525BF9 /* Secrets.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
+				CODE_SIGN_ENTITLEMENTS = FootballScanningAI/FootballScanningAI.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 7XZF229B8W;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "PBA Training";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.sports";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "This app uses the local network to connect the Display device (grid) and Coach device (trigger) for the 2-Minute Test and other activities. Both devices must allow access.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -445,16 +469,19 @@
 		};
 		9F592D922DFF0B7E00525BF9 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 9F592DB02DFF0B7D00525BF9 /* Secrets.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
+				CODE_SIGN_ENTITLEMENTS = FootballScanningAI/FootballScanningAI.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 7XZF229B8W;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "PBA Training";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.sports";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "This app uses the local network to connect the Display device (grid) and Coach device (trigger) for the 2-Minute Test and other activities. Both devices must allow access.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -491,6 +518,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 7XZF229B8W;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = FootballScanningAITests/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.infinitefootball.scanningpro.uitests;
@@ -512,6 +540,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 7XZF229B8W;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = FootballScanningAITests/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.infinitefootball.scanningpro.uitests;
@@ -603,6 +632,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		9F592DA02DFF0B7D00525BF9 /* XCRemoteSwiftPackageReference "supabase-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/supabase/supabase-swift.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		9F592DA12DFF0B7D00525BF9 /* Supabase */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 9F592DA02DFF0B7D00525BF9 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Supabase;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 9F592D672DFF0B7D00525BF9 /* Project object */;
 }

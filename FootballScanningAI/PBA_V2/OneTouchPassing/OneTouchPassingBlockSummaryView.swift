@@ -26,9 +26,21 @@ struct OneTouchPassingBlockSummaryView: View {
     @State private var navigateToProgress = false
     @State private var sessionResultForSummary: SessionResult?
     @State private var isNewPersonalBestForSummary = false
+    @State private var newPersonalBestsFromBlock: [NewPersonalBest] = []
+    @State private var decisionSpeedPercentile: Int?
+    @State private var previousSessionForComparison: SessionRecord?
+    @State private var personalBestScore: Int?
+    @State private var isNewPersonalBestForDecisionSpeed = false
 
     private var blockResult: OneTouchBlockResult {
         OneTouchBlockResult.from(repResults: results)
+    }
+
+    /// Decision Speed Score (0–100) from correctness and reaction times; nil when no reps.
+    private var decisionSpeedScoreValue: Int? {
+        let ms = results.map { Int($0.decisionTime * 1000) }
+        let correct = results.map(\.correct)
+        return DecisionSpeedScore.sessionScore(reactionTimesMs: ms, correct: correct)
     }
 
     private var performanceLabel: String {
@@ -120,7 +132,8 @@ struct OneTouchPassingBlockSummaryView: View {
             avgDecisionTime: blockResult.averageDecisionTime,
             biasDirection: biasDirection,
             directionCounts: blockResult.directionCounts,
-            difficulty: config.difficulty
+            difficulty: config.difficulty,
+            decisionTimeStdDev: blockResult.decisionTimeStdDev
         )
     }
 
@@ -145,6 +158,14 @@ struct OneTouchPassingBlockSummaryView: View {
                     firstTouchAccuracy: nil,
                     decisionSpeedLabel: decisionSpeedComparisonLabel(current: speedBucket, previous: previousBlockSpeedBucket),
                     avgDecisionTimeSeconds: blockResult.averageDecisionTime,
+                    decisionSpeedScore: decisionSpeedScoreValue,
+                    decisionSpeedPercentile: decisionSpeedPercentile,
+                    previousDecisionSpeedScore: previousSessionForComparison?.decisionSpeedScore,
+                    previousAvgReactionTimeSeconds: previousSessionForComparison?.avgLatency,
+                    previousCorrect: previousSessionForComparison?.correct,
+                    previousTotal: previousSessionForComparison?.decisionsCompleted,
+                    personalBest: personalBestScore,
+                    isNewPersonalBest: isNewPersonalBestForDecisionSpeed,
                     coachFeedback: sessionFeedbackCoachSentence,
                     onContinue: { showSessionFeedback = false }
                 )
@@ -153,6 +174,7 @@ struct OneTouchPassingBlockSummaryView: View {
                     session: s,
                     playerName: profileManager.currentProfile?.name ?? "Player",
                     isNewPersonalBest: isNewPersonalBestForSummary,
+                    newPersonalBests: newPersonalBestsFromBlock,
                     profileManager: profileManager,
                     settingsViewModel: settingsViewModel
                 )
@@ -165,32 +187,92 @@ struct OneTouchPassingBlockSummaryView: View {
         }
         .onAppear {
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
+            AnalyticsManager.shared.track(.trainingSessionCompleted, playerId: playerStore.selectedPlayerId)
             guard !didSave else { return }
+            guard let sessionId = CurrentSessionStore.shared.sessionId else {
+                let record = SessionRecord(
+                    id: UUID(),
+                    date: Date(),
+                    activity: .oneTouchPassing,
+                    gridSize: .fiveByFive,
+                    difficulty: config.difficulty,
+                    reps: 12,
+                    decisionsCompleted: results.count,
+                    correct: blockResult.correctCount,
+                    forwardCorrect: nil,
+                    speedBucket: speedBucket,
+                    bias: biasString == "None" ? nil : biasString,
+                    avgLatency: blockResult.averageDecisionTime,
+                    profile: nil,
+                    playerId: playerStore.selectedPlayerId,
+                    decisionSpeedScore: decisionSpeedScoreValue
+                )
+                previousSessionForComparison = progressStore.last(record.activity, playerId: record.playerId)
+                let previousBest = progressStore.bestDecisionSpeedScore(activity: record.activity, playerId: record.playerId)
+                progressStore.add(record)
+                personalBestScore = progressStore.bestDecisionSpeedScore(activity: record.activity, playerId: record.playerId)
+                isNewPersonalBestForDecisionSpeed = (decisionSpeedScoreValue ?? 0) > (previousBest ?? -1)
+                didSave = true
+                return
+            }
             let record = SessionRecord(
-                id: UUID(),
+                id: sessionId,
                 date: Date(),
                 activity: .oneTouchPassing,
                 gridSize: .fiveByFive,
                 difficulty: config.difficulty,
                 reps: 12,
+                decisionsCompleted: results.count,
                 correct: blockResult.correctCount,
                 forwardCorrect: nil,
                 speedBucket: speedBucket,
                 bias: biasString == "None" ? nil : biasString,
                 avgLatency: blockResult.averageDecisionTime,
                 profile: nil,
-                playerId: playerStore.selectedPlayerId
+                playerId: playerStore.selectedPlayerId,
+                decisionSpeedScore: decisionSpeedScoreValue
             )
+            previousSessionForComparison = progressStore.last(record.activity, playerId: record.playerId)
+            let previousBest = progressStore.bestDecisionSpeedScore(activity: record.activity, playerId: record.playerId)
             progressStore.add(record)
+            personalBestScore = progressStore.bestDecisionSpeedScore(activity: record.activity, playerId: record.playerId)
+            isNewPersonalBestForDecisionSpeed = (decisionSpeedScoreValue ?? 0) > (previousBest ?? -1)
+            let decisions = results.map { TrainingDecisionRecord.from($0) }
+            SupabaseSessionService.shared.saveSession(record: record, decisions: decisions) {
+                progressStore.markSynced(id: record.id)
+            }
+            let playerId = record.playerId ?? playerStore.selectedPlayerId
+            let activityName = record.activity.rawValue
+            for r in results {
+                let reactionTimeMs = Int(r.decisionTime * 1000)
+                if reactionTimeMs > SupabaseDecisionService.maxReactionTimeMs { continue }
+                let decision = Decision(
+                    sessionId: sessionId,
+                    playerId: playerId,
+                    activityName: activityName,
+                    stimulusType: "teammate",
+                    decisionDirection: r.chosenGate.rawValue,
+                    reactionTimeMs: reactionTimeMs,
+                    correct: r.correct,
+                    createdAt: Date()
+                )
+                SupabaseDecisionService.shared.saveDecision(decision)
+            }
             if let result = sessionResult {
                 isNewPersonalBestForSummary = profileManager.wouldBeNewPersonalBest(session: result)
-                profileManager.addSessionResult(result)
+                newPersonalBestsFromBlock = profileManager.addSessionResult(result)
                 sessionResultForSummary = result
+            }
+            if let score = decisionSpeedScoreValue {
+                Task {
+                    let p = await SupabaseSessionService.shared.decisionSpeedPercentile(activityName: ActivityKind.oneTouchPassing.rawValue, currentScore: score)
+                    await MainActor.run { decisionSpeedPercentile = p }
+                }
             }
             didSave = true
         }
         .navigationDestination(isPresented: $navigateToNewBlock) {
-            OneTouchPassingGetReadyView(config: config, mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+            OneTouchPassingDisplaySessionView(config: config, mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)

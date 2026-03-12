@@ -48,7 +48,8 @@ enum PlayerReportGenerator {
         progressStore: ProgressStore,
         playerId: UUID?,
         last5: [SessionRecord],
-        lastAFPSessionResult: SessionResult? = nil
+        lastAFPSessionResult: SessionResult? = nil,
+        decisionConsistency: DecisionConsistencyLabel? = nil
     ) -> PlayerReportContent {
         let decisionScore = DashboardDecisionScore.score(from: last5)
         let consistencyLabel = DashboardConsistency.label(from: last5)
@@ -61,7 +62,8 @@ enum PlayerReportGenerator {
             playerId: playerId,
             last5: last5,
             hasCompletedInitialTest: hasCompletedTest,
-            lastAFPSessionResult: lastAFPSessionResult
+            lastAFPSessionResult: lastAFPSessionResult,
+            decisionConsistency: decisionConsistency
         )
 
         let strength = strengthFromTraining(

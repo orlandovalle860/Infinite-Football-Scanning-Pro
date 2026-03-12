@@ -119,22 +119,36 @@ final class AwayFromPressureEngine: ObservableObject {
         RunLoop.main.add(markerHideTimer!, forMode: .common)
     }
 
-    func onExitLogged(repIndex: Int, gate: Gate, timestamp: Date) {
-        guard repIndex == currentRepIndex else { return }
+    /// Max reaction time (trigger → confirmation); reps above this are discarded.
+    private static let maxReactionTimeSeconds: TimeInterval = 2.0
+
+    /// Returns reaction time in seconds when rep was saved; nil when discarded.
+    func onExitLogged(repIndex: Int, gate: Gate, timestamp: Date) -> Double? {
+        guard repIndex == currentRepIndex else { return nil }
         var rIdx: Int?
         switch phase {
         case .awaitingExitLog(let ri, _):
             rIdx = ri
         case .markerVisible(let ri, _, _):
             rIdx = ri
-            if ri != repIndex { return }
+            if ri != repIndex { return nil }
             markerHideTimer?.invalidate()
             markerHideTimer = nil
             markerHiddenAtForCurrentRep = Date()
         default:
-            return
+            return nil
         }
-        guard let ri = rIdx, ri == repIndex else { return }
+        guard let ri = rIdx, ri == repIndex else { return nil }
+        guard let triggerTime = passTriggeredAt else { return nil }
+
+        let reactionTimeSeconds = timestamp.timeIntervalSince(triggerTime)
+        if reactionTimeSeconds > Self.maxReactionTimeSeconds {
+            passTriggeredAt = nil
+            pendingFirstTouchByRep[repIndex] = nil
+            if repIndex + 1 >= plan.count { phase = .blockComplete } else { phase = .waitingForNextRep }
+            updateInstructions()
+            return nil
+        }
 
         let p = plan[repIndex]
         let startedAt = startedAtForCurrentRep ?? Date()
@@ -155,6 +169,7 @@ final class AwayFromPressureEngine: ObservableObject {
         )
         repLogs.append(log)
         pendingFirstTouchByRep[repIndex] = nil
+        passTriggeredAt = nil
 
         if repIndex + 1 >= plan.count {
             phase = .blockComplete
@@ -162,6 +177,62 @@ final class AwayFromPressureEngine: ObservableObject {
             phase = .waitingForNextRep
         }
         updateInstructions()
+        return reactionTimeSeconds
+    }
+
+    /// Called when coach taps ✕ (incorrect decision). Stops timer and records rep as incorrect. Returns reaction time in seconds when saved; nil when discarded.
+    func onIncorrectDecision(repIndex: Int, timestamp: Date) -> Double? {
+        guard repIndex == currentRepIndex else { return nil }
+        var rIdx: Int?
+        switch phase {
+        case .awaitingExitLog(let ri, _):
+            rIdx = ri
+        case .markerVisible(let ri, _, _):
+            rIdx = ri
+            if ri != repIndex { return nil }
+            markerHideTimer?.invalidate()
+            markerHideTimer = nil
+            markerHiddenAtForCurrentRep = Date()
+        default:
+            return nil
+        }
+        guard let ri = rIdx, ri == repIndex else { return nil }
+        guard let triggerTime = passTriggeredAt else { return nil }
+
+        let reactionTimeSeconds = timestamp.timeIntervalSince(triggerTime)
+        if reactionTimeSeconds > Self.maxReactionTimeSeconds {
+            passTriggeredAt = nil
+            if repIndex + 1 >= plan.count { phase = .blockComplete } else { phase = .waitingForNextRep }
+            updateInstructions()
+            return nil
+        }
+
+        let p = plan[repIndex]
+        let startedAt = startedAtForCurrentRep ?? Date()
+        let markerShownAt = markerShownAtForCurrentRep ?? startedAt
+        let markerHiddenAt = markerHiddenAtForCurrentRep ?? Date()
+        let log = AwayFromPressureRepLog(
+            repIndex: repIndex,
+            pressureGate: p.pressureGate,
+            exitedGate: nil,
+            startedAt: startedAt,
+            markerShownAt: markerShownAt,
+            markerHiddenAt: markerHiddenAt,
+            passTriggeredAt: passTriggeredAt,
+            exitLoggedAt: timestamp,
+            firstTouchGate: nil,
+            firstTouchLoggedAt: nil
+        )
+        repLogs.append(log)
+        passTriggeredAt = nil
+
+        if repIndex + 1 >= plan.count {
+            phase = .blockComplete
+        } else {
+            phase = .waitingForNextRep
+        }
+        updateInstructions()
+        return reactionTimeSeconds
     }
 
     /// Called when coach logs first touch (before or after exit). If before exit, cached and applied when exit is logged.

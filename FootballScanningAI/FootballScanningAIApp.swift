@@ -10,6 +10,8 @@ import UIKit
 
 @main
 struct FootballScanningAIApp: App {
+    @StateObject private var router = AppRouter()
+
     init() {
         // Prevent screen from dimming and lock screen from appearing while app is running
         UIApplication.shared.isIdleTimerDisabled = true
@@ -40,7 +42,9 @@ struct FootballScanningAIApp: App {
     var body: some Scene {
         WindowGroup {
             SplashScreen()
+                .environmentObject(ConnectionManager.shared)
                 .environmentObject(MultipeerManager())
+                .environmentObject(router)
                 .preferredColorScheme(.dark)
                 .onAppear {
                     // Ensure protection is active when app appears

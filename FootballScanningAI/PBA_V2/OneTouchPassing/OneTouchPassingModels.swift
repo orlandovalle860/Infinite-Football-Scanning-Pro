@@ -39,6 +39,8 @@ struct OneTouchBlockResult {
     let slowCount: Int
     let averageDecisionTime: Double
     let directionCounts: [Gate: Int]
+    /// Standard deviation of decision times across reps. Nil if < 2 reps.
+    let decisionTimeStdDev: Double?
 
     static func from(repResults: [OneTouchRepResult]) -> OneTouchBlockResult {
         let correctCount = repResults.filter(\.correct).count
@@ -56,13 +58,15 @@ struct OneTouchBlockResult {
         for r in repResults {
             dirCounts[r.chosenGate, default: 0] += 1
         }
+        let stdDev = SessionResult.standardDeviation(of: times)
         return OneTouchBlockResult(
             correctCount: correctCount,
             fastCount: fast,
             mediumCount: medium,
             slowCount: slow,
             averageDecisionTime: avg,
-            directionCounts: dirCounts
+            directionCounts: dirCounts,
+            decisionTimeStdDev: stdDev
         )
     }
 }

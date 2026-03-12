@@ -25,9 +25,21 @@ struct DribbleOrPassBlockSummaryView: View {
     @State private var navigateToProgress = false
     @State private var sessionResultForSummary: SessionResult?
     @State private var isNewPersonalBestForSummary = false
+    @State private var newPersonalBestsFromBlock: [NewPersonalBest] = []
+    @State private var decisionSpeedPercentile: Int?
+    @State private var previousSessionForComparison: SessionRecord?
+    @State private var personalBestScore: Int?
+    @State private var isNewPersonalBestForDecisionSpeed = false
 
     private var blockResult: DribbleOrPassBlockResult {
         DribbleOrPassBlockResult.from(repResults: results)
+    }
+
+    /// Decision Speed Score (0–100) from correctness and reaction times; nil when no reps.
+    private var decisionSpeedScoreValue: Int? {
+        let ms = results.map { Int($0.decisionTime * 1000) }
+        let correct = results.map(\.correct)
+        return DecisionSpeedScore.sessionScore(reactionTimesMs: ms, correct: correct)
     }
 
     /// Decision-hierarchy tiers (score 0–60): Elite → Playmaker → Forward Thinker → Positive Player → Safe Player.
@@ -131,7 +143,8 @@ struct DribbleOrPassBlockSummaryView: View {
             decisionTotalScore: blockResult.totalScore,
             forwardChoiceCount: forwardChoices,
             forwardOpportunityCount: 12,
-            preReceiveDecisionCount: preReceiveDecisionCountFromResults
+            preReceiveDecisionCount: preReceiveDecisionCountFromResults,
+            decisionTimeStdDev: blockResult.decisionTimeStdDev
         )
     }
 
@@ -156,6 +169,14 @@ struct DribbleOrPassBlockSummaryView: View {
                     firstTouchAccuracy: firstTouchMatchCountFromResults != nil ? "\(firstTouchMatchCountFromResults!)/12" : nil,
                     decisionSpeedLabel: decisionSpeedComparisonLabel(current: speedBucket, previous: previousBlockSpeedBucket),
                     avgDecisionTimeSeconds: blockResult.averageDecisionTime,
+                    decisionSpeedScore: decisionSpeedScoreValue,
+                    decisionSpeedPercentile: decisionSpeedPercentile,
+                    previousDecisionSpeedScore: previousSessionForComparison?.decisionSpeedScore,
+                    previousAvgReactionTimeSeconds: previousSessionForComparison?.avgLatency,
+                    previousCorrect: previousSessionForComparison?.correct,
+                    previousTotal: previousSessionForComparison?.decisionsCompleted,
+                    personalBest: personalBestScore,
+                    isNewPersonalBest: isNewPersonalBestForDecisionSpeed,
                     coachFeedback: sessionFeedbackCoachSentence,
                     onContinue: { showSessionFeedback = false }
                 )
@@ -164,6 +185,7 @@ struct DribbleOrPassBlockSummaryView: View {
                     session: s,
                     playerName: profileManager.currentProfile?.name ?? "Player",
                     isNewPersonalBest: isNewPersonalBestForSummary,
+                    newPersonalBests: newPersonalBestsFromBlock,
                     profileManager: profileManager,
                     settingsViewModel: settingsViewModel
                 )
@@ -176,32 +198,92 @@ struct DribbleOrPassBlockSummaryView: View {
         }
         .onAppear {
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
+            AnalyticsManager.shared.track(.trainingSessionCompleted, playerId: playerStore.selectedPlayerId)
             guard !didSave else { return }
+            guard let sessionId = CurrentSessionStore.shared.sessionId else {
+                let record = SessionRecord(
+                    id: UUID(),
+                    date: Date(),
+                    activity: .dribbleOrPass,
+                    gridSize: .fiveByFive,
+                    difficulty: config.difficulty,
+                    reps: 12,
+                    decisionsCompleted: results.count,
+                    correct: blockResult.correctCount,
+                    forwardCorrect: nil,
+                    speedBucket: speedBucket,
+                    bias: biasString,
+                    avgLatency: blockResult.averageDecisionTime,
+                    profile: nil,
+                    playerId: playerStore.selectedPlayerId,
+                    decisionSpeedScore: decisionSpeedScoreValue
+                )
+                previousSessionForComparison = progressStore.last(record.activity, playerId: record.playerId)
+                let previousBest = progressStore.bestDecisionSpeedScore(activity: record.activity, playerId: record.playerId)
+                progressStore.add(record)
+                personalBestScore = progressStore.bestDecisionSpeedScore(activity: record.activity, playerId: record.playerId)
+                isNewPersonalBestForDecisionSpeed = (decisionSpeedScoreValue ?? 0) > (previousBest ?? -1)
+                didSave = true
+                return
+            }
             let record = SessionRecord(
-                id: UUID(),
+                id: sessionId,
                 date: Date(),
                 activity: .dribbleOrPass,
                 gridSize: .fiveByFive,
                 difficulty: config.difficulty,
                 reps: 12,
+                decisionsCompleted: results.count,
                 correct: blockResult.correctCount,
                 forwardCorrect: nil,
                 speedBucket: speedBucket,
                 bias: biasString,
                 avgLatency: blockResult.averageDecisionTime,
                 profile: nil,
-                playerId: playerStore.selectedPlayerId
+                playerId: playerStore.selectedPlayerId,
+                decisionSpeedScore: decisionSpeedScoreValue
             )
+            previousSessionForComparison = progressStore.last(record.activity, playerId: record.playerId)
+            let previousBest = progressStore.bestDecisionSpeedScore(activity: record.activity, playerId: record.playerId)
             progressStore.add(record)
+            personalBestScore = progressStore.bestDecisionSpeedScore(activity: record.activity, playerId: record.playerId)
+            isNewPersonalBestForDecisionSpeed = (decisionSpeedScoreValue ?? 0) > (previousBest ?? -1)
+            let decisions = results.map { TrainingDecisionRecord.from($0) }
+            SupabaseSessionService.shared.saveSession(record: record, decisions: decisions) {
+                progressStore.markSynced(id: record.id)
+            }
+            let playerId = record.playerId ?? playerStore.selectedPlayerId
+            let activityName = record.activity.rawValue
+            for r in results {
+                let reactionTimeMs = Int(r.decisionTime * 1000)
+                if reactionTimeMs > SupabaseDecisionService.maxReactionTimeMs { continue }
+                let decision = Decision(
+                    sessionId: sessionId,
+                    playerId: playerId,
+                    activityName: activityName,
+                    stimulusType: "space",
+                    decisionDirection: r.chosenGate.rawValue,
+                    reactionTimeMs: reactionTimeMs,
+                    correct: r.correct,
+                    createdAt: Date()
+                )
+                SupabaseDecisionService.shared.saveDecision(decision)
+            }
             if let result = sessionResult {
                 isNewPersonalBestForSummary = profileManager.wouldBeNewPersonalBest(session: result)
-                profileManager.addSessionResult(result)
+                newPersonalBestsFromBlock = profileManager.addSessionResult(result)
                 sessionResultForSummary = result
+            }
+            if let score = decisionSpeedScoreValue {
+                Task {
+                    let p = await SupabaseSessionService.shared.decisionSpeedPercentile(activityName: ActivityKind.dribbleOrPass.rawValue, currentScore: score)
+                    await MainActor.run { decisionSpeedPercentile = p }
+                }
             }
             didSave = true
         }
         .navigationDestination(isPresented: $navigateToNewBlock) {
-            DribbleOrPassGetReadyView(config: config, mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+            DribbleOrPassDisplaySessionView(config: config, mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)

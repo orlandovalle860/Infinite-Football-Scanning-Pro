@@ -29,6 +29,7 @@ struct PlayerProgressView: View {
     @State private var navigateToTrain = false
     @State private var navigateToPlayerReport = false
     @State private var navigateToReportCard = false
+    @State private var navigateToDevelopmentSnapshot = false
     @State private var metricInfoToShow: (title: String, message: String)?
 
     private var activeProfile: UserProfile? { profileManager.currentProfile }
@@ -46,8 +47,12 @@ struct PlayerProgressView: View {
     private var lastAFPSessionResult: SessionResult? {
         profileManager.recentTrainSessions(limit: 20).first { $0.activityType == .awayFromPressure }
     }
+    private var decisionConsistencyForRecommendation: DecisionConsistencyLabel? {
+        DecisionConsistencyLabel.from(session: profileManager.recentTrainSessions(limit: 1).first)
+    }
+
     private var trainingRecommendation: TrainingRecommendationResult {
-        TrainingRecommendation.recommend(progressStore: progressStore, playerId: playerId, last5: last5, hasCompletedInitialTest: hasCompletedInitialTest, lastAFPSessionResult: lastAFPSessionResult)
+        TrainingRecommendation.recommend(progressStore: progressStore, playerId: playerId, last5: last5, hasCompletedInitialTest: hasCompletedInitialTest, lastAFPSessionResult: lastAFPSessionResult, decisionConsistency: decisionConsistencyForRecommendation)
     }
 
     /// Sessions sorted by date (oldest first) for improvement charts.
@@ -246,7 +251,8 @@ struct PlayerProgressView: View {
                 progressStore: progressStore,
                 playerId: playerId,
                 last5: last5,
-                lastAFPSessionResult: lastAFPSessionResult
+                lastAFPSessionResult: lastAFPSessionResult,
+                decisionConsistency: decisionConsistencyForRecommendation
             ))
         }
         .navigationDestination(isPresented: $navigateToReportCard) {
@@ -255,6 +261,13 @@ struct PlayerProgressView: View {
                 last5: last5,
                 trainingRecommendation: trainingRecommendation
             ))
+        }
+        .navigationDestination(isPresented: $navigateToDevelopmentSnapshot) {
+            PlayerDevelopmentSnapshotView(profileManager: profileManager, settingsViewModel: settingsViewModel)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
         }
     }
 
@@ -541,6 +554,15 @@ struct PlayerProgressView: View {
                 navigateToReportCard = true
             } label: {
                 Text("Report Card")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.9))
+            }
+            .buttonStyle(PlainButtonStyle())
+
+            Button {
+                navigateToDevelopmentSnapshot = true
+            } label: {
+                Text("Development Snapshot")
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.9))
             }

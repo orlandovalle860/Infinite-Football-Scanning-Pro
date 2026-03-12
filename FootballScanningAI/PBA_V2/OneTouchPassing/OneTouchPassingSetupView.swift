@@ -16,6 +16,8 @@ struct OneTouchPassingSetupView: View {
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
     @EnvironmentObject private var router: AppRouter
     @State private var difficulty: TestDifficulty = .beginner
+    @State private var showInstructions = false
+    @State private var navigateToSession = false
 
     private var config: OneTouchPassingConfig {
         OneTouchPassingConfig.defaultConfig(for: difficulty)
@@ -42,12 +44,13 @@ struct OneTouchPassingSetupView: View {
                 .pickerStyle(.segmented)
                 .padding(.horizontal, 24)
 
-                NavigationLink(destination: OneTouchPassingGetReadyView(config: config, mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
-                    .environmentObject(progressStore)
-                    .environmentObject(playerStore)
-                    .environmentObject(popToRootTrigger)
-                    .environmentObject(router)
-                ) {
+                Button {
+                    if ActivityInstructionContent.shouldShowInstructions(for: .oneTouchPassing) {
+                        showInstructions = true
+                    } else {
+                        navigateToSession = true
+                    }
+                } label: {
                     Text("Begin")
                         .font(.system(size: 22, weight: .bold, design: .rounded))
                         .foregroundColor(.black)
@@ -92,6 +95,19 @@ struct OneTouchPassingSetupView: View {
         }
         .onAppear {
             print("[SetupScreen OTP] onAppear, router path count = \(router.pathCount)")
+        }
+        .navigationDestination(isPresented: $showInstructions) {
+            ActivityInstructionView(activity: .oneTouchPassing) {
+                showInstructions = false
+                navigateToSession = true
+            }
+        }
+        .navigationDestination(isPresented: $navigateToSession) {
+            OneTouchPassingDisplaySessionView(config: config, mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
         }
     }
 }

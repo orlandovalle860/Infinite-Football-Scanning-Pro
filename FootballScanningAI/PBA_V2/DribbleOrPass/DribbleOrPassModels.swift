@@ -94,6 +94,8 @@ struct DribbleOrPassBlockResult {
     let averageDecisionTime: Double
     /// Sum of repScore (decision + timing) across all reps. Max 60.
     let totalScore: Double
+    /// Standard deviation of decision times across reps. Nil if fewer than 2 reps.
+    let decisionTimeStdDev: Double?
 
     static func from(repResults: [DribbleOrPassRepResult]) -> DribbleOrPassBlockResult {
         let correctCount = repResults.filter(\.correct).count
@@ -108,13 +110,15 @@ struct DribbleOrPassBlockResult {
         let times = repResults.map(\.decisionTime)
         let avg = times.isEmpty ? 0 : times.reduce(0, +) / Double(times.count)
         let totalScore = repResults.map(\.repScore).reduce(0, +)
+        let stdDev = SessionResult.standardDeviation(of: times)
         return DribbleOrPassBlockResult(
             correctCount: correctCount,
             fastCount: fast,
             mediumCount: medium,
             slowCount: slow,
             averageDecisionTime: avg,
-            totalScore: totalScore
+            totalScore: totalScore,
+            decisionTimeStdDev: stdDev
         )
     }
 }

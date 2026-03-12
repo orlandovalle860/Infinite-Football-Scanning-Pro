@@ -37,6 +37,6 @@ enum TwoMinuteRepPlanner {
         while !shuffleValid() && attempts < maxAttempts { attempts += 1 }
         if attempts >= maxAttempts { result = pool.shuffled() }
 
-        return result.enumerated().map { RepPlan(repIndex: $0.offset, starGate: $0.element) }
+        return result.enumerated().map { RepPlan(repIndex: $0.offset, ballGate: $0.element) }
     }
 }

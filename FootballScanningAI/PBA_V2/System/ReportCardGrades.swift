@@ -42,7 +42,24 @@ enum ReportCardGrade: String {
         }
     }
 
+    /// Convert average decision time (seconds) to Decision Speed grade. Thresholds: A < 0.75, B 0.75–0.95, C 0.95–1.15, D 1.15–1.35, F > 1.35.
+    static func from(averageDecisionTimeSeconds: Double) -> ReportCardGrade {
+        switch averageDecisionTimeSeconds {
+        case ..<0.75: return .a
+        case 0.75..<0.95: return .b
+        case 0.95..<1.15: return .c
+        case 1.15..<1.35: return .d
+        default: return .f
+        }
+    }
+
     var display: String { rawValue }
+}
+
+/// Decision Speed report-card grading: rolling average decision time (3–5 sessions). Minimum 3 sessions required for a letter grade.
+private enum DecisionSpeedGrading {
+    static let maxSessionsForAverage: Int = 5
+    static let minSessionsForGrade: Int = 3
 }
 
 /// Data for the Player Report Card screen: four category grades, overall, and coaching insight.
@@ -76,9 +93,10 @@ enum ReportCardGenerator {
             firstTouchCommitment: ftc,
             pressureEscape: pressure
         )
+        let decisionSpeedDisplay = decisionSpeedDisplayString(sessions: chartSessions, grade: speed)
         return ReportCardData(
             decisionBeforeContact: dbc?.display ?? "—",
-            decisionSpeed: speed?.display ?? "—",
+            decisionSpeed: decisionSpeedDisplay,
             firstTouchCommitment: ftc?.display ?? "—",
             pressureEscape: pressure?.display ?? "—",
             overallGrade: overall?.display ?? "—",
@@ -97,18 +115,23 @@ enum ReportCardGenerator {
         return ReportCardGrade.from(percentage: pct)
     }
 
-    /// Decision Speed: % of reps classified as Fast.
+    /// Decision Speed: grade from rolling average decision time (most recent 3–5 sessions). Requires at least 3 sessions with avgDecisionTime; otherwise nil (caller shows "Not enough data for grade" or "—").
     private static func gradeDecisionSpeed(sessions: [SessionResult]) -> ReportCardGrade? {
-        guard !sessions.isEmpty else { return nil }
-        var totalReps = 0
-        var fast = 0
-        for s in sessions {
-            totalReps += s.totalReps
-            fast += s.speedCounts.fast
-        }
-        guard totalReps > 0 else { return nil }
-        let pct = Double(fast) / Double(totalReps) * 100.0
-        return ReportCardGrade.from(percentage: pct)
+        let withTime = sessions  // assume newest first
+            .filter { $0.avgDecisionTime != nil }
+            .prefix(DecisionSpeedGrading.maxSessionsForAverage)
+        guard withTime.count >= DecisionSpeedGrading.minSessionsForGrade else { return nil }
+        let sum = withTime.reduce(0.0) { $0 + ($1.avgDecisionTime ?? 0) }
+        let avgSeconds = sum / Double(withTime.count)
+        return ReportCardGrade.from(averageDecisionTimeSeconds: avgSeconds)
+    }
+
+    /// Decision Speed display: letter grade when 3+ sessions; "Not enough data for grade" when 1–2; "—" when none.
+    private static func decisionSpeedDisplayString(sessions: [SessionResult], grade: ReportCardGrade?) -> String {
+        let withTimeCount = sessions.filter { $0.avgDecisionTime != nil }.count
+        if let g = grade { return g.display }
+        if withTimeCount >= 1 { return "Not enough data for grade" }
+        return "—"
     }
 
     /// First Touch Commitment: % where first touch matched correct direction.

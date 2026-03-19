@@ -204,7 +204,7 @@ struct SessionSummaryView: View {
         .padding(.vertical, 8)
     }
 
-    /// 2. Performance stats in clean sections: Average Reaction Time, Correct Decisions, First Touch Accuracy.
+    /// 2. Performance stats in clean sections: Average Reaction Time, Correct Decisions.
     private var performanceStatSections: some View {
         let prev = progressStore.previous(session.activityType, playerId: session.playerID)
         return VStack(spacing: 16) {
@@ -218,14 +218,6 @@ struct SessionSummaryView: View {
                 value: "\(session.correctCount) / \(session.totalReps)",
                 improvement: correctDecisionsImprovement(previous: prev)
             )
-            if session.firstTouchMatchCount != nil || session.firstTouchCounts != nil {
-                let pct = session.totalReps > 0 ? Int(round(Double(session.firstTouchMatchCount ?? 0) / Double(session.totalReps) * 100)) : 0
-                statSection(
-                    label: "First Touch Accuracy",
-                    value: "\(pct)%",
-                    improvement: nil
-                )
-            }
         }
     }
 
@@ -378,27 +370,6 @@ struct SessionSummaryView: View {
         }
     }
 
-    private var firstTouchCard: some View {
-        Group {
-            if session.firstTouchCounts != nil || session.firstTouchMatchCount != nil || session.lateAdjustments != nil {
-                card {
-                    VStack(alignment: .leading, spacing: 8) {
-                        if session.firstTouchMatchCount != nil || session.firstTouchCounts != nil {
-                            Text("First Touch Accuracy: \(session.firstTouchMatchCount ?? 0) / \(session.totalReps)")
-                                .font(.subheadline)
-                                .foregroundColor(.white)
-                        }
-                        if let late = session.lateAdjustments {
-                            Text("Late Adjustments: \(late)")
-                                .font(.subheadline)
-                                .foregroundColor(.white.opacity(0.9))
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     /// Coach Feedback: highlighted card so it stands apart from stats.
     private var coachInsightCard: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -478,9 +449,6 @@ struct SessionSummaryView: View {
         ]
         if let avg = session.avgDecisionTime {
             lines.insert("Avg decision time: \(String(format: "%.2f", avg))s", at: 4)
-        }
-        if session.firstTouchMatchCount != nil || session.firstTouchCounts != nil {
-            lines.insert("First Touch Accuracy: \(session.firstTouchMatchCount ?? 0)/\(session.totalReps)", at: lines.count - 1)
         }
         return lines.joined(separator: "\n")
     }

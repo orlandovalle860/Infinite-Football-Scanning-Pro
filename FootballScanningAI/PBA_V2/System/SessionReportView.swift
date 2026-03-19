@@ -85,9 +85,6 @@ struct SessionReportView: View {
                     .font(.headline)
                     .foregroundColor(.black)
                 reportRow("Decision speed", value: decisionSpeedLabel)
-                if let pct = firstTouchCommitmentPercent {
-                    reportRow("First touch commitment", value: "\(pct)%")
-                }
                 if let pct = preReceiveRatePercent {
                     reportRow("Pre-receive decision rate", value: "\(pct)%")
                 }

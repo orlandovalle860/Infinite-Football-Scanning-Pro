@@ -34,7 +34,7 @@ struct AwayFromPressureBlockSummaryView: View {
 
     private var correctCount: Int { logs.filter(\.correct).count }
 
-    /// Decision Speed Score (0–100) from correctness and reaction times; nil when no reps. Missing time treated as 2s.
+    /// Decision Speed Score (0–100) from correctness and reaction times (timing = trigger → coach direction). Nil when no reps.
     private var decisionSpeedScoreValue: Int? {
         let ms = logs.map { Int(($0.decisionTimeSeconds ?? 2.0) * 1000) }
         let correct = logs.map(\.correct)
@@ -62,7 +62,7 @@ struct AwayFromPressureBlockSummaryView: View {
     }
     private var repsWithFirstTouchLogged: Int { logs.filter { $0.firstTouchGate != nil }.count }
     private var lateCorrectionsCount: Int { logs.filter(\.lateCorrection).count }
-    /// Per-rep decision time: first-touch timing when logged, else exit timing (fallback).
+    /// Average decision time (trigger → coach direction). Nil when no reps have timing.
     private var avgLatency: Double? {
         let times = logs.compactMap(\.decisionTimeSeconds)
         guard !times.isEmpty else { return nil }
@@ -228,7 +228,7 @@ struct AwayFromPressureBlockSummaryView: View {
                     activityName: "Playing Away From Pressure",
                     correct: correctCount,
                     total: 12,
-                    firstTouchAccuracy: repsWithFirstTouchLogged >= 3 ? "\(firstTouchMatchCountFromLogs ?? 0)/12" : nil,
+                    firstTouchAccuracy: nil,
                     decisionSpeedLabel: decisionSpeedComparisonLabel(current: speedBucket, previous: previousBlockSpeedBucket),
                     avgDecisionTimeSeconds: avgLatency,
                     decisionSpeedScore: decisionSpeedScoreValue,
@@ -261,7 +261,16 @@ struct AwayFromPressureBlockSummaryView: View {
         .onAppear {
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
             AnalyticsManager.shared.track(.trainingSessionCompleted, playerId: playerStore.selectedPlayerId)
-            guard !didSave else { return }
+            guard !didSave else {
+                #if DEBUG
+                print("[PBA-Debug] Block summary onAppear: skipped (didSave already true)")
+                #endif
+                return
+            }
+            let playerId = playerStore.selectedPlayerId
+            #if DEBUG
+            print("[PBA-Debug] Block completed (AFP). decisionSpeedScoreValue=\(decisionSpeedScoreValue ?? -1), activity=awayFromPressure, playerId=\(playerId?.uuidString ?? "nil"), correct=\(correctCount), decisionsCompleted=\(logs.count)")
+            #endif
             guard let sessionId = CurrentSessionStore.shared.sessionId else {
                 let record = SessionRecord(
                     id: UUID(),
@@ -277,12 +286,18 @@ struct AwayFromPressureBlockSummaryView: View {
                     bias: biasString,
                     avgLatency: avgLatency,
                     profile: nil,
-                    playerId: playerStore.selectedPlayerId,
+                    playerId: playerId,
                     decisionSpeedScore: decisionSpeedScoreValue
                 )
+                #if DEBUG
+                print("[PBA-Debug] SessionRecord created (no sessionId). activity=\(record.activity.rawValue), decisionSpeedScore=\(record.decisionSpeedScore ?? -1), playerId=\(record.playerId?.uuidString ?? "nil"), correct=\(record.correct)/\(record.decisionsCompleted)")
+                #endif
                 previousSessionForComparison = progressStore.last(record.activity, playerId: record.playerId)
                 let previousBest = progressStore.bestDecisionSpeedScore(activity: record.activity, playerId: record.playerId)
                 progressStore.add(record)
+                #if DEBUG
+                print("[PBA-Debug] progressStore.add(record) called. sessions count after add=\(progressStore.sessions.count)")
+                #endif
                 personalBestScore = progressStore.bestDecisionSpeedScore(activity: record.activity, playerId: record.playerId)
                 isNewPersonalBestForDecisionSpeed = (decisionSpeedScoreValue ?? 0) > (previousBest ?? -1)
                 didSave = true
@@ -302,19 +317,24 @@ struct AwayFromPressureBlockSummaryView: View {
                 bias: biasString,
                 avgLatency: avgLatency,
                 profile: nil,
-                playerId: playerStore.selectedPlayerId,
+                playerId: playerId,
                 decisionSpeedScore: decisionSpeedScoreValue
             )
+            #if DEBUG
+            print("[PBA-Debug] SessionRecord created (with sessionId). activity=\(record.activity.rawValue), decisionSpeedScore=\(record.decisionSpeedScore ?? -1), playerId=\(record.playerId?.uuidString ?? "nil"), correct=\(record.correct)/\(record.decisionsCompleted)")
+            #endif
             previousSessionForComparison = progressStore.last(record.activity, playerId: record.playerId)
             let previousBest = progressStore.bestDecisionSpeedScore(activity: record.activity, playerId: record.playerId)
             progressStore.add(record)
+            #if DEBUG
+            print("[PBA-Debug] progressStore.add(record) called (with sessionId). save success. sessions count after add=\(progressStore.sessions.count)")
+            #endif
             personalBestScore = progressStore.bestDecisionSpeedScore(activity: record.activity, playerId: record.playerId)
             isNewPersonalBestForDecisionSpeed = (decisionSpeedScoreValue ?? 0) > (previousBest ?? -1)
             let decisions = logs.map { TrainingDecisionRecord.from($0) }
             SupabaseSessionService.shared.saveSession(record: record, decisions: decisions) {
                 progressStore.markSynced(id: record.id)
             }
-            let playerId = record.playerId ?? playerStore.selectedPlayerId
             let activityName = record.activity.rawValue
             for log in logs {
                 guard let sec = log.decisionTimeSeconds else { continue }
@@ -322,7 +342,7 @@ struct AwayFromPressureBlockSummaryView: View {
                 if reactionTimeMs > SupabaseDecisionService.maxReactionTimeMs { continue }
                 let decision = Decision(
                     sessionId: sessionId,
-                    playerId: playerId,
+                    playerId: record.playerId ?? playerId,
                     activityName: activityName,
                     stimulusType: "defender",
                     decisionDirection: log.exitedGate?.rawValue ?? "incorrect",

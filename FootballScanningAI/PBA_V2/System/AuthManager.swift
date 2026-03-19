@@ -10,6 +10,7 @@ import Foundation
 import Supabase
 import Combine
 import AuthenticationServices
+import CryptoKit
 
 /// Manages Supabase auth state. Use shared instance; observe for UI updates.
 final class AuthManager: ObservableObject {
@@ -40,6 +41,8 @@ final class AuthManager: ObservableObject {
     @Published private(set) var isRestoring = true
 
     private var authStateTask: Task<Void, Never>?
+    /// Raw nonce for the current Sign in with Apple request. Set in handleAppleRequest, consumed in handleAppleCompletion, then cleared.
+    private var currentAppleSignInNonce: String?
 
     init() {
         // Restore session from keychain on launch.
@@ -116,9 +119,24 @@ final class AuthManager: ObservableObject {
         }
     }
 
-    /// Configure the Sign in with Apple request (e.g. scopes). Call from SignInWithAppleButton onRequest.
+    /// Configure the Sign in with Apple request: generate and set nonce, set scopes. Call from SignInWithAppleButton onRequest or before ASAuthorizationController.performRequests().
     func handleAppleRequest(_ request: ASAuthorizationAppleIDRequest) {
+        let rawNonce = Self.randomNonceString()
+        currentAppleSignInNonce = rawNonce
+        request.nonce = Self.sha256Nonce(rawNonce)
         request.requestedScopes = [.email, .fullName]
+    }
+
+    private static func randomNonceString(length: Int = 32) -> String {
+        precondition(length > 0)
+        let charset: [Character] = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvwxyz")
+        return String((0..<length).map { _ in charset.randomElement()! })
+    }
+
+    private static func sha256Nonce(_ rawNonce: String) -> String {
+        let data = Data(rawNonce.utf8)
+        let hash = SHA256.hash(data: data)
+        return hash.map { String(format: "%02x", $0) }.joined()
     }
 
     /// Handle Sign in with Apple completion. Call from SignInWithAppleButton onCompletion (e.g. from a Task).
@@ -139,7 +157,9 @@ final class AuthManager: ObservableObject {
                 await MainActor.run { lastError = "Sign in with Apple did not return an identity token. Try again." }
                 return
             }
-            await signInWithApple(idToken: idToken)
+            let nonceToUse = currentAppleSignInNonce
+            await MainActor.run { currentAppleSignInNonce = nil }
+            await signInWithApple(idToken: idToken, nonce: nonceToUse)
         }
     }
 

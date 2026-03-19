@@ -2,7 +2,7 @@
 //  CurriculumCard.swift
 //  FootballScanningAI
 //
-//  Reusable "Today's Training Path" card for the Home screen. Shows curriculum progress and Start Training or prompts for 2-Minute Test.
+//  Reusable "Today's Training Path" card for the Home screen. Shows curriculum progress and View Path (secondary) or "Start 2-Minute Test" when path is locked.
 //
 
 import SwiftUI
@@ -10,13 +10,14 @@ import SwiftUI
 /// Total blocks in the Decision Making Curriculum (e.g. 8 per activity × 3 activities).
 let curriculumTotalBlocks = 24
 
-/// Card showing Today's Training Path: progress (Block X of Y), recommended drill, and Start Training or "Take 2-Minute Test" when path is locked.
+/// Card showing Today's Training Path: progress (Block X of Y), recommended drill, and "View Path" (navigate to curriculum) or "Take 2-Minute Test" when path is locked.
 struct CurriculumCard: View {
     let currentBlock: Int
     let totalBlocks: Int
     let recommendedActivity: ActivityKind?
     let hasCompletedInitialTest: Bool
-    let onStartTraining: () -> Void
+    /// Navigate to Perception Training Path / curriculum screen (secondary action).
+    let onViewPath: () -> Void
     let onStartTwoMinuteTest: () -> Void
 
     var body: some View {
@@ -46,13 +47,17 @@ struct CurriculumCard: View {
                     }
                 }
 
-                Button(action: onStartTraining) {
-                    Text("Start Training")
+                Button(action: onViewPath) {
+                    Text("View Path")
                         .font(.subheadline.weight(.semibold))
-                        .foregroundColor(.black)
+                        .foregroundColor(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
-                        .background(Color.yellow)
+                        .background(Color.clear)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(Color.yellow, lineWidth: 1.5)
+                        )
                         .cornerRadius(12)
                 }
                 .buttonStyle(.plain)

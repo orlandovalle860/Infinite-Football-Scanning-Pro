@@ -200,33 +200,39 @@ enum PlayerStatus: String {
 }
 
 enum DashboardDecisionScore {
-    /// From last block or rolling average of last 3 training blocks.
+    /// v2: Accuracy 60 pts max + Decision speed 40 pts max (from avg decision time). Bias not in score; show as insight only.
+    /// From last 3 training blocks; uses actual avgLatency when available, else speed-bucket fallback.
     static func score(from sessions: [SessionRecord]) -> Int {
-        let list = sessions.prefix(3)
+        let list = Array(sessions.prefix(3))
         guard !list.isEmpty else { return 0 }
-        let totalReps = 12
-        let accuracySum = list.map { Double($0.correct) / Double(totalReps) * 50 }.reduce(0, +)
-        let timingSum = list.map { timingPoints($0.speedBucket) }.reduce(0, +)
-        let biasSum = list.map { biasPoints($0.bias) }.reduce(0, +)
+        let accuracySum = list.map { accuracyPoints($0) }.reduce(0, +)
+        let speedSum = list.map { speedPoints($0) }.reduce(0, +)
         let n = Double(list.count)
-        return max(0, min(100, Int((accuracySum + timingSum + biasSum) / n)))
+        return max(0, min(100, Int(round((accuracySum + speedSum) / n))))
     }
 
-    private static func timingPoints(_ speed: SpeedBucket?) -> Double {
-        guard let s = speed else { return 15 }
-        switch s {
-        case .fast: return 30
+    /// Accuracy: 60 points max. correct/decisionsCompleted * 60.
+    private static func accuracyPoints(_ session: SessionRecord) -> Double {
+        let total = max(1, session.decisionsCompleted)
+        return Double(session.correct) / Double(total) * 60.0
+    }
+
+    /// Decision speed: 40 points max. Uses avgLatency (seconds): 0.75s = 40, 1.35s = 0, linear. When avgLatency nil, fallback to speedBucket for backward compatibility.
+    private static func speedPoints(_ session: SessionRecord) -> Double {
+        if let avg = session.avgLatency {
+            // 40 pts at 0.75s and below, 0 pts at 1.35s and above
+            let raw = (1.35 - avg) / (1.35 - 0.75)
+            return 40.0 * max(0, min(1, raw))
+        }
+        // Fallback when avgLatency not stored (e.g. older records)
+        guard let bucket = session.speedBucket else { return 20 }
+        switch bucket {
+        case .fast: return 40
         case .medium: return 20
-        case .slow: return 10
+        case .slow: return 0
         }
     }
 
-    private static func biasPoints(_ bias: String?) -> Double {
-        guard let b = bias, !b.isEmpty, b != "None", b != "Balanced" else { return 20 }
-        return 10
-    }
-
-    /// Bias >= 70% would be "extreme" (5 pts) — we don't store %, so use presence of bias as 10; no bias 20.
     static func status(score: Int, consistencyLabel: ConsistencyLabel) -> PlayerStatus {
         if score >= PBARecommendationConfig.eliteDecisionScore && consistencyLabel == .steady { return .elite }
         if score >= PBARecommendationConfig.playmakerDecisionScore { return .playmaker }

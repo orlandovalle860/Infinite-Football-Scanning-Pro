@@ -16,6 +16,9 @@ struct FootballScanningAIApp: App {
         // Prevent screen from dimming and lock screen from appearing while app is running
         UIApplication.shared.isIdleTimerDisabled = true
         
+        // Preload PBA training beep for low-latency playback
+        PBABeepSoundManager.shared.preloadCurrent()
+        
         // Additional protection for outdoor use
         setupScreenProtection()
     }

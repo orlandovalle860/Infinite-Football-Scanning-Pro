@@ -42,7 +42,6 @@ struct TwoMinuteCriticalScanSessionView: View {
     @State private var testResultItem: TwoMinuteResultItem?
     @State private var showLeaveAlert = false
     @State private var nextRepIndex = 0
-    @State private var beepPlayer: AVAudioPlayer?
     @State private var audioInterruptionObserver: NSObjectProtocol?
     @StateObject private var sessionManager = TwoMinuteSessionManager()
     @StateObject private var resultsCoverPathHolder = ResultsCoverPathHolder()
@@ -571,13 +570,7 @@ struct TwoMinuteCriticalScanSessionView: View {
     private func playBeep() {
         DispatchQueue.main.async {
             self.activateAudioSession()
-            guard let url = Bundle.main.url(forResource: "short-beep-351721", withExtension: "mp3") else { return }
-            do {
-                let player = try AVAudioPlayer(contentsOf: url)
-                self.beepPlayer = player
-                player.prepareToPlay()
-                player.play()
-            } catch {}
+            PBABeepSoundManager.shared.play(soundEnabled: settingsViewModel.soundEnabled)
         }
     }
 

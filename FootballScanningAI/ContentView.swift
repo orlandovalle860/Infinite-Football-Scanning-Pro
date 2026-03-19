@@ -904,9 +904,12 @@ struct IntroView: View {
     @State private var showStatusUpgrade = false
     @State private var upgradedStatus: PlayerStatus?
     @State private var showPlayersSheet = false
+    @State private var showBeepSelector = false
     @AppStorage(hasSeenPlayerSwitcherTooltipKey) private var hasSeenPlayerSwitcherTooltip = false
     // Programmatic navigation so buttons reliably push (NavigationLink in ScrollView can miss taps).
     @State private var isStartTrainingPressed = false
+    /// Prevents double-tap from scheduling two pushes (avoids freeze / duplicate navigation after completing a session).
+    @State private var isNavigatingToTraining = false
     @State private var warmupDisplayMode: DisplayMode = .colors
     @State private var snapshotMetricInfoToShow: (title: String, message: String)?
     /// Latest session_summary for Daily Goal card (Last Score / Target). Fetched when player changes.
@@ -933,17 +936,45 @@ struct IntroView: View {
         if pinnedActivity == .twoMinuteTest { return "Start 2-Minute Test" }
         return RecommendationEngine.activityTitle(pinnedActivity)
     }
-    /// Most recent Decision Speed Score for the recommended activity (for home "Decision Speed Score" line). Nil if test or no session.
+    /// Most recent Decision Speed Score for the current player (v1: any training activity so a just-completed block shows immediately). Nil if test or no scored session.
     private var homeDecisionSpeedScore: Int? {
         guard pinnedActivity != .twoMinuteTest else { return nil }
-        return progressStore.last(pinnedActivity, playerId: playerId)?.decisionSpeedScore
+        return localLatestScoredSession?.decisionSpeedScore
     }
-    /// Change from previous session for recommended activity (for "Change from last session").
+
+    /// Last 7 training session scores from ProgressStore (oldest → newest). Used when dashboardData.trendScores is empty (e.g. no Supabase).
+    private var localTrendScores: [Int] {
+        let training: [ActivityKind] = [.awayFromPressure, .dribbleOrPass, .oneTouchPassing]
+        let list = progressStore.sessions.filter { training.contains($0.activity) && ($0.playerId == playerId || $0.playerId == nil) }
+        let scores = Array(list.prefix(7)).compactMap(\.decisionSpeedScore)
+        return scores.reversed()
+    }
+
+    /// Latest training session with a score (for Home score and local Performance Breakdown when dashboardData is nil). Newest-first so this is the most recent.
+    private var localLatestScoredSession: SessionRecord? {
+        let training: [ActivityKind] = [.awayFromPressure, .dribbleOrPass, .oneTouchPassing]
+        return progressStore.sessions.first { training.contains($0.activity) && ($0.playerId == playerId || $0.playerId == nil) && $0.decisionSpeedScore != nil }
+    }
+    /// Second-most-recent training session with a score (for "change since last session" when showing latest score from any activity).
+    private var localPreviousScoredSession: SessionRecord? {
+        let training: [ActivityKind] = [.awayFromPressure, .dribbleOrPass, .oneTouchPassing]
+        let scored = progressStore.sessions.filter { training.contains($0.activity) && ($0.playerId == playerId || $0.playerId == nil) && $0.decisionSpeedScore != nil }
+        return scored.count >= 2 ? scored[1] : nil
+    }
+    /// Fast decision % from last 7 scored sessions (for Performance Breakdown when Supabase has no value).
+    private var localFastPercent: Double? {
+        let training: [ActivityKind] = [.awayFromPressure, .dribbleOrPass, .oneTouchPassing]
+        let scored = progressStore.sessions.filter { training.contains($0.activity) && ($0.playerId == playerId || $0.playerId == nil) && $0.decisionSpeedScore != nil }
+        let withBucket = Array(scored.prefix(7)).compactMap(\.speedBucket)
+        guard !withBucket.isEmpty else { return nil }
+        let fastCount = withBucket.filter { $0 == .fast }.count
+        return Double(fastCount) / Double(withBucket.count)
+    }
+    /// Change from previous scored session (any activity) so it matches the score we display.
     private var homeDecisionSpeedScoreChange: Int? {
-        guard let last = progressStore.last(pinnedActivity, playerId: playerId),
-              let prev = progressStore.previous(pinnedActivity, playerId: playerId),
-              let s1 = last.decisionSpeedScore, let s2 = prev.decisionSpeedScore else { return nil }
-        return s1 - s2
+        guard let cur = localLatestScoredSession?.decisionSpeedScore,
+              let prev = localPreviousScoredSession?.decisionSpeedScore else { return nil }
+        return cur - prev
     }
     /// Recommended: 3 sessions (full blocks) per week.
     private static let weeklySessionGoal: Int = 3
@@ -984,24 +1015,6 @@ struct IntroView: View {
         let diff = older - newer
         if diff > 0.05 { return "↓ Improving" }
         if diff < -0.05 { return "↑ Needs work" }
-        return "→ Stable"
-    }
-
-    /// First touch accuracy % from most recent session that has firstTouchMatchCount. Nil if none.
-    private var snapshotFirstTouchPercent: Int? {
-        guard let s = recentSessionsForSnapshot.first(where: { $0.firstTouchMatchCount != nil && $0.totalReps > 0 }) else { return nil }
-        return Int(round(Double(s.firstTouchMatchCount!) / Double(s.totalReps) * 100))
-    }
-
-    /// Trend for first touch (higher is better): ↑ Improving, ↓ Needs work, or → Stable.
-    private var snapshotFirstTouchTrend: String {
-        let withData = recentSessionsForSnapshot.filter { $0.firstTouchMatchCount != nil && $0.totalReps > 0 }
-        guard withData.count >= 2 else { return "" }
-        let pct1 = Double(withData[0].firstTouchMatchCount!) / Double(withData[0].totalReps) * 100
-        let pct0 = Double(withData[1].firstTouchMatchCount!) / Double(withData[1].totalReps) * 100
-        let diff = pct1 - pct0
-        if diff > 3 { return "↑ Improving" }
-        if diff < -3 { return "↓ Needs work" }
         return "→ Stable"
     }
 
@@ -1148,8 +1161,8 @@ struct IntroView: View {
                         totalBlocks: curriculumTotalBlocks,
                         recommendedActivity: skillProgressionRecommendation?.recommendedActivity,
                         hasCompletedInitialTest: hasCompletedInitialTest,
-                        onStartTraining: {
-                            router.push(routeForTrainNowActivity(skillProgressionRecommendation?.recommendedActivity ?? .awayFromPressure))
+                        onViewPath: {
+                            router.push(.curriculum)
                         },
                         onStartTwoMinuteTest: {
                             router.push(.twoMinuteRoleSelection)
@@ -1207,6 +1220,11 @@ struct IntroView: View {
                     } label: {
                         Label("Coach Remote", systemImage: "hand.raised")
                     }
+                    Button {
+                        showBeepSelector = true
+                    } label: {
+                        Label("Training beep (A/B test)", systemImage: "speaker.wave.2")
+                    }
                     if Config.isSupabaseConfigured {
                         if authManager.currentSession != nil {
                             Button(role: .destructive) {
@@ -1262,6 +1280,9 @@ struct IntroView: View {
         .sheet(isPresented: $showPlayersSheet) {
             PlayersSheetView(profileManager: profileManager)
         }
+        .sheet(isPresented: $showBeepSelector) {
+            PBABeepSelectorView()
+        }
         .sheet(isPresented: $showHowItWorks) { HowItWorksView() }
         .overlay {
             if showStatusUpgrade, let s = upgradedStatus {
@@ -1276,6 +1297,10 @@ struct IntroView: View {
             checkStatusUpgrade()
             popToRootTrigger.request = false
             profileManager.ensureWeeklyRolloverIfNeeded()
+            #if DEBUG
+            let lastRecord = progressStore.last(pinnedActivity, playerId: playerId)
+            print("[PBA-Debug] Home onAppear: pinnedActivity=\(pinnedActivity.rawValue), playerId=\(playerId?.uuidString ?? "nil"), lastRecord?.activity=\(lastRecord?.activity.rawValue ?? "nil"), lastRecord?.playerId=\(lastRecord?.playerId?.uuidString ?? "nil"), homeDecisionSpeedScore=\(homeDecisionSpeedScore ?? -1), localLatestScoredSession?.activity=\(localLatestScoredSession?.activity.rawValue ?? "nil"), progressStore.sessions.count=\(progressStore.sessions.count)")
+            #endif
         }
         .onDisappear { showsTopToggle = true }
     }
@@ -1292,18 +1317,22 @@ struct IntroView: View {
                     .foregroundColor(.white.opacity(0.85))
             }
             HStack(alignment: .firstTextBaseline, spacing: 24) {
-                Text("Last Score: \(dashboardData?.latestScore.map { "\($0)" } ?? "—")")
+                Text("Last Score: \(homeDecisionSpeedScore.map { "\($0)" } ?? "—")")
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.95))
-                Text("Target: \((dashboardData?.latestScore ?? 0) + 1)")
+                Text("Target: \((homeDecisionSpeedScore ?? 0) + 1)")
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(.yellow)
             }
             Button {
+                guard !isNavigatingToTraining else { return }
+                isNavigatingToTraining = true
                 isStartTrainingPressed = true
+                let route = routeForTrainNowActivity(pinnedActivity)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
                     isStartTrainingPressed = false
-                    router.push(routeForTrainNowActivity(pinnedActivity))
+                    router.push(route)
+                    isNavigatingToTraining = false
                 }
             } label: {
                 Text("Start Training")
@@ -1318,23 +1347,24 @@ struct IntroView: View {
             .buttonStyle(PlainButtonStyle())
             .scaleEffect(isStartTrainingPressed ? 0.98 : 1.0)
             .animation(.spring(response: 0.25, dampingFraction: 0.6), value: isStartTrainingPressed)
+            .disabled(isNavigatingToTraining)
             .accessibilityLabel("Start Training")
             .accessibilityHint("Double tap to start recommended training.")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// 2. Decision Speed Score: latest score and improvement since previous session.
+    /// 2. Decision Speed Score: latest score and improvement since previous session. Uses same source as Player progress (ProgressStore) so both cards stay in sync.
     private var decisionSpeedScoreSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Decision Speed Score")
                 .font(.subheadline.weight(.medium))
                 .foregroundColor(.white.opacity(0.9))
-            if let score = dashboardData?.latestScore {
+            if let score = homeDecisionSpeedScore {
                 Text("\(score)")
                     .font(.title.weight(.bold))
                     .foregroundColor(.white)
-                improvementText
+                homeImprovementText
             } else {
                 Text("—")
                     .font(.title.weight(.bold))
@@ -1347,12 +1377,13 @@ struct IntroView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var improvementText: some View {
+    /// Improvement text from ProgressStore (same source as homeDecisionSpeedScore) so top and Player progress section never disagree.
+    private var homeImprovementText: some View {
         Group {
-            if let improvement = dashboardData?.improvement {
-                Text(improvement == 0 ? "Same as last session" : (improvement > 0 ? "+\(improvement)" : "\(improvement)") + " since last session")
+            if let change = homeDecisionSpeedScoreChange {
+                Text(change == 0 ? "Same as last session" : (change > 0 ? "+\(change)" : "\(change)") + " since last session")
                     .font(.subheadline)
-                    .foregroundColor(improvement >= 0 ? .green : .white.opacity(0.9))
+                    .foregroundColor(change >= 0 ? .green : .white.opacity(0.9))
             } else {
                 Text("First session — no comparison yet.")
                     .font(.subheadline)
@@ -1361,13 +1392,14 @@ struct IntroView: View {
         }
     }
 
-    /// 3. Progress Trend: last 7 decision_speed_score values (oldest → newest).
+    /// 3. Progress Trend: last 7 decision_speed_score values (oldest → newest). Uses Supabase when available and non-empty, else local ProgressStore so recent blocks show immediately.
     private var progressTrendSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let trend = (dashboardData?.trendScores).flatMap { $0.isEmpty ? nil : $0 } ?? localTrendScores
+        return VStack(alignment: .leading, spacing: 10) {
             Text("Progress Trend")
                 .font(.subheadline.weight(.medium))
                 .foregroundColor(.white.opacity(0.9))
-            if let trend = dashboardData?.trendScores, !trend.isEmpty {
+            if !trend.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
                         ForEach(Array(trend.reversed().enumerated()), id: \.offset) { index, value in
@@ -1392,14 +1424,17 @@ struct IntroView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// 4. Performance Breakdown: Accuracy %, Average Reaction Time, Fast Decision %.
+    /// 4. Performance Breakdown: Accuracy %, Average Reaction Time, Fast Decision %. Uses Supabase when available and non-empty, else local ProgressStore so recent blocks show immediately.
     private var performanceBreakdownSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let acc = dashboardData?.accuracy ?? localLatestScoredSession.flatMap { s in s.decisionsCompleted > 0 ? Double(s.correct) / Double(s.decisionsCompleted) : nil }
+        let avgReactionMs = dashboardData?.avgReactionMs ?? localLatestScoredSession.flatMap { $0.avgLatency }.map { $0 * 1000 }
+        let fastPercent = dashboardData?.fastPercent ?? localFastPercent
+        return VStack(alignment: .leading, spacing: 10) {
             Text("Performance Breakdown")
                 .font(.subheadline.weight(.medium))
                 .foregroundColor(.white.opacity(0.9))
             HStack(alignment: .top, spacing: 20) {
-                if let acc = dashboardData?.accuracy {
+                if let acc = acc {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Accuracy")
                             .font(.caption)
@@ -1409,7 +1444,7 @@ struct IntroView: View {
                             .foregroundColor(.white)
                     }
                 }
-                if let ms = dashboardData?.avgReactionMs {
+                if let ms = avgReactionMs {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Avg Reaction")
                             .font(.caption)
@@ -1419,7 +1454,7 @@ struct IntroView: View {
                             .foregroundColor(.white)
                     }
                 }
-                if let fast = dashboardData?.fastPercent {
+                if let fast = fastPercent {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Fast Decision %")
                             .font(.caption)
@@ -1430,7 +1465,7 @@ struct IntroView: View {
                     }
                 }
             }
-            if dashboardData?.accuracy == nil && dashboardData?.avgReactionMs == nil && dashboardData?.fastPercent == nil {
+            if acc == nil && avgReactionMs == nil && fastPercent == nil {
                 Text("Complete a session to see performance stats.")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.7))
@@ -1463,7 +1498,6 @@ struct IntroView: View {
                 .foregroundColor(.white)
             if last5.count >= 2 {
                 snapshotMetricRow(label: "Decision Speed", value: snapshotDecisionSpeedSeconds.map { String(format: "%.2fs", $0) } ?? "—", trend: snapshotDecisionSpeedTrend, leadingIcon: "bolt.fill")
-                snapshotMetricRow(label: "First Touch Accuracy", value: snapshotFirstTouchPercent.map { "\($0)%" } ?? "—", trend: snapshotFirstTouchTrend)
                 snapshotMetricRow(label: "Correct Decisions", value: "\(decisionScore)%", trend: snapshotCorrectTrend)
             } else if hasAnyBlock {
                 Text("Run your first block to get your score.")
@@ -1621,10 +1655,14 @@ struct IntroView: View {
                 .font(.headline.weight(.semibold))
                 .foregroundColor(.white)
             Button {
+                guard !isNavigatingToTraining else { return }
+                isNavigatingToTraining = true
                 isStartTrainingPressed = true
+                let route = routeForTrainNowActivity(pinnedActivity)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
                     isStartTrainingPressed = false
-                    router.push(routeForTrainNowActivity(pinnedActivity))
+                    router.push(route)
+                    isNavigatingToTraining = false
                 }
             } label: {
                 HStack(spacing: 12) {
@@ -1644,54 +1682,35 @@ struct IntroView: View {
             .buttonStyle(PlainButtonStyle())
             .scaleEffect(isStartTrainingPressed ? 0.98 : 1.0)
             .animation(.spring(response: 0.25, dampingFraction: 0.6), value: isStartTrainingPressed)
+            .disabled(isNavigatingToTraining)
             .accessibilityLabel(recommendedActivityButtonTitle)
             .accessibilityHint("Double tap to start recommended training.")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// Below recommended: Player progress, Decision Speed Score, Change from last session.
+    /// Navigation card to progress/trends. Does not repeat Decision Speed Score (shown in top card).
     private var homeProgressAndScoreSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Player Progress")
+                .font(.headline.weight(.semibold))
+                .foregroundColor(.white)
+            Text("See your trends and improvements.")
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.8))
             Button {
                 router.push(.progress)
             } label: {
-                HStack {
-                    Text("Player progress")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundColor(.white.opacity(0.95))
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundColor(.white.opacity(0.6))
-                }
-                .contentShape(Rectangle())
+                Text("View Progress")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.black)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Color.yellow)
+                    .cornerRadius(12)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(PlainButtonStyle())
-
-            if let score = homeDecisionSpeedScore {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text("Decision Speed Score")
-                        .font(.subheadline)
-                        .foregroundColor(.white.opacity(0.85))
-                    Spacer()
-                    Text("\(score)")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(.white)
-                }
-            }
-
-            if let change = homeDecisionSpeedScoreChange {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text("Change from last session")
-                        .font(.subheadline)
-                        .foregroundColor(.white.opacity(0.85))
-                    Spacer()
-                    Text(change == 0 ? "Same" : (change > 0 ? "+\(change)" : "\(change)"))
-                        .font(.subheadline.weight(.medium))
-                        .foregroundColor(change >= 0 ? .green : .white.opacity(0.9))
-                }
-            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -5068,17 +5087,7 @@ struct DisplayView: View {
     }
     
     private func setupAudio() {
-        guard let soundURL = Bundle.main.url(forResource: "short-beep-351721", withExtension: "mp3") else {
-            print("Could not find sound file")
-            return
-        }
-        
-        do {
-            audioPlayer = try AVAudioPlayer(contentsOf: soundURL)
-            audioPlayer?.prepareToPlay()
-        } catch {
-            print("Could not create audio player: \(error)")
-        }
+        PBABeepSoundManager.shared.preloadCurrent()
     }
     
     private func startTimer() {
@@ -5130,9 +5139,9 @@ struct DisplayView: View {
                 return 
             }
             
-            // Play beep
+            // Play beep (PBA training beep)
             if soundEnabled {
-                audioPlayer?.play()
+                PBABeepSoundManager.shared.play(soundEnabled: true)
             }
             
             // Show number or arrow for specific modes
@@ -5178,7 +5187,7 @@ struct DisplayView: View {
         let randomInterval = Double.random(in: 10...15)
         DispatchQueue.main.asyncAfter(deadline: .now() + randomInterval) {
             if soundEnabled && isActive && displayMode != .fourGoalGame && displayMode != .colors && displayMode != .colorsNumbers && displayMode != .colorsArrows && displayMode != .numbers && displayMode != .lanes {
-                audioPlayer?.play()
+                PBABeepSoundManager.shared.play(soundEnabled: true)
                 scheduleRandomBeep() // Schedule next beep
             }
         }
@@ -5301,16 +5310,7 @@ struct DisplayView: View {
     }
     
     private func playCriticalScanSound() {
-        guard let soundURL = Bundle.main.url(forResource: "critical scan beep", withExtension: "wav") else {
-            print("Could not find critical scan sound file")
-            return
-        }
-        do {
-            criticalScanAudioPlayer = try AVAudioPlayer(contentsOf: soundURL)
-            criticalScanAudioPlayer?.play()
-        } catch {
-            print("Could not create critical scan audio player: \(error)")
-        }
+        PBABeepSoundManager.shared.play(soundEnabled: true)
     }
     
     private func startFourGoalGamePhase() {

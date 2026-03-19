@@ -2,7 +2,8 @@
 //  AwayFromPressureModels.swift
 //  FootballScanningAI
 //
-//  PBA V2 — Block log entry for Playing Away From Pressure (pressure gate, exited gate, correct = opposite).
+//  PBA V2 — Block log for Playing Away From Pressure.
+//  Decision timing = trigger → coach directional input (when coach taps direction or ✕). No separate first-touch logging required.
 //
 
 import Foundation
@@ -10,16 +11,16 @@ import Foundation
 struct AwayFromPressureRepLog: Codable {
     let repIndex: Int
     let pressureGate: Gate
-    /// Direction chosen; nil when coach tapped ✕ (incorrect).
+    /// Direction coach logged (player's decision). Nil when coach tapped ✕ (incorrect).
     let exitedGate: Gate?
     let startedAt: Date
     let markerShownAt: Date
     let markerHiddenAt: Date
     let passTriggeredAt: Date?
     let exitLoggedAt: Date
-    /// Set when coach logs first touch direction (or Skip leaves nil).
+    /// Optional: set when coach logs first touch direction (for correction-rate etc.). Not used for decision timing.
     let firstTouchGate: Gate?
-    /// When coach logs first touch, timestamp used for decision timing (first-touch timing); nil when skipped.
+    /// Optional: when first touch was logged. Not used for decision timing (timing = trigger → coach direction).
     let firstTouchLoggedAt: Date?
 
     init(repIndex: Int, pressureGate: Gate, exitedGate: Gate?, startedAt: Date, markerShownAt: Date, markerHiddenAt: Date, passTriggeredAt: Date?, exitLoggedAt: Date, firstTouchGate: Gate? = nil, firstTouchLoggedAt: Date? = nil) {
@@ -67,18 +68,16 @@ struct AwayFromPressureRepLog: Codable {
         case repIndex, pressureGate, exitedGate, startedAt, markerShownAt, markerHiddenAt, passTriggeredAt, exitLoggedAt, firstTouchGate, firstTouchLoggedAt
     }
 
-    /// Decision time for this rep: first-touch timing when logged, else exit timing (fallback).
+    /// Decision time = coach directional input − trigger. No first-touch logging required (see MEASUREMENT_MODEL.md).
     var decisionTimeSeconds: Double? {
         guard let pt = passTriggeredAt else { return nil }
-        if let ft = firstTouchLoggedAt {
-            return ft.timeIntervalSince(pt)
-        }
         return exitLoggedAt.timeIntervalSince(pt)
     }
 
+    /// Correct if logged direction matched the correct escape (opposite of pressure).
     var correct: Bool { exitedGate == pressureGate.opposite }
 
-    /// Late correction: first touch was wrong but exit was correct.
+    /// Late correction: first touch was wrong but exit was correct. Optional metric; requires first touch logged.
     var lateCorrection: Bool {
         guard let ft = firstTouchGate, let ex = exitedGate else { return false }
         let correctGate = pressureGate.opposite

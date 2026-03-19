@@ -26,7 +26,6 @@ struct DribbleOrPassDisplaySessionView: View {
     @State private var navigateToBlockSummary = false
     @State private var showLeaveAlert = false
     @State private var nextRepIndex = 0
-    @State private var beepPlayer: AVAudioPlayer?
     @State private var audioInterruptionObserver: NSObjectProtocol?
 
     init(config: DribbleOrPassConfig, mode: TrainingMode, settingsViewModel: SettingsViewModel, profileManager: UserProfileManager) {
@@ -358,13 +357,7 @@ struct DribbleOrPassDisplaySessionView: View {
     private func playBeep() {
         DispatchQueue.main.async {
             self.activateAudioSession()
-            guard let url = Bundle.main.url(forResource: "short-beep-351721", withExtension: "mp3") else { return }
-            do {
-                let player = try AVAudioPlayer(contentsOf: url)
-                beepPlayer = player
-                player.prepareToPlay()
-                player.play()
-            } catch {}
+            PBABeepSoundManager.shared.play(soundEnabled: settingsViewModel.soundEnabled)
         }
     }
 }

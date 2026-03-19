@@ -36,7 +36,7 @@ struct AccountPromptView: View {
                 .padding(.horizontal)
 
             VStack(spacing: 12) {
-                SignInWithAppleButtonView(
+                SignInWithAppleButtonOfficial(
                     isLoading: $isAppleSignInLoading,
                     onSuccess: { checkExistingPlayersAndRoute() }
                 )
@@ -179,72 +179,88 @@ private final class SignInWithAppleCoordinator: NSObject, ASAuthorizationControl
     }
 }
 
-/// Holds the coordinator and callback to avoid retain cycles and to ensure delegate is retained.
-private final class SignInWithAppleRunner: ObservableObject {
-    @Published private(set) var isActive = false
-    var coordinator: SignInWithAppleCoordinator?
-    var onSuccess: (() -> Void)?
-    var loadingBinding: Binding<Bool>?
-}
-
-/// Sign in with Apple using ASAuthorizationController with explicit presentation context (works on iPad).
-private struct SignInWithAppleButtonView: View {
+/// Official Sign in with Apple button (ASAuthorizationAppleIDButton) with explicit presentation context for iPad.
+private struct SignInWithAppleButtonOfficial: View {
     @Binding var isLoading: Bool
     var onSuccess: () -> Void
-    @StateObject private var runner = SignInWithAppleRunner()
 
     var body: some View {
-        Button {
-            performAppleSignIn()
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "apple.logo")
-                    .font(.title2.weight(.semibold))
-                Text("Sign in with Apple")
-                    .font(.headline)
-            }
-            .foregroundColor(.black)
+        SignInWithAppleButtonRepresentable(isLoading: $isLoading, onSuccess: onSuccess)
             .frame(height: 50)
             .frame(maxWidth: 320)
-            .background(Color.white)
-            .cornerRadius(8)
-        }
-        .buttonStyle(PlainButtonStyle())
-        .disabled(isLoading)
-        .onAppear { runner.onSuccess = onSuccess }
+            .disabled(isLoading)
+    }
+}
+
+/// UIKit wrapper for ASAuthorizationAppleIDButton. On tap, performs request with coordinator so iPad gets a valid presentation anchor.
+private struct SignInWithAppleButtonRepresentable: UIViewRepresentable {
+    @Binding var isLoading: Bool
+    var onSuccess: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(isLoading: $isLoading, onSuccess: onSuccess)
     }
 
-    private func performAppleSignIn() {
-        guard let window = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene })
-            .flatMap(\.windows)
-            .first(where: { $0.isKeyWindow }) else {
-            AuthManager.shared.lastError = "Could not find window. Try again."
-            return
+    func makeUIView(context: Context) -> UIView {
+        let container = UIView()
+        container.backgroundColor = .clear
+        let button = ASAuthorizationAppleIDButton(type: .signIn, style: .white)
+        button.cornerRadius = 8
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.addTarget(context.coordinator, action: #selector(Coordinator.handleTap(_:)), for: .touchUpInside)
+        container.addSubview(button)
+        NSLayoutConstraint.activate([
+            button.topAnchor.constraint(equalTo: container.topAnchor),
+            button.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            button.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            button.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+        ])
+        context.coordinator.containerView = container
+        return container
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.loadingBinding = $isLoading
+        context.coordinator.onSuccess = onSuccess
+    }
+
+    final class Coordinator: NSObject {
+        weak var containerView: UIView?
+        var loadingBinding: Binding<Bool>?
+        var onSuccess: (() -> Void)?
+        var authCoordinator: SignInWithAppleCoordinator?
+
+        init(isLoading: Binding<Bool>, onSuccess: @escaping () -> Void) {
+            self.loadingBinding = isLoading
+            self.onSuccess = onSuccess
         }
-        isLoading = true
-        runner.loadingBinding = $isLoading
-        runner.onSuccess = onSuccess
-        let provider = ASAuthorizationAppleIDProvider()
-        let request = provider.createRequest()
-        request.requestedScopes = [.email, .fullName]
-        let coord = SignInWithAppleCoordinator(window: window) { [weak runner] result in
-            Task {
-                await AuthManager.shared.handleAppleCompletion(result)
-                await MainActor.run {
-                    runner?.coordinator = nil
-                    runner?.loadingBinding?.wrappedValue = false
-                    if AuthManager.shared.currentSession != nil {
-                        runner?.onSuccess?()
+
+        @objc func handleTap(_ sender: Any) {
+            guard let container = containerView, let window = container.window else {
+                AuthManager.shared.lastError = "Could not find window. Try again."
+                return
+            }
+            loadingBinding?.wrappedValue = true
+            let provider = ASAuthorizationAppleIDProvider()
+            let request = provider.createRequest()
+            AuthManager.shared.handleAppleRequest(request)
+            authCoordinator = SignInWithAppleCoordinator(window: window) { [weak self] result in
+                Task {
+                    await AuthManager.shared.handleAppleCompletion(result)
+                    await MainActor.run {
+                        self?.authCoordinator = nil
+                        self?.loadingBinding?.wrappedValue = false
+                        if AuthManager.shared.currentSession != nil {
+                            self?.onSuccess?()
+                        }
                     }
                 }
             }
+            let controller = ASAuthorizationController(authorizationRequests: [request])
+            controller.delegate = authCoordinator
+            controller.presentationContextProvider = authCoordinator
+            controller.performRequests()
         }
-        runner.coordinator = coord
-        let controller = ASAuthorizationController(authorizationRequests: [request])
-        controller.delegate = coord
-        controller.presentationContextProvider = coord
-        controller.performRequests()
     }
 }
 

@@ -121,6 +121,16 @@ struct OneTouchPassingBlockSummaryView: View {
         }
     }
 
+    /// Forward Intent: only when up was a valid (green) option. forwardOpportunities = reps where up was available; forwardChoices = those reps where player chose up. Nil when no forward opportunities so metric is not displayed.
+    private var forwardOpportunityCount: Int? {
+        let n = results.filter { $0.greenDirections.contains(.up) }.count
+        return n > 0 ? n : nil
+    }
+    private var forwardChoiceCount: Int? {
+        guard forwardOpportunityCount != nil else { return nil }
+        return results.filter { $0.greenDirections.contains(.up) && $0.chosenGate == .up }.count
+    }
+
     private var sessionResult: SessionResult? {
         guard let playerId = profileManager.currentProfile?.id ?? playerStore.selectedPlayerId else { return nil }
         return SessionResult(
@@ -133,6 +143,8 @@ struct OneTouchPassingBlockSummaryView: View {
             biasDirection: biasDirection,
             directionCounts: blockResult.directionCounts,
             difficulty: config.difficulty,
+            forwardChoiceCount: forwardChoiceCount,
+            forwardOpportunityCount: forwardOpportunityCount,
             decisionTimeStdDev: blockResult.decisionTimeStdDev
         )
     }
@@ -189,6 +201,9 @@ struct OneTouchPassingBlockSummaryView: View {
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
             AnalyticsManager.shared.track(.trainingSessionCompleted, playerId: playerStore.selectedPlayerId)
             guard !didSave else { return }
+            #if DEBUG
+            print("[PBA-Debug] Block completed (OTP). results.count=\(results.count), correct=\(blockResult.correctCount), decisionSpeedScoreValue=\(decisionSpeedScoreValue ?? -1), playerId=\(playerStore.selectedPlayerId?.uuidString ?? "nil")")
+            #endif
             guard let sessionId = CurrentSessionStore.shared.sessionId else {
                 let record = SessionRecord(
                     id: UUID(),
@@ -207,9 +222,15 @@ struct OneTouchPassingBlockSummaryView: View {
                     playerId: playerStore.selectedPlayerId,
                     decisionSpeedScore: decisionSpeedScoreValue
                 )
+                #if DEBUG
+                print("[PBA-Debug] SessionRecord created (OTP, no sessionId). decisionSpeedScore=\(record.decisionSpeedScore ?? -1), playerId=\(record.playerId?.uuidString ?? "nil")")
+                #endif
                 previousSessionForComparison = progressStore.last(record.activity, playerId: record.playerId)
                 let previousBest = progressStore.bestDecisionSpeedScore(activity: record.activity, playerId: record.playerId)
                 progressStore.add(record)
+                #if DEBUG
+                print("[PBA-Debug] progressStore.add(record) OTP. sessions count=\(progressStore.sessions.count)")
+                #endif
                 personalBestScore = progressStore.bestDecisionSpeedScore(activity: record.activity, playerId: record.playerId)
                 isNewPersonalBestForDecisionSpeed = (decisionSpeedScoreValue ?? 0) > (previousBest ?? -1)
                 didSave = true
@@ -232,9 +253,15 @@ struct OneTouchPassingBlockSummaryView: View {
                 playerId: playerStore.selectedPlayerId,
                 decisionSpeedScore: decisionSpeedScoreValue
             )
+            #if DEBUG
+            print("[PBA-Debug] SessionRecord created (OTP, with sessionId). decisionSpeedScore=\(record.decisionSpeedScore ?? -1), playerId=\(record.playerId?.uuidString ?? "nil")")
+            #endif
             previousSessionForComparison = progressStore.last(record.activity, playerId: record.playerId)
             let previousBest = progressStore.bestDecisionSpeedScore(activity: record.activity, playerId: record.playerId)
             progressStore.add(record)
+            #if DEBUG
+            print("[PBA-Debug] progressStore.add(record) OTP (with sessionId). sessions count=\(progressStore.sessions.count)")
+            #endif
             personalBestScore = progressStore.bestDecisionSpeedScore(activity: record.activity, playerId: record.playerId)
             isNewPersonalBestForDecisionSpeed = (decisionSpeedScoreValue ?? 0) > (previousBest ?? -1)
             let decisions = results.map { TrainingDecisionRecord.from($0) }

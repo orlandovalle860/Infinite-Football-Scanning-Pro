@@ -16,7 +16,7 @@ struct TrainingDecisionRecord {
     /// Chosen direction for analytics: "up", "down", "left", "right".
     let chosenDirection: String
 
-    /// From Away From Pressure rep log.
+    /// From Away From Pressure rep log. Decision time = trigger → coach directional input.
     static func from(_ log: AwayFromPressureRepLog) -> TrainingDecisionRecord {
         TrainingDecisionRecord(
             repIndex: log.repIndex,
@@ -46,7 +46,7 @@ struct TrainingDecisionRecord {
         )
     }
 
-    /// From 2-Minute Test rep log.
+    /// From 2-Minute Test rep log. Decision time = trigger → coach directional input.
     static func from(_ log: RepLog) -> TrainingDecisionRecord {
         TrainingDecisionRecord(
             repIndex: log.repIndex,

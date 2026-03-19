@@ -8,6 +8,8 @@
 //  decision_score = correct ? speed_weight : 0
 //  session_score = average(decision_score) * 100
 //
+//  Score is 0 when: (1) every rep wrong, or (2) every rep reaction time >= 1200 ms.
+//
 
 import Foundation
 

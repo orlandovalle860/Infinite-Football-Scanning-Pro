@@ -82,6 +82,8 @@ final class AppRouter: ObservableObject {
 
     private func setPathCoalesced(_ newValue: NavigationPath) {
         MainActor.assumeIsolated {
+            // Skip when SwiftUI syncs back the same path (avoids "multiple updates per frame" / freeze).
+            if path.count == newValue.count, pendingPath == nil { return }
             pendingPath = newValue
             scheduleApply(animation: nil)
         }

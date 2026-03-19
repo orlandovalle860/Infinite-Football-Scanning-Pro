@@ -155,8 +155,9 @@ class UserProfileManager: ObservableObject {
             }
         }
 
-        // Forward intent (Dribble or Pass; higher % is better)
-        if result.activityType == .dribbleOrPass, let opp = result.forwardOpportunityCount, opp > 0, let choice = result.forwardChoiceCount {
+        // Forward intent (Dribble or Pass or One-Touch Passing; higher % is better; only when forward option was available)
+        if (result.activityType == .dribbleOrPass || result.activityType == .oneTouchPassing),
+           let opp = result.forwardOpportunityCount, opp > 0, let choice = result.forwardChoiceCount {
             let current = Double(choice) / Double(opp) * 100.0
             let previous = profile.bestForwardIntentPercent
             if previous == nil || current > previous! {

@@ -56,10 +56,16 @@ struct PBACurriculumView: View {
         progressStore.last(activity, playerId: playerStore.selectedPlayerId) != nil
     }
 
-    /// Stage mastery 0–100 from last 3 training blocks (same formula as dashboard decision score).
-    private func masteryPercent(for activity: ActivityKind) -> Int {
-        let list = progressStore.lastN(activity, n: 3, playerId: playerStore.selectedPlayerId)
-        return DashboardDecisionScore.score(from: Array(list))
+    /// Number of completed sessions (blocks) for this activity and player. Used to decide whether to show progress % or prompt.
+    private func sessionCount(for activity: ActivityKind) -> Int {
+        progressStore.sessions(for: activity, playerId: playerStore.selectedPlayerId).count
+    }
+
+    /// Training progress 0–100 based only on completed blocks (not performance). 2 blocks = 67%, 3+ = 100%. Only meaningful when sessionCount >= 2.
+    private func trainingProgressPercent(for activity: ActivityKind) -> Int {
+        let count = sessionCount(for: activity)
+        guard count > 0 else { return 0 }
+        return min(100, Int(Double(min(3, count)) / 3.0 * 100))
     }
 
     var body: some View {
@@ -177,10 +183,12 @@ struct PBACurriculumView: View {
             .foregroundColor(color)
     }
 
-    /// Card: dark rounded rect, stage label, title, subtitle, mastery progress, large yellow Train button. Padding 22, corner radius 18.
+    /// Card: dark rounded rect, stage label, title, subtitle, training progress (or prompt), large yellow Train button. Padding 22, corner radius 18.
     private func activityCard(index: Int, title: String, subtitle: String, route: AppRoute) -> some View {
         let activity = Self.activities[index].activity
-        let mastery = masteryPercent(for: activity)
+        let count = sessionCount(for: activity)
+        let showProgress = count >= 2
+        let progressPercent = trainingProgressPercent(for: activity)
 
         return VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 6) {
@@ -196,27 +204,38 @@ struct PBACurriculumView: View {
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.85))
 
-                Text("Mastery Progress")
+                Text("Training Progress")
                     .font(.caption)
                     .foregroundColor(.gray)
-                    .padding(.top, 4)
-                    .padding(.bottom, 8)
-                HStack(alignment: .center, spacing: 8) {
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(Color.white.opacity(0.15))
-                                .frame(height: 8)
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(Color.yellow)
-                                .frame(width: max(0, geo.size.width * CGFloat(mastery) / 100), height: 8)
+                Text("Based on completed blocks, not performance.")
+                    .font(.caption2)
+                    .foregroundColor(.gray.opacity(0.85))
+                    .padding(.top, 1)
+                    .padding(.bottom, 6)
+
+                if showProgress {
+                    HStack(alignment: .center, spacing: 8) {
+                        GeometryReader { geo in
+                            ZStack(alignment: .leading) {
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(Color.white.opacity(0.15))
+                                    .frame(height: 8)
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(Color.yellow)
+                                    .frame(width: max(0, geo.size.width * CGFloat(progressPercent) / 100), height: 8)
+                            }
                         }
+                        .frame(height: 8)
+                        Text("\(progressPercent)%")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.9))
+                            .lineLimit(1)
                     }
-                    .frame(height: 8)
-                    Text("\(mastery)%")
+                } else {
+                    Text("Complete 2 sessions to track performance")
                         .font(.caption)
-                        .foregroundColor(.white.opacity(0.9))
-                        .lineLimit(1)
+                        .foregroundColor(.white.opacity(0.7))
+                        .padding(.top, 2)
                 }
             }
             NavigationLink(value: route) {

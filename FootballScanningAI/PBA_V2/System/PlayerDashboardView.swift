@@ -72,7 +72,7 @@ struct PlayerDashboardView: View {
         return Int(round(Double(match) / Double(s.totalReps) * 100.0))
     }
 
-    /// Correction Rate: % of reps where first touch direction differed from final exit direction. Lower = stronger commitment.
+    /// Correction Rate: % of reps where first touch differed from final exit (outcome metric). Only valid when both first touch and exit are logged; do not calculate if exit is not logged consistently. v1 prioritizes Decision Speed and Initial Decision Accuracy.
     private var correctionRateCurrent: Int? {
         guard let s = chartSessions.last, let match = s.firstTouchMatchCount, s.totalReps > 0 else { return nil }
         let correctionCount = s.totalReps - match
@@ -149,7 +149,6 @@ struct PlayerDashboardView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 header
-                decisionMapCard
                 playerSnapshotCard
                 progressGraphsSection
                 trainingRecommendationCard
@@ -231,35 +230,6 @@ struct PlayerDashboardView: View {
         }
     }
 
-    private var decisionMapCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Decision Map")
-                .font(.headline)
-                .foregroundColor(.white)
-            if let speed = decisionSpeedSeconds, let commitment = firstTouchCommitmentCurrent {
-                DecisionMapView(
-                    decisionSpeedSeconds: speed,
-                    firstTouchCommitmentPercent: Double(commitment)
-                )
-                .frame(height: 220)
-            } else {
-                Text("Complete sessions with decision speed and first touch data to see your position.")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.7))
-                    .padding(.vertical, 24)
-                    .frame(maxWidth: .infinity)
-            }
-        }
-        .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.05))
-        .cornerRadius(18)
-        .overlay(
-            RoundedRectangle(cornerRadius: 18)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        )
-    }
-
     private var playerSnapshotCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Player Snapshot")
@@ -272,9 +242,7 @@ struct PlayerDashboardView: View {
                     .padding(.vertical, 8)
             } else {
                 decisionSpeedHeadline
-                firstTouchCommitmentHeadline
                 snapshotRow("Scan Efficiency", value: scanEfficiencyCurrent.map { "\($0)" } ?? "—", suffix: nil)
-                snapshotRow("Decision Before Contact", value: decisionBeforeContactCurrent.map { "\($0)%" } ?? "—", suffix: nil)
                 snapshotRow("Forward Intent", value: forwardIntentCurrent.map { "\($0)%" } ?? "—", suffix: nil)
                 correctionRateRow
                 snapshotRowWithInfo("Status", value: developmentStatus.rawValue, valueColor: statusColor(developmentStatus))
@@ -324,32 +292,6 @@ struct PlayerDashboardView: View {
     /// Decision Consistency: within-session stability of decision speed (from latest session with data).
     private var decisionConsistencyCurrent: DecisionConsistencyLabel? {
         DecisionConsistencyLabel.from(session: chartSessions.last(where: { $0.avgDecisionTime != nil || $0.decisionTimeStdDev != nil }))
-    }
-
-    private var firstTouchCommitmentHeadline: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("First Touch Commitment")
-                .font(.subheadline.weight(.medium))
-                .foregroundColor(.white.opacity(0.9))
-            if let pct = firstTouchCommitmentCurrent {
-                Text("\(pct)%")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.white)
-                if let band = FirstTouchCommitmentBand.band(forPercent: Double(pct)) {
-                    Text(band.label)
-                        .font(.caption.weight(.medium))
-                        .foregroundColor(band.color)
-                }
-                Text("How often your first touch commits to the correct action.")
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.7))
-            } else {
-                Text("—")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.white)
-            }
-        }
-        .padding(.vertical, 4)
     }
 
     private var correctionRateRow: some View {
@@ -432,8 +374,7 @@ struct PlayerDashboardView: View {
             } else {
                 ProgressLineChartView(title: "Decision Score", points: decisionScorePoints, valueLabel: "%", yAxisRange: (0, 100))
                 ProgressLineChartView(title: "Decision Speed", points: decisionSpeedPoints, valueLabel: "s", yAxisRange: nil, emptyStateMessage: "Complete at least 2 Dribble or Pass sessions to see your trend.")
-                ProgressLineChartView(title: "First Touch Commitment", points: firstTouchCommitmentPoints, valueLabel: "%", yAxisRange: (0, 100), emptyStateMessage: "Complete at least 2 Playing Away From Pressure sessions to see your trend.")
-                ProgressLineChartView(title: "Forward Intent", points: forwardIntentPoints, valueLabel: "%", yAxisRange: (0, 100), emptyStateMessage: "Complete at least 2 Dribble or Pass sessions to see your trend.")
+                ProgressLineChartView(title: "Forward Intent", points: forwardIntentPoints, valueLabel: "%", yAxisRange: (0, 100), emptyStateMessage: "Complete at least 2 Dribble or Pass or One-Touch Passing sessions (with forward opportunities) to see your trend.")
             }
         }
         .padding(18)
@@ -561,105 +502,6 @@ struct PlayerDashboardView: View {
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
         }
-    }
-}
-
-// MARK: - Decision Map (two-axis: Decision Speed × First Touch Commitment)
-
-private struct DecisionMapView: View {
-    let decisionSpeedSeconds: Double
-    let firstTouchCommitmentPercent: Double
-
-    /// Speed axis: 0.3s = fast (right), 1.5s = slow (left). x = 0 left, 1 right.
-    private static let speedMin = 0.3
-    private static let speedMax = 1.5
-
-    private var xNormalized: CGFloat {
-        let clamped = min(Self.speedMax, max(Self.speedMin, decisionSpeedSeconds))
-        return CGFloat((Self.speedMax - clamped) / (Self.speedMax - Self.speedMin))
-    }
-
-    private var yNormalized: CGFloat {
-        CGFloat(min(1, max(0, firstTouchCommitmentPercent / 100.0)))
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 0) {
-                Text("Slow")
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.6))
-                Spacer()
-                Text("Decision Speed")
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.6))
-                Spacer()
-                Text("Fast")
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.6))
-            }
-            GeometryReader { geo in
-                let w = geo.size.width
-                let h = geo.size.height
-                let pad: CGFloat = 28
-                let plotW = w - pad * 2
-                let plotH = h - pad * 2
-                ZStack(alignment: .topLeading) {
-                    // Plot area background
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.white.opacity(0.06))
-                        .frame(width: plotW, height: plotH)
-                        .offset(x: pad, y: pad)
-                    // Vertical midline (fast/slow divide)
-                    Path { p in
-                        p.move(to: CGPoint(x: pad + plotW / 2, y: pad))
-                        p.addLine(to: CGPoint(x: pad + plotW / 2, y: pad + plotH))
-                    }
-                    .stroke(Color.white.opacity(0.15), lineWidth: 1)
-                    // Horizontal midline (commitment high/low divide)
-                    Path { p in
-                        p.move(to: CGPoint(x: pad, y: pad + plotH / 2))
-                        p.addLine(to: CGPoint(x: pad + plotW, y: pad + plotH / 2))
-                    }
-                    .stroke(Color.white.opacity(0.15), lineWidth: 1)
-                    // Quadrant labels
-                    quadrantLabel("Developing", at: CGPoint(x: pad + plotW * 0.25, y: pad + plotH * 0.25))
-                    quadrantLabel("Decisive but Slow", at: CGPoint(x: pad + plotW * 0.25, y: pad + plotH * 0.75))
-                    quadrantLabel("Fast but Uncertain", at: CGPoint(x: pad + plotW * 0.75, y: pad + plotH * 0.25))
-                    quadrantLabel("Elite Receiver", at: CGPoint(x: pad + plotW * 0.75, y: pad + plotH * 0.75))
-                    // Player dot (x: 0 = left, 1 = right; y: 0 = bottom, 1 = top in data, but view y is top-down so 1-y)
-                    let dotX = pad + xNormalized * plotW
-                    let dotY = pad + (1 - yNormalized) * plotH
-                    Circle()
-                        .fill(Color.yellow)
-                        .frame(width: 12, height: 12)
-                        .overlay(Circle().stroke(Color.white, lineWidth: 2))
-                        .position(x: dotX, y: dotY)
-                }
-            }
-            HStack(spacing: 0) {
-                Text("Low")
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.6))
-                Spacer()
-                Text("First Touch Commitment")
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.6))
-                Spacer()
-                Text("High")
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.6))
-            }
-        }
-    }
-
-    private func quadrantLabel(_ text: String, at point: CGPoint) -> some View {
-        Text(text)
-            .font(.system(size: 9, weight: .medium))
-            .foregroundColor(.white.opacity(0.5))
-            .multilineTextAlignment(.center)
-            .frame(width: 52)
-            .position(point)
     }
 }
 

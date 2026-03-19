@@ -29,12 +29,18 @@ final class ProgressStore: ObservableObject {
     }
 
     func add(_ record: SessionRecord) {
+        #if DEBUG
+        print("[PBA-Debug] ProgressStore.add: activity=\(record.activity.rawValue), decisionSpeedScore=\(record.decisionSpeedScore ?? -1), playerId=\(record.playerId?.uuidString ?? "nil"), correct=\(record.correct)/\(record.decisionsCompleted), date=\(record.date)")
+        #endif
         sessions.insert(record, at: 0)
         if record.decisionsCompleted == 12 {
             DailyTargetState.incrementToday(playerId: record.playerId)
         }
         DailyDecisionProgress.addDecisions(record.decisionsCompleted, playerId: record.playerId)
         persist()
+        #if DEBUG
+        print("[PBA-Debug] ProgressStore.add: save success. sessions.count=\(sessions.count)")
+        #endif
     }
 
     /// Sessions that have not yet been uploaded to Supabase (saved locally with synced = false).

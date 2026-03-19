@@ -245,7 +245,8 @@ final class OneTouchPassingEngine: ObservableObject {
             correct: correct,
             chosenGate: gate,
             decisionTime: reactionTimeSeconds,
-            decisionSpeed: speed
+            decisionSpeed: speed,
+            greenDirections: p.greenDirections
         )
         repResults.append(result)
         passTriggeredAt = nil
@@ -280,13 +281,15 @@ final class OneTouchPassingEngine: ObservableObject {
             return nil
         }
 
+        let p = plan[repIndex]
         let speed = classifyDecisionSpeed(reactionTimeSeconds)
         let result = OneTouchRepResult(
             repIndex: repIndex,
             correct: false,
             chosenGate: .down,
             decisionTime: reactionTimeSeconds,
-            decisionSpeed: speed
+            decisionSpeed: speed,
+            greenDirections: p.greenDirections
         )
         repResults.append(result)
         passTriggeredAt = nil

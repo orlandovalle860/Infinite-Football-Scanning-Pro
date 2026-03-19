@@ -23,12 +23,24 @@ struct OneTouchRepPlan {
 }
 
 /// Result of one rep. Uses DecisionSpeed from DribbleOrPass (same thresholds: fast <1.2, medium 1.2–2.0, slow >2.0).
+/// greenDirections: which gates were valid (green) for this rep; used for Forward Intent (only count up when up was available).
 struct OneTouchRepResult {
     let repIndex: Int
     let correct: Bool
     let chosenGate: Gate
     let decisionTime: Double
     let decisionSpeed: DecisionSpeed
+    /// Valid (green) directions for this rep. Used for Forward Intent: up opportunity only when greenDirections.contains(.up).
+    let greenDirections: Set<Gate>
+
+    init(repIndex: Int, correct: Bool, chosenGate: Gate, decisionTime: Double, decisionSpeed: DecisionSpeed, greenDirections: Set<Gate>) {
+        self.repIndex = repIndex
+        self.correct = correct
+        self.chosenGate = chosenGate
+        self.decisionTime = decisionTime
+        self.decisionSpeed = decisionSpeed
+        self.greenDirections = greenDirections
+    }
 }
 
 /// Result of a full 12-rep block.

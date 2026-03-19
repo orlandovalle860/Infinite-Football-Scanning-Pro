@@ -54,6 +54,8 @@ struct TrainingCompleteFeedbackView: View {
     let personalBest: Int?
     /// True when this session's score is a new personal best.
     let isNewPersonalBest: Bool
+    /// When decision speed score is 0, optionally show a short hint (e.g. why score is 0).
+    var decisionSpeedScoreZeroHint: String? = nil
     let coachFeedback: String
     let onContinue: () -> Void
 
@@ -72,6 +74,7 @@ struct TrainingCompleteFeedbackView: View {
         previousTotal: Int? = nil,
         personalBest: Int? = nil,
         isNewPersonalBest: Bool = false,
+        decisionSpeedScoreZeroHint: String? = nil,
         coachFeedback: String,
         onContinue: @escaping () -> Void
     ) {
@@ -89,6 +92,7 @@ struct TrainingCompleteFeedbackView: View {
         self.previousTotal = previousTotal
         self.personalBest = personalBest
         self.isNewPersonalBest = isNewPersonalBest
+        self.decisionSpeedScoreZeroHint = decisionSpeedScoreZeroHint
         self.coachFeedback = coachFeedback
         self.onContinue = onContinue
     }
@@ -108,6 +112,11 @@ struct TrainingCompleteFeedbackView: View {
                     if let score = decisionSpeedScore {
                         VStack(alignment: .leading, spacing: 4) {
                             row("Decision Speed Score", "\(score)")
+                            if score == 0, let hint = decisionSpeedScoreZeroHint {
+                                Text(hint)
+                                    .font(.caption)
+                                    .foregroundColor(.white.opacity(0.8))
+                            }
                             if isNewPersonalBest {
                                 Text("New Personal Best 🎉")
                                     .font(.subheadline.weight(.semibold))
@@ -141,7 +150,6 @@ struct TrainingCompleteFeedbackView: View {
                             accuracyComparisonLine(correctChange: correct - prevCorrect)
                         }
                     }
-                    row("First Touch Accuracy", firstTouchAccuracy ?? "—")
                     VStack(alignment: .leading, spacing: 4) {
                         row("Decision Speed", decisionSpeedLabel)
                         if let avg = avgDecisionTimeSeconds, let band = DecisionSpeedBand.band(forSeconds: avg) {

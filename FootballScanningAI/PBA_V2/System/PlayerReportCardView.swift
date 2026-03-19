@@ -44,11 +44,7 @@ struct PlayerReportCardView: View {
 
     private var gradesCard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            gradeRow("Decision Before Contact", grade: data.decisionBeforeContact)
-            Divider().background(Color.white.opacity(0.2))
             gradeRow("Decision Speed", grade: data.decisionSpeed)
-            Divider().background(Color.white.opacity(0.2))
-            gradeRow("First Touch Commitment", grade: data.firstTouchCommitment)
             Divider().background(Color.white.opacity(0.2))
             gradeRow("Pressure Escape", grade: data.pressureEscape)
         }

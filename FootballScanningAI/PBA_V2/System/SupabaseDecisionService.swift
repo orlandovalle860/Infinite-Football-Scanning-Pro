@@ -147,7 +147,14 @@ final class SupabaseDecisionService {
                     try await SupabaseClientManager.client.from("decisions").upsert(row, onConflict: "id").execute()
                     await MainActor.run { removePendingDecision(id: decision.id) }
                 } catch {
-                    print("[Supabase] Retry failed for decision \(decision.id): \(error)")
+                    let errStr = String(describing: error)
+                    let isForeignKey = errStr.contains("23503") || errStr.lowercased().contains("foreign key")
+                    if isForeignKey {
+                        await MainActor.run { removePendingDecision(id: decision.id) }
+                        print("[Supabase] Removed decision \(decision.id) from retry queue (session no longer exists).")
+                    } else {
+                        print("[Supabase] Retry failed for decision \(decision.id): \(error)")
+                    }
                 }
             }
         }

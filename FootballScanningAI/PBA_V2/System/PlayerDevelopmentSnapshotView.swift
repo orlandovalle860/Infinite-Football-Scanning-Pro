@@ -203,13 +203,13 @@ struct PlayerDevelopmentSnapshotView: View {
         return (String(format: "%.0f%%", cur), improvement, min(1, cur / 100), improved)
     }
 
-    /// Forward intent: DOP forward choice %. Higher is better.
+    /// Forward intent: % of forward opportunities where player chose forward (DOP + OTP). Only when forward option was available; not shown when no opportunities.
     private var forwardIntentMetric: (current: String, improvement: String?, progress: Double, improved: Bool?) {
-        let dopSessions = chartSessions.filter { $0.activityType == .dribbleOrPass }
+        let sessionsWithForwardIntent = chartSessions.filter { ($0.forwardOpportunityCount ?? 0) > 0 }
         let current: Double?
         if let best = profileManager.bestForwardIntentPercent() {
             current = best
-        } else if let last = dopSessions.last(where: { $0.forwardOpportunityCount != nil && ($0.forwardOpportunityCount ?? 0) > 0 }),
+        } else if let last = sessionsWithForwardIntent.last,
                   let opp = last.forwardOpportunityCount, let choice = last.forwardChoiceCount {
             current = Double(choice) / Double(opp) * 100
         } else {
@@ -218,8 +218,7 @@ struct PlayerDevelopmentSnapshotView: View {
         guard let cur = current else {
             return ("—", nil, 0, nil)
         }
-        let baselineDOP = baselineSessions.filter { $0.activityType == .dribbleOrPass }
-        let baselinePcts = baselineDOP.compactMap { s -> Double? in
+        let baselinePcts = baselineSessions.compactMap { s -> Double? in
             guard let opp = s.forwardOpportunityCount, opp > 0, let choice = s.forwardChoiceCount else { return nil }
             return Double(choice) / Double(opp) * 100
         }
@@ -309,13 +308,6 @@ struct PlayerDevelopmentSnapshotView: View {
                     improvementText: pressureEscapeMetric.improvement,
                     progress: pressureEscapeMetric.progress,
                     improved: pressureEscapeMetric.improved
-                )
-                SnapshotMetricRow(
-                    label: "First Touch Commitment",
-                    currentDisplay: firstTouchCommitmentMetric.current,
-                    improvementText: firstTouchCommitmentMetric.improvement,
-                    progress: firstTouchCommitmentMetric.progress,
-                    improved: firstTouchCommitmentMetric.improved
                 )
                 SnapshotMetricRow(
                     label: "Forward Intent",

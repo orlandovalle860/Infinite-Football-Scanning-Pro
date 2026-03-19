@@ -15,16 +15,12 @@ enum MetricExplanations {
             return "Measures how efficiently you convert what you see into the correct action."
         case "Decision Speed":
             return "Measures how quickly you decide after the ball is played to you."
-        case "First Touch Commitment":
-            return "Measures whether your first touch immediately executes your decision."
         case "Forward Intent":
-            return "Measures how often you choose a forward action when available."
+            return "How often you choose the forward option when it is available."
         case "Early Decision Rate":
             return "Measures how often you decide before the ball reaches you."
         case "Pre-Receive Decision Rate":
             return "Measures how often you both decide early and commit with your first touch in the right direction."
-        case "Decision Before Contact":
-            return "Measures how often you decide before touching the ball (quick decision and first touch in the correct direction)."
         case "Status":
             return "Shows whether your overall efficiency is improving, stable, or declining over recent sessions."
         case "Decision Score":
@@ -32,7 +28,7 @@ enum MetricExplanations {
         case "Pressure Escape Rate":
             return "Measures how effectively you handle pressure situations by choosing and executing the right escape."
         case "Correction Rate":
-            return "How often you adjust after your first touch. Lower values indicate stronger commitment to the decision."
+            return "How often your final direction differed from your first touch (final-outcome metric). Lower values indicate stronger commitment. Only shown when both first touch and exit are logged."
         default:
             return nil
         }

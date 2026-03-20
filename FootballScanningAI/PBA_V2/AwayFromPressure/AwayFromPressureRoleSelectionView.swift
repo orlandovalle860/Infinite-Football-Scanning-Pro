@@ -35,7 +35,9 @@ struct AwayFromPressureRoleSelectionView: View {
                 .padding(.horizontal, 28)
 
             VStack(spacing: 16) {
-                NavigationLink(value: AppRoute.awayFromPressureTrainingModeSelection) {
+                Button {
+                    router.push(.awayFromPressureTrainingModeSelection)
+                } label: {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             Image(systemName: "tv")

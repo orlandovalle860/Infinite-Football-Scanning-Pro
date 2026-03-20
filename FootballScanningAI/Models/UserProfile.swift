@@ -7,6 +7,39 @@ struct ActivityBest: Codable {
     var bestTotal: Int
 }
 
+enum PlayerBadge: String, Codable, CaseIterable, Hashable {
+    // Core behavior-driven badges
+    case earlyDecider = "Early Decider"
+    case forwardThinker = "Forward Thinker"
+    case consistent = "Consistent"
+    // Legacy badges kept for backward compatibility with persisted data.
+    case firstSession = "First Session"
+    case fastThinker = "Fast Thinker"
+    case accuratePlayer = "Accurate Player"
+    case forwardPlayer = "Forward Player"
+
+    var title: String { rawValue }
+
+    var unlockDescription: String {
+        switch self {
+        case .earlyDecider:
+            return "You're making decisions before pressure arrives."
+        case .forwardThinker:
+            return "You consistently choose forward options when available."
+        case .consistent:
+            return "You maintained strong performance across sessions."
+        case .firstSession:
+            return "Completed your first training session."
+        case .fastThinker:
+            return "Recorded at least 60% fast decisions in a session."
+        case .accuratePlayer:
+            return "Reached at least 80% decision accuracy in a session."
+        case .forwardPlayer:
+            return "Chose the forward option at least 50% of the time when available."
+        }
+    }
+}
+
 // MARK: - User Profile Model
 struct UserProfile: Codable, Identifiable {
     let id: UUID
@@ -78,6 +111,12 @@ struct UserProfile: Codable, Identifiable {
     var bestPressureEscapePercent: Double?
     /// Highest forward intent % in Dribble or Pass. Higher is better.
     var bestForwardIntentPercent: Double?
+    /// Simple cumulative XP total for this player.
+    var totalXP: Int
+    /// Unlocked badges for this player.
+    var unlockedBadges: [PlayerBadge]
+    /// Premium entitlement flag (StoreKit to be integrated later).
+    var isPremium: Bool
 
     /// Create a profile with a specific id (e.g. to match a Supabase players row after account creation).
     init(id: UUID, name: String, email: String? = nil, age: String? = nil, team: String? = nil, position: String? = nil) {
@@ -134,6 +173,9 @@ struct UserProfile: Codable, Identifiable {
         self.fastestDecisionSpeedSeconds = nil
         self.bestPressureEscapePercent = nil
         self.bestForwardIntentPercent = nil
+        self.totalXP = 0
+        self.unlockedBadges = []
+        self.isPremium = false
     }
 
     init(name: String, email: String? = nil, age: String? = nil, team: String? = nil, position: String? = nil, decisionScore: Int? = nil, status: String? = nil, consistency: String? = nil) {
@@ -200,6 +242,9 @@ struct UserProfile: Codable, Identifiable {
         self.fastestDecisionSpeedSeconds = nil
         self.bestPressureEscapePercent = nil
         self.bestForwardIntentPercent = nil
+        self.totalXP = 0
+        self.unlockedBadges = []
+        self.isPremium = false
     }
 
     enum CodingKeys: String, CodingKey {
@@ -213,6 +258,9 @@ struct UserProfile: Codable, Identifiable {
         case longestSession, averageSessionLength, trainingSessions, sessionResults, personalBests
         case currentWeeklyStreak, longestWeeklyStreak, blocksCompletedThisWeek, lastSessionDate, lastWeekStart
         case fastestDecisionSpeedSeconds, bestPressureEscapePercent, bestForwardIntentPercent
+        case totalXP
+        case unlockedBadges
+        case isPremium
     }
 
     init(from decoder: Decoder) throws {
@@ -261,6 +309,9 @@ struct UserProfile: Codable, Identifiable {
         fastestDecisionSpeedSeconds = try c.decodeIfPresent(Double.self, forKey: .fastestDecisionSpeedSeconds)
         bestPressureEscapePercent = try c.decodeIfPresent(Double.self, forKey: .bestPressureEscapePercent)
         bestForwardIntentPercent = try c.decodeIfPresent(Double.self, forKey: .bestForwardIntentPercent)
+        totalXP = try c.decodeIfPresent(Int.self, forKey: .totalXP) ?? 0
+        unlockedBadges = try c.decodeIfPresent([PlayerBadge].self, forKey: .unlockedBadges) ?? []
+        isPremium = try c.decodeIfPresent(Bool.self, forKey: .isPremium) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -309,6 +360,9 @@ struct UserProfile: Codable, Identifiable {
         try c.encodeIfPresent(fastestDecisionSpeedSeconds, forKey: .fastestDecisionSpeedSeconds)
         try c.encodeIfPresent(bestPressureEscapePercent, forKey: .bestPressureEscapePercent)
         try c.encodeIfPresent(bestForwardIntentPercent, forKey: .bestForwardIntentPercent)
+        try c.encode(totalXP, forKey: .totalXP)
+        try c.encode(unlockedBadges, forKey: .unlockedBadges)
+        try c.encode(isPremium, forKey: .isPremium)
     }
 
     /// Update personal best for an activity when a session beats the previous best.

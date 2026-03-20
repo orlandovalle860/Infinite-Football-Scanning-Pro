@@ -54,4 +54,36 @@ struct DribbleOrPassConfig {
             )
         }
     }
+
+    /// Loop scaling for guided curriculum (v1 supports loops 1...3).
+    /// Loop 1 = default, loop 2/3 = faster tempo + shorter windows.
+    static func defaultConfig(for difficulty: TestDifficulty, loopLevel: Int) -> DribbleOrPassConfig {
+        let base = defaultConfig(for: difficulty)
+        switch max(1, min(3, loopLevel)) {
+        case 1:
+            return base
+        case 2:
+            return DribbleOrPassConfig(
+                difficulty: difficulty,
+                scanWindowSeconds: max(2.5, base.scanWindowSeconds * 0.9),
+                revealStyle: base.revealStyle,
+                revealSpacingSeconds: max(0.08, base.revealSpacingSeconds * 0.9),
+                cueVisibleSeconds: max(0.40, base.cueVisibleSeconds * 0.9)
+            )
+        default:
+            let advancedStyle: DribbleOrPassRevealStyle
+            switch base.revealStyle {
+            case .simultaneous: advancedStyle = .twoStage
+            case .twoStage: advancedStyle = .sequential
+            case .sequential: advancedStyle = .sequential
+            }
+            return DribbleOrPassConfig(
+                difficulty: difficulty,
+                scanWindowSeconds: max(2.2, base.scanWindowSeconds * 0.8),
+                revealStyle: advancedStyle,
+                revealSpacingSeconds: max(0.07, base.revealSpacingSeconds * 0.8),
+                cueVisibleSeconds: max(0.35, base.cueVisibleSeconds * 0.8)
+            )
+        }
+    }
 }

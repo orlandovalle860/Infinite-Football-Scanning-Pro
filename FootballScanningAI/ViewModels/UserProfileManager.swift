@@ -12,7 +12,7 @@ enum NewPersonalBest {
         switch self {
         case .decisionSpeed: return "Decision Speed improved"
         case .pressureEscape: return "Pressure Escape improved"
-        case .forwardIntent: return "Forward Intent improved"
+        case .forwardIntent: return "Forward Thinking improved"
         }
     }
 
@@ -31,6 +31,13 @@ enum NewPersonalBest {
     }
 }
 
+struct SessionRewards {
+    let newPersonalBests: [NewPersonalBest]
+    let xpEarned: Int
+    let totalXP: Int
+    let newlyUnlockedBadges: [PlayerBadge]
+}
+
 class UserProfileManager: ObservableObject {
     @Published var profiles: [UserProfile] = []
     @Published var currentProfile: UserProfile?
@@ -43,6 +50,7 @@ class UserProfileManager: ObservableObject {
     private let profilesKey = "userProfiles"
     private let currentProfileIdKey = "currentProfileId"
     private let isProfileCreatedKey = "isProfileCreated"
+    private let pendingBadgeUnlocksKeyPrefix = "pending_badge_unlocks"
     
     init() {
         loadProfiles()
@@ -116,6 +124,11 @@ class UserProfileManager: ObservableObject {
         isProfileCreated = true
         saveProfiles()
     }
+
+    func profile(id: UUID?) -> UserProfile? {
+        guard let id else { return nil }
+        return profiles.first(where: { $0.id == id })
+    }
     
     func updateProfile(_ profile: UserProfile) {
         if let index = profiles.firstIndex(where: { $0.id == profile.id }) {
@@ -127,12 +140,16 @@ class UserProfileManager: ObservableObject {
         }
     }
     
-    /// Adds the session result and updates personal bests (decision speed, pressure escape, forward intent). Returns any new personal bests achieved.
+    /// Adds the session result, updates personal bests, and applies simple XP rewards.
     @discardableResult
-    func addSessionResult(_ result: SessionResult) -> [NewPersonalBest] {
-        guard let index = profiles.firstIndex(where: { $0.id == result.playerID }) else { return [] }
+    func addSessionResult(_ result: SessionResult) -> SessionRewards {
+        guard let index = profiles.firstIndex(where: { $0.id == result.playerID }) else {
+            return SessionRewards(newPersonalBests: [], xpEarned: 0, totalXP: 0, newlyUnlockedBadges: [])
+        }
         var profile = profiles[index]
         var newBests: [NewPersonalBest] = []
+        let progressBefore = GuidedCurriculumEngine.currentProgress(playerId: result.playerID)
+        let isFirstSessionToday = isFirstSessionOfDay(for: profile, at: result.date)
 
         // Decision speed (any block with avg time; lower is better)
         if let current = result.avgDecisionTime {
@@ -168,14 +185,165 @@ class UserProfileManager: ObservableObject {
         }
 
         profile.sessionResults.insert(result, at: 0)
+        // Keep guided curriculum stage current immediately after each scored session save.
+        let progressAfter = GuidedCurriculumEngine.evaluateAndAdvance(playerId: result.playerID, sessions: profile.sessionResults)
         profile.updatePersonalBest(session: result)
+        let newlyUnlockedBadges = unlockBadges(for: result, profile: &profile)
+        enqueuePendingBadgeUnlocks(playerId: result.playerID, badges: newlyUnlockedBadges)
+        let xpEarned = xpEarnedForSession(
+            result: result,
+            hasNewPersonalBest: !newBests.isEmpty,
+            isStageProgression: didProgressStage(before: progressBefore, after: progressAfter),
+            isFirstSessionToday: isFirstSessionToday
+        )
+        profile.totalXP += xpEarned
         profiles[index] = profile
         updateWeeklyStreakAfterBlock(profileIndex: index, sessionDate: result.date)
         if currentProfile?.id == result.playerID {
             currentProfile = profiles[index]
         }
         saveProfiles()
-        return newBests
+        return SessionRewards(
+            newPersonalBests: newBests,
+            xpEarned: xpEarned,
+            totalXP: profile.totalXP,
+            newlyUnlockedBadges: newlyUnlockedBadges
+        )
+    }
+
+    private func unlockBadges(for result: SessionResult, profile: inout UserProfile) -> [PlayerBadge] {
+        var unlockedNow: [PlayerBadge] = []
+        var unlockedSet = Set(profile.unlockedBadges)
+
+        func unlock(_ badge: PlayerBadge) {
+            if !unlockedSet.contains(badge) {
+                unlockedSet.insert(badge)
+                unlockedNow.append(badge)
+            }
+        }
+
+        // 1) Early Decider: Avg Decision Time < 0.90s in a session.
+        if let avg = result.avgDecisionTime, avg < 0.90 {
+            unlock(.earlyDecider)
+        }
+        // 2) Forward Thinker: Forward Thinking >= 60% when opportunities exist.
+        if let opp = result.forwardOpportunityCount, opp > 0, let choice = result.forwardChoiceCount,
+           Double(choice) / Double(opp) >= 0.60 {
+            unlock(.forwardThinker)
+        }
+        // 3) Consistent: 3 sessions in a row with accuracy >= 80% and decision speed not Too Late.
+        let training = profile.sessionResults.filter {
+            [.awayFromPressure, .dribbleOrPass, .oneTouchPassing].contains($0.activityType)
+        }
+        if training.count >= 3 {
+            let lastThree = Array(training.prefix(3))
+            let allStrong = lastThree.allSatisfy { session in
+                guard session.totalReps > 0 else { return false }
+                let accuracy = Double(session.correctCount) / Double(session.totalReps)
+                let notTooLate = (session.avgDecisionTime ?? .greatestFiniteMagnitude) <= 1.20
+                return accuracy >= 0.80 && notTooLate
+            }
+            if allStrong {
+                unlock(.consistent)
+            }
+        }
+
+        profile.unlockedBadges = Array(unlockedSet)
+        return unlockedNow
+    }
+
+    func dequeuePendingBadgeUnlock(playerId: UUID?) -> PlayerBadge? {
+        var pending = loadPendingBadgeUnlocks(playerId: playerId)
+        guard !pending.isEmpty else { return nil }
+        let next = pending.removeFirst()
+        savePendingBadgeUnlocks(pending, playerId: playerId)
+        return next
+    }
+
+    private func enqueuePendingBadgeUnlocks(playerId: UUID, badges: [PlayerBadge]) {
+        guard !badges.isEmpty else { return }
+        let displayPriority: [PlayerBadge] = [.consistent, .earlyDecider, .forwardThinker]
+        let prioritized = badges.sorted { a, b in
+            let ai = displayPriority.firstIndex(of: a) ?? Int.max
+            let bi = displayPriority.firstIndex(of: b) ?? Int.max
+            return ai < bi
+        }
+        // Avoid overwhelming users: show only one new badge modal per session.
+        let badgesToQueue = Array(prioritized.prefix(1))
+        let existing = loadPendingBadgeUnlocks(playerId: playerId)
+        var merged = existing
+        let existingSet = Set(existing)
+        for badge in badgesToQueue where !existingSet.contains(badge) {
+            merged.append(badge)
+        }
+        savePendingBadgeUnlocks(merged, playerId: playerId)
+    }
+
+    private func pendingBadgeUnlocksKey(playerId: UUID?) -> String {
+        let pid = playerId?.uuidString ?? "global"
+        return "\(pendingBadgeUnlocksKeyPrefix)_\(pid)"
+    }
+
+    private func loadPendingBadgeUnlocks(playerId: UUID?) -> [PlayerBadge] {
+        let key = pendingBadgeUnlocksKey(playerId: playerId)
+        guard let data = userDefaults.data(forKey: key),
+              let badges = try? JSONDecoder().decode([PlayerBadge].self, from: data) else {
+            return []
+        }
+        return badges
+    }
+
+    private func savePendingBadgeUnlocks(_ badges: [PlayerBadge], playerId: UUID?) {
+        let key = pendingBadgeUnlocksKey(playerId: playerId)
+        if badges.isEmpty {
+            userDefaults.removeObject(forKey: key)
+            return
+        }
+        if let data = try? JSONEncoder().encode(badges) {
+            userDefaults.set(data, forKey: key)
+        }
+    }
+
+    private func isFirstSessionOfDay(for profile: UserProfile, at date: Date) -> Bool {
+        let cal = Calendar.current
+        return !profile.sessionResults.contains { cal.isDate($0.date, inSameDayAs: date) }
+    }
+
+    private func didProgressStage(before: GuidedCurriculumProgress, after: GuidedCurriculumProgress) -> Bool {
+        return before.stage != after.stage || before.loop != after.loop
+    }
+
+    private func xpEarnedForSession(
+        result: SessionResult,
+        hasNewPersonalBest: Bool,
+        isStageProgression: Bool,
+        isFirstSessionToday: Bool
+    ) -> Int {
+        var xp = 0
+        // Complete session
+        xp += 50
+        // Accuracy >= 70%
+        if result.totalReps > 0, Double(result.correctCount) / Double(result.totalReps) >= 0.70 {
+            xp += 25
+        }
+        // Fast decisions >= 50%
+        let totalSpeedTagged = result.speedCounts.fast + result.speedCounts.medium + result.speedCounts.slow
+        if totalSpeedTagged > 0, Double(result.speedCounts.fast) / Double(totalSpeedTagged) >= 0.50 {
+            xp += 25
+        }
+        // New personal best
+        if hasNewPersonalBest {
+            xp += 50
+        }
+        // Stage progression
+        if isStageProgression {
+            xp += 100
+        }
+        // First session of day
+        if isFirstSessionToday {
+            xp += 25
+        }
+        return xp
     }
 
     /// Monday-based calendar for weekly boundaries (week resets every Monday).
@@ -276,6 +444,26 @@ class UserProfileManager: ObservableObject {
     func fastestDecisionSpeedSeconds() -> Double? { currentProfile?.fastestDecisionSpeedSeconds }
     func bestPressureEscapePercent() -> Double? { currentProfile?.bestPressureEscapePercent }
     func bestForwardIntentPercent() -> Double? { currentProfile?.bestForwardIntentPercent }
+
+    func isPremiumActive(playerId: UUID?) -> Bool {
+#if DEBUG
+        return true
+#else
+        let pid = playerId ?? currentProfile?.id
+        guard let pid else { return false }
+        return profiles.first(where: { $0.id == pid })?.isPremium ?? false
+#endif
+    }
+
+    func upgradeToPremium(playerId: UUID?) {
+        let pid = playerId ?? currentProfile?.id
+        guard let pid, let index = profiles.firstIndex(where: { $0.id == pid }) else { return }
+        profiles[index].isPremium = true
+        if currentProfile?.id == pid {
+            currentProfile = profiles[index]
+        }
+        saveProfiles()
+    }
 
     // MARK: - Player Progress (report card)
 

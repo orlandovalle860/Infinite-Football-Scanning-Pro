@@ -18,7 +18,7 @@ struct DribbleOrPassGateOverlay: View {
             if content == .open {
                 Color.clear
             } else if content == .opponent {
-                DangerZoneOverlay(gate: gate, laneSpan: laneSpan, insetFraction: insetFraction)
+                DangerZoneOverlay(gate: gate)
             } else {
                 GeometryReader { geo in
                     let w = geo.size.width

@@ -72,13 +72,6 @@ struct PlayerDashboardView: View {
         return Int(round(Double(match) / Double(s.totalReps) * 100.0))
     }
 
-    /// Correction Rate: % of reps where first touch differed from final exit (outcome metric). Only valid when both first touch and exit are logged; do not calculate if exit is not logged consistently. v1 prioritizes Decision Speed and Initial Decision Accuracy.
-    private var correctionRateCurrent: Int? {
-        guard let s = chartSessions.last, let match = s.firstTouchMatchCount, s.totalReps > 0 else { return nil }
-        let correctionCount = s.totalReps - match
-        return Int(round(Double(correctionCount) / Double(s.totalReps) * 100.0))
-    }
-
     private var forwardIntentCurrent: Int? {
         guard let s = chartSessions.last, let opp = s.forwardOpportunityCount, opp > 0, let choice = s.forwardChoiceCount else { return nil }
         return Int(round(Double(choice) / Double(opp) * 100.0))
@@ -243,8 +236,7 @@ struct PlayerDashboardView: View {
             } else {
                 decisionSpeedHeadline
                 snapshotRow("Scan Efficiency", value: scanEfficiencyCurrent.map { "\($0)" } ?? "—", suffix: nil)
-                snapshotRow("Forward Intent", value: forwardIntentCurrent.map { "\($0)%" } ?? "—", suffix: nil)
-                correctionRateRow
+                snapshotRow("Forward Thinking", value: forwardIntentCurrent.map { "\($0)%" } ?? "—", suffix: nil)
                 snapshotRowWithInfo("Status", value: developmentStatus.rawValue, valueColor: statusColor(developmentStatus))
             }
         }
@@ -292,34 +284,6 @@ struct PlayerDashboardView: View {
     /// Decision Consistency: within-session stability of decision speed (from latest session with data).
     private var decisionConsistencyCurrent: DecisionConsistencyLabel? {
         DecisionConsistencyLabel.from(session: chartSessions.last(where: { $0.avgDecisionTime != nil || $0.decisionTimeStdDev != nil }))
-    }
-
-    private var correctionRateRow: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Text("Correction Rate")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.85))
-                if MetricExplanations.message(for: "Correction Rate") != nil {
-                    Button {
-                        metricInfoToShow = (title: "Correction Rate", message: MetricExplanations.message(for: "Correction Rate") ?? "")
-                    } label: {
-                        Image(systemName: "info.circle")
-                            .font(.subheadline)
-                            .foregroundColor(.white.opacity(0.6))
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                }
-                Spacer()
-                Text(correctionRateCurrent.map { "\($0)%" } ?? "—")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundColor(.white)
-            }
-            Text("How often you adjust after your first touch.")
-                .font(.caption2)
-                .foregroundColor(.white.opacity(0.7))
-        }
-        .padding(.vertical, 4)
     }
 
     private func snapshotRow(_ label: String, value: String, suffix: String?) -> some View {
@@ -374,7 +338,7 @@ struct PlayerDashboardView: View {
             } else {
                 ProgressLineChartView(title: "Decision Score", points: decisionScorePoints, valueLabel: "%", yAxisRange: (0, 100))
                 ProgressLineChartView(title: "Decision Speed", points: decisionSpeedPoints, valueLabel: "s", yAxisRange: nil, emptyStateMessage: "Complete at least 2 Dribble or Pass sessions to see your trend.")
-                ProgressLineChartView(title: "Forward Intent", points: forwardIntentPoints, valueLabel: "%", yAxisRange: (0, 100), emptyStateMessage: "Complete at least 2 Dribble or Pass or One-Touch Passing sessions (with forward opportunities) to see your trend.")
+                ProgressLineChartView(title: "Forward Thinking", points: forwardIntentPoints, valueLabel: "%", yAxisRange: (0, 100), emptyStateMessage: "Complete at least 2 Dribble or Pass or One-Touch Passing sessions (with forward opportunities) to see your trend.")
             }
         }
         .padding(18)
@@ -457,7 +421,7 @@ struct PlayerDashboardView: View {
             Button {
                 navigateToReportCard = true
             } label: {
-                Text("Report Card")
+                Text("Player Development")
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.9))
             }

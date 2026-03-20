@@ -18,6 +18,8 @@ enum AppRoute: Hashable {
     case oneTouchPassingCoachRemote
     case curriculum
     case progress
+    case achievements
+    case warmupHub
     case warmup(DisplayMode)
     case trainingModeSelection(activityTitle: String)
     case twoMinuteSetup(mode: TrainingMode)

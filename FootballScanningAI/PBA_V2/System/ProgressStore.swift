@@ -84,8 +84,8 @@ final class ProgressStore: ObservableObject {
 
     /// Sessions for an activity and optional player (nil = legacy; include for selected player).
     func sessions(for activity: ActivityKind, playerId: UUID?) -> [SessionRecord] {
-        guard let pid = playerId else { return sessions(for: activity) }
-        return sessions.filter { $0.activity == activity && ($0.playerId == pid || $0.playerId == nil) }
+        guard let pid = playerId else { return sessions.filter { $0.activity == activity && $0.playerId == nil } }
+        return sessions.filter { $0.activity == activity && $0.playerId == pid }
     }
 
     func last(_ activity: ActivityKind) -> SessionRecord? {
@@ -128,14 +128,22 @@ final class ProgressStore: ObservableObject {
     /// Last 5 training blocks (12 decisions: awayFromPressure, dribbleOrPass, oneTouchPassing) for consistency/score.
     func last5TrainingBlocks(playerId: UUID?) -> [SessionRecord] {
         let training: [ActivityKind] = [.awayFromPressure, .dribbleOrPass, .oneTouchPassing]
-        let filtered = sessions.filter { training.contains($0.activity) && $0.decisionsCompleted == 12 && (playerId == nil || $0.playerId == playerId || $0.playerId == nil) }
+        let filtered = sessions.filter {
+            training.contains($0.activity) &&
+            $0.decisionsCompleted == 12 &&
+            (playerId == nil ? $0.playerId == nil : $0.playerId == playerId)
+        }
         return Array(filtered.prefix(5))
     }
 
     /// Number of completed curriculum training blocks (AFP + DOP + OTP, 12 decisions each) for this player. Used for "Block X of Y".
     func curriculumBlocksCompleted(playerId: UUID?) -> Int {
         let training: [ActivityKind] = [.awayFromPressure, .dribbleOrPass, .oneTouchPassing]
-        return sessions.filter { training.contains($0.activity) && $0.decisionsCompleted == 12 && (playerId == nil || $0.playerId == playerId || $0.playerId == nil) }.count
+        return sessions.filter {
+            training.contains($0.activity) &&
+            $0.decisionsCompleted == 12 &&
+            (playerId == nil ? $0.playerId == nil : $0.playerId == playerId)
+        }.count
     }
 
     // MARK: - Curriculum readiness (unlock next activity)

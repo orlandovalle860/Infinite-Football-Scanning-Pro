@@ -58,15 +58,12 @@ struct GateOutlineOverlay: View {
 
 // MARK: - Pressure wedge (directional, points toward player)
 
-private let pressureWedgeOpacity: CGFloat = 0.75
-private let pressureWedgeDepthFraction: CGFloat = 0.14 // how far the wedge extends into the grid
+private let pressureWedgeFadeInSeconds: Double = 0.06
 
 /// Red directional wedge indicating where pressure is coming from. Points toward the center (player).
 struct DangerZoneOverlay: View {
     let gate: Gate
-    var laneSpan: CGFloat = 0.62
-    var insetFraction: CGFloat = 0.18
-    @State private var pulseScale: CGFloat = 1.0
+    var style: WedgeCueStyle = WedgeCueStyle.style(for: 1)
 
     var body: some View {
         GeometryReader { geo in
@@ -76,23 +73,17 @@ struct DangerZoneOverlay: View {
                 .fill(
                     LinearGradient(
                         colors: [
-                            Color.red.opacity(pressureWedgeOpacity),
-                            Color.red.opacity(pressureWedgeOpacity * 0.5),
-                            Color.red.opacity(0.15)
+                            Color.red.opacity(style.opacity),
+                            Color.red.opacity(style.opacity * 0.92),
+                            Color.red.opacity(style.opacity * 0.72)
                         ],
                         startPoint: wedgeGradientStart,
                         endPoint: wedgeGradientEnd
                     )
                 )
-                .scaleEffect(pulseScale)
-                .transition(.opacity.animation(.easeInOut(duration: 0.12)))
+                .transition(.opacity.animation(.linear(duration: pressureWedgeFadeInSeconds)))
         }
         .allowsHitTesting(false)
-        .onAppear {
-            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
-                pulseScale = 1.04
-            }
-        }
     }
 
     private var wedgeGradientStart: UnitPoint {
@@ -114,14 +105,15 @@ struct DangerZoneOverlay: View {
     }
 
     private func wedgePath(w: CGFloat, h: CGFloat) -> Path {
-        let laneW = w * laneSpan
-        let depth = min(w, h) * pressureWedgeDepthFraction
+        let laneW = w * style.laneSpan
+        let depth = min(w, h) * style.depthFraction
+        let centerGap = min(w, h) * style.centerGapFraction
 
         switch gate {
         case .up:
             // Base at top, tip points down toward player
             let baseY: CGFloat = 0
-            let tipY = baseY + depth
+            let tipY = min(baseY + depth, (h / 2) - centerGap)
             let left = w / 2 - laneW / 2
             let right = w / 2 + laneW / 2
             return Path { p in
@@ -132,7 +124,7 @@ struct DangerZoneOverlay: View {
             }
         case .down:
             let baseY = h
-            let tipY = baseY - depth
+            let tipY = max(baseY - depth, (h / 2) + centerGap)
             let left = w / 2 - laneW / 2
             let right = w / 2 + laneW / 2
             return Path { p in
@@ -143,9 +135,9 @@ struct DangerZoneOverlay: View {
             }
         case .left:
             let baseX: CGFloat = 0
-            let tipX = baseX + depth
-            let top = h / 2 - (h * laneSpan) / 2
-            let bottom = h / 2 + (h * laneSpan) / 2
+            let tipX = min(baseX + depth, (w / 2) - centerGap)
+            let top = h / 2 - (h * style.laneSpan) / 2
+            let bottom = h / 2 + (h * style.laneSpan) / 2
             return Path { p in
                 p.move(to: CGPoint(x: baseX, y: top))
                 p.addLine(to: CGPoint(x: baseX, y: bottom))
@@ -154,9 +146,9 @@ struct DangerZoneOverlay: View {
             }
         case .right:
             let baseX = w
-            let tipX = baseX - depth
-            let top = h / 2 - (h * laneSpan) / 2
-            let bottom = h / 2 + (h * laneSpan) / 2
+            let tipX = max(baseX - depth, (w / 2) + centerGap)
+            let top = h / 2 - (h * style.laneSpan) / 2
+            let bottom = h / 2 + (h * style.laneSpan) / 2
             return Path { p in
                 p.move(to: CGPoint(x: baseX, y: top))
                 p.addLine(to: CGPoint(x: baseX, y: bottom))

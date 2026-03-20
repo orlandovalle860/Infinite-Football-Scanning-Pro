@@ -374,8 +374,9 @@ struct PostAuthView: View {
                     twoMinuteTestResult: nil,
                     onComplete: {
                         showCreatePlayer = false
-                        if let first = playerStore.players.first {
-                            playerStore.selectedPlayerId = first.id
+                        if let selectedId = playerStore.selectedPlayerId,
+                           let selectedProfile = profileManager.profile(id: selectedId) {
+                            profileManager.switchToProfile(selectedProfile)
                             playerStore.persist()
                         }
                     }
@@ -426,9 +427,11 @@ struct PostAuthView: View {
             }
         }
         SupabasePlayerService.shared.markPlayersAsSynced(ids)
-        if let firstId = ids.first, let firstProfile = profileManager.profiles.first(where: { $0.id == firstId }) {
-            profileManager.switchToProfile(firstProfile)
-            playerStore.selectedPlayerId = firstId
+        let preferredId = playerStore.selectedPlayerId ?? profileManager.currentProfile?.id ?? ids.first
+        if let selectedId = preferredId, ids.contains(selectedId),
+           let selectedProfile = profileManager.profile(id: selectedId) {
+            profileManager.switchToProfile(selectedProfile)
+            playerStore.selectedPlayerId = selectedId
             playerStore.persist()
         }
     }
@@ -512,8 +515,9 @@ struct MainAppView: View {
                 twoMinuteTestResult: nil,
                 onComplete: {
                     showCreatePlayerAfterAuth = false
-                    if let first = playerStore.players.first {
-                        playerStore.selectedPlayerId = first.id
+                    if let selectedId = playerStore.selectedPlayerId,
+                       let selectedProfile = profileManager.profile(id: selectedId) {
+                        profileManager.switchToProfile(selectedProfile)
                         playerStore.persist()
                     }
                 }
@@ -526,6 +530,10 @@ struct MainAppView: View {
             print("[Supabase] App main screen appeared — checking config and unsynced sessions.")
             progressStore.load()
             playerStore.load()
+            if let selectedId = playerStore.selectedPlayerId,
+               let selectedProfile = profileManager.profile(id: selectedId) {
+                profileManager.switchToProfile(selectedProfile)
+            }
             if !playerStore.players.isEmpty, !profileManager.profiles.isEmpty {
                 if let current = profileManager.currentProfile,
                    !playerStore.players.contains(where: { $0.id == current.id }) {
@@ -546,6 +554,7 @@ struct MainAppView: View {
             SupabaseSessionService.shared.retryPendingSessions(progressStore: progressStore)
             SupabaseDecisionService.shared.retryPendingDecisions()
             SupabasePlayerService.shared.retryPendingPlayers(profileManager: profileManager)
+            SupabasePlayerService.shared.retryPendingDeletes()
         }
         .onChange(of: authManager.currentSession != nil) { _, hasSession in
             if !hasSession { hasHydratedPlayersForSession = false }
@@ -555,6 +564,7 @@ struct MainAppView: View {
             SupabaseSessionService.shared.retryPendingSessions(progressStore: progressStore)
             SupabaseDecisionService.shared.retryPendingDecisions()
             SupabasePlayerService.shared.retryPendingPlayers(profileManager: profileManager)
+            SupabasePlayerService.shared.retryPendingDeletes()
             AnalyticsManager.shared.flushIfNeeded()
         }
     }
@@ -591,9 +601,11 @@ struct MainAppView: View {
             }
         }
         SupabasePlayerService.shared.markPlayersAsSynced(ids)
-        if let firstId = ids.first, let firstProfile = profileManager.profiles.first(where: { $0.id == firstId }) {
-            profileManager.switchToProfile(firstProfile)
-            playerStore.selectedPlayerId = firstId
+        let preferredId = playerStore.selectedPlayerId ?? profileManager.currentProfile?.id ?? ids.first
+        if let selectedId = preferredId, ids.contains(selectedId),
+           let selectedProfile = profileManager.profile(id: selectedId) {
+            profileManager.switchToProfile(selectedProfile)
+            playerStore.selectedPlayerId = selectedId
             playerStore.persist()
         }
     }
@@ -653,8 +665,15 @@ struct MainAppView: View {
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
+        case .achievements:
+            AchievementsView(profileManager: profileManager)
+                .environmentObject(playerStore)
+                .environmentObject(router)
+        case .warmupHub:
+            WarmupHubView()
+                .environmentObject(router)
         case .warmup(let mode):
-            MainView(settingsViewModel: settingsViewModel, profileManager: profileManager, displayMode: mode)
+            MainView(settingsViewModel: settingsViewModel, profileManager: profileManager, displayMode: mode, showModeSelection: false)
         case .trainingModeSelection(let activityTitle):
             TrainingModeSelectionView(activityTitle: activityTitle, onSelectMode: { mode in
                 router.push(.twoMinuteSetup(mode: mode))
@@ -696,45 +715,81 @@ struct MainAppView: View {
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
         case .dribbleOrPassRoleSelection:
-            DribbleOrPassRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(popToRootTrigger)
-                .environmentObject(router)
+            if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
+                DribbleOrPassRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+                    .environmentObject(progressStore)
+                    .environmentObject(playerStore)
+                    .environmentObject(popToRootTrigger)
+                    .environmentObject(router)
+            } else {
+                PremiumPaywallView(profileManager: profileManager)
+                    .environmentObject(playerStore)
+                    .environmentObject(router)
+            }
         case .dribbleOrPassTrainingModeSelection:
-            TrainingModeSelectionView(activityTitle: "Dribble or Pass", onSelectMode: { mode in
-                router.push(.dribbleOrPassSetup(mode: mode))
-            }) { _ in EmptyView() }
-            .environmentObject(progressStore)
-            .environmentObject(playerStore)
-            .environmentObject(popToRootTrigger)
-            .environmentObject(router)
+            if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
+                TrainingModeSelectionView(activityTitle: "Dribble or Pass", onSelectMode: { mode in
+                    router.push(.dribbleOrPassSetup(mode: mode))
+                }) { _ in EmptyView() }
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
+            } else {
+                PremiumPaywallView(profileManager: profileManager)
+                    .environmentObject(playerStore)
+                    .environmentObject(router)
+            }
         case .dribbleOrPassSetup(let mode):
-            DribbleOrPassSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(popToRootTrigger)
-                .environmentObject(router)
+            if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
+                DribbleOrPassSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                    .environmentObject(progressStore)
+                    .environmentObject(playerStore)
+                    .environmentObject(popToRootTrigger)
+                    .environmentObject(router)
+            } else {
+                PremiumPaywallView(profileManager: profileManager)
+                    .environmentObject(playerStore)
+                    .environmentObject(router)
+            }
         case .oneTouchPassingRoleSelection:
-            OneTouchPassingRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(popToRootTrigger)
-                .environmentObject(router)
+            if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
+                OneTouchPassingRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+                    .environmentObject(progressStore)
+                    .environmentObject(playerStore)
+                    .environmentObject(popToRootTrigger)
+                    .environmentObject(router)
+            } else {
+                PremiumPaywallView(profileManager: profileManager)
+                    .environmentObject(playerStore)
+                    .environmentObject(router)
+            }
         case .oneTouchPassingTrainingModeSelection:
-            TrainingModeSelectionView(activityTitle: "One-Touch Passing", onSelectMode: { mode in
-                router.push(.oneTouchPassingSetup(mode: mode))
-            }) { _ in EmptyView() }
-            .environmentObject(progressStore)
-            .environmentObject(playerStore)
-            .environmentObject(popToRootTrigger)
-            .environmentObject(router)
-        case .oneTouchPassingSetup(let mode):
-            OneTouchPassingSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+            if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
+                TrainingModeSelectionView(activityTitle: "One-Touch Passing", onSelectMode: { mode in
+                    router.push(.oneTouchPassingSetup(mode: mode))
+                }) { _ in EmptyView() }
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
+            } else {
+                PremiumPaywallView(profileManager: profileManager)
+                    .environmentObject(playerStore)
+                    .environmentObject(router)
+            }
+        case .oneTouchPassingSetup(let mode):
+            if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
+                OneTouchPassingSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                    .environmentObject(progressStore)
+                    .environmentObject(playerStore)
+                    .environmentObject(popToRootTrigger)
+                    .environmentObject(router)
+            } else {
+                PremiumPaywallView(profileManager: profileManager)
+                    .environmentObject(playerStore)
+                    .environmentObject(router)
+            }
         case .debugMenu:
             DebugMenuView(profileManager: profileManager, settingsViewModel: settingsViewModel)
                 .environmentObject(router)
@@ -905,15 +960,51 @@ struct IntroView: View {
     @State private var upgradedStatus: PlayerStatus?
     @State private var showPlayersSheet = false
     @State private var showBeepSelector = false
+    @State private var activeProgressModal: ProgressModalType?
+    @State private var progressModalScale: CGFloat = 0.92
+    @State private var progressModalOpacity: Double = 0
     @AppStorage(hasSeenPlayerSwitcherTooltipKey) private var hasSeenPlayerSwitcherTooltip = false
     // Programmatic navigation so buttons reliably push (NavigationLink in ScrollView can miss taps).
     @State private var isStartTrainingPressed = false
     /// Prevents double-tap from scheduling two pushes (avoids freeze / duplicate navigation after completing a session).
     @State private var isNavigatingToTraining = false
-    @State private var warmupDisplayMode: DisplayMode = .colors
     @State private var snapshotMetricInfoToShow: (title: String, message: String)?
     /// Latest session_summary for Daily Goal card (Last Score / Target). Fetched when player changes.
     @State private var dashboardData: HomeDashboardData?
+    @State private var guidedProgress = GuidedCurriculumProgress(
+        stage: 1,
+        loop: 1,
+        nextActivity: .awayFromPressure,
+        focus: "Escape pressure quickly with clean first decisions."
+    )
+    @State private var currentPlayerIdentity: PlayerIdentity?
+    @State private var trendingIdentity: PlayerIdentity?
+
+    private enum ProgressModalType: Identifiable {
+        case levelUp(previousTier: String, newTier: String, previousAvg: Double?, newAvg: Double?, previousAccuracy: Int?, newAccuracy: Int?)
+        case stageUnlocked(stage: Int, activity: ActivityKind)
+        case curriculumComplete(decisionSpeedChange: String?, accuracyChange: String?, forwardThinkingChange: String?, recommendedActivity: ActivityKind)
+        case adaptiveWedgeDifficulty(level: Int)
+        case badgeUnlocked(badge: PlayerBadge)
+        case identityChanged(identity: PlayerIdentity)
+
+        var id: String {
+            switch self {
+            case .levelUp(_, let newTier, _, _, _, _):
+                return "levelup_\(newTier)"
+            case .stageUnlocked(let stage, let activity):
+                return "stage_\(stage)_\(activity.rawValue)"
+            case .curriculumComplete(_, _, _, let recommendedActivity):
+                return "curriculum_complete_\(recommendedActivity.rawValue)"
+            case .adaptiveWedgeDifficulty(let level):
+                return "adaptive_wedge_difficulty_\(level)"
+            case .badgeUnlocked(let badge):
+                return "badge_unlocked_\(badge.rawValue)"
+            case .identityChanged(let identity):
+                return "identity_changed_\(identity.rawValue)"
+            }
+        }
+    }
 
     private var playerId: UUID? { playerStore.selectedPlayerId }
     private var last5: [SessionRecord] { progressStore.last5TrainingBlocks(playerId: playerId) }
@@ -933,19 +1024,18 @@ struct IntroView: View {
     private var dayStreakTitle: String { "🔥 \(trainingStreakDays)-Day Training Streak" }
     /// Button label for recommended activity: "Start 2-Minute Test" or activity name e.g. "Dribble or Pass".
     private var recommendedActivityButtonTitle: String {
-        if pinnedActivity == .twoMinuteTest { return "Start 2-Minute Test" }
         return RecommendationEngine.activityTitle(pinnedActivity)
     }
-    /// Most recent Decision Speed Score for the current player (v1: any training activity so a just-completed block shows immediately). Nil if test or no scored session.
+    /// Most recent Decision Speed Score for the current player (v1: any training activity so a just-completed block shows immediately).
+    /// Score 0 is valid and must be displayed.
     private var homeDecisionSpeedScore: Int? {
-        guard pinnedActivity != .twoMinuteTest else { return nil }
         return localLatestScoredSession?.decisionSpeedScore
     }
 
     /// Last 7 training session scores from ProgressStore (oldest → newest). Used when dashboardData.trendScores is empty (e.g. no Supabase).
     private var localTrendScores: [Int] {
         let training: [ActivityKind] = [.awayFromPressure, .dribbleOrPass, .oneTouchPassing]
-        let list = progressStore.sessions.filter { training.contains($0.activity) && ($0.playerId == playerId || $0.playerId == nil) }
+        let list = progressStore.sessions.filter { training.contains($0.activity) && $0.playerId == playerId }
         let scores = Array(list.prefix(7)).compactMap(\.decisionSpeedScore)
         return scores.reversed()
     }
@@ -953,18 +1043,18 @@ struct IntroView: View {
     /// Latest training session with a score (for Home score and local Performance Breakdown when dashboardData is nil). Newest-first so this is the most recent.
     private var localLatestScoredSession: SessionRecord? {
         let training: [ActivityKind] = [.awayFromPressure, .dribbleOrPass, .oneTouchPassing]
-        return progressStore.sessions.first { training.contains($0.activity) && ($0.playerId == playerId || $0.playerId == nil) && $0.decisionSpeedScore != nil }
+        return progressStore.sessions.first { training.contains($0.activity) && $0.playerId == playerId && $0.decisionSpeedScore != nil }
     }
     /// Second-most-recent training session with a score (for "change since last session" when showing latest score from any activity).
     private var localPreviousScoredSession: SessionRecord? {
         let training: [ActivityKind] = [.awayFromPressure, .dribbleOrPass, .oneTouchPassing]
-        let scored = progressStore.sessions.filter { training.contains($0.activity) && ($0.playerId == playerId || $0.playerId == nil) && $0.decisionSpeedScore != nil }
+        let scored = progressStore.sessions.filter { training.contains($0.activity) && $0.playerId == playerId && $0.decisionSpeedScore != nil }
         return scored.count >= 2 ? scored[1] : nil
     }
     /// Fast decision % from last 7 scored sessions (for Performance Breakdown when Supabase has no value).
     private var localFastPercent: Double? {
         let training: [ActivityKind] = [.awayFromPressure, .dribbleOrPass, .oneTouchPassing]
-        let scored = progressStore.sessions.filter { training.contains($0.activity) && ($0.playerId == playerId || $0.playerId == nil) && $0.decisionSpeedScore != nil }
+        let scored = progressStore.sessions.filter { training.contains($0.activity) && $0.playerId == playerId && $0.decisionSpeedScore != nil }
         let withBucket = Array(scored.prefix(7)).compactMap(\.speedBucket)
         guard !withBucket.isEmpty else { return nil }
         let fastCount = withBucket.filter { $0 == .fast }.count
@@ -975,6 +1065,10 @@ struct IntroView: View {
         guard let cur = localLatestScoredSession?.decisionSpeedScore,
               let prev = localPreviousScoredSession?.decisionSpeedScore else { return nil }
         return cur - prev
+    }
+    /// True when we have exactly one scored training session for this player.
+    private var isBaselineDecisionSpeedScore: Bool {
+        localLatestScoredSession != nil && localPreviousScoredSession == nil
     }
     /// Recommended: 3 sessions (full blocks) per week.
     private static let weeklySessionGoal: Int = 3
@@ -1038,17 +1132,16 @@ struct IntroView: View {
         DecisionConsistencyLabel.from(session: mostRecentSessionResult)
     }
 
-    /// Automatic recommendation by player level with overrides for timing, bias, consistency. Updates when level/timing/bias/consistency change.
+    /// Automatic recommendation by player level with overrides for timing, bias, consistency.
     private var trainingRecommendation: TrainingRecommendationResult {
         TrainingRecommendation.recommend(progressStore: progressStore, playerId: playerId, last5: last5, hasCompletedInitialTest: hasCompletedInitialTest, lastAFPSessionResult: lastAFPSessionResult, decisionConsistency: introViewDecisionConsistency)
     }
 
-    /// Pinned row never promotes "Take Test" after the initial test; 2-Minute Test remains in the scroll.
-    private var pinnedActivity: ActivityKind { trainingRecommendation.activity }
+    /// Guided next activity from curriculum stage progression.
+    private var pinnedActivity: ActivityKind { guidedProgress.nextActivity }
 
-    /// Activity shown in the yellow card. Never 2-Minute Test; when recommendation is test, show first training activity so the card is always visible.
+    /// Activity shown in the yellow card.
     private var continueTrainingCardActivity: ActivityKind {
-        if pinnedActivity == .twoMinuteTest { return .awayFromPressure }
         return pinnedActivity
     }
 
@@ -1062,10 +1155,10 @@ struct IntroView: View {
         }
     }
 
-    /// Ordered list of 3 activities for Recommended Daily Training (recommended first; no 2-Minute in plan).
+    /// Ordered list of 3 activities for Recommended Daily Training (guided activity first).
     private var dailyPlanBlocks: [ActivityKind] {
         let trainingActivities: [ActivityKind] = [.awayFromPressure, .dribbleOrPass, .oneTouchPassing]
-        let recommended = trainingRecommendation.activity
+        let recommended = guidedProgress.nextActivity
         guard trainingActivities.contains(recommended) else {
             return trainingActivities
         }
@@ -1082,9 +1175,17 @@ struct IntroView: View {
         }
     }
 
-    /// Focus line for pinned Train Now card (from recommendation engine).
-    private var focusText: String { trainingRecommendation.focusLine }
-    private var coachTipText: String { trainingRecommendation.coachTip }
+    /// Focus line for guided next training card.
+    private var focusText: String { guidedProgress.focus }
+    #if DEBUG
+    private var wedgeDifficultyLevel: Int { WedgeDifficultyEngine.currentLevel(playerId: playerId) }
+    #endif
+    /// True when this player has no completed sessions in ProgressStore yet.
+    private var needsBaselineAssessment: Bool {
+        let hasTrainingSessions = progressStore.sessions.contains { $0.playerId == playerId }
+        let baselineCompleted = GuidedCurriculumEngine.hasCompletedBaseline(playerId: playerId)
+        return !hasTrainingSessions && !baselineCompleted
+    }
 
     /// Skill progression: next activity and message (accuracy, reaction time, decision speed score mastery).
     private var skillProgressionRecommendation: SkillProgressionRecommendation? {
@@ -1144,36 +1245,13 @@ struct IntroView: View {
                     dailyGoalCard
                         .modifier(StartPageCardStyle())
 
-                    decisionSpeedScoreSection
+                    quickPerformanceSnapshotSection
                         .modifier(StartPageCardStyle())
 
-                    progressTrendSection
+                    stageProgressSection
                         .modifier(StartPageCardStyle())
 
-                    performanceBreakdownSection
-                        .modifier(StartPageCardStyle())
-
-                    trainingStreakSection
-                        .modifier(StartPageCardStyle())
-
-                    CurriculumCard(
-                        currentBlock: progressStore.curriculumBlocksCompleted(playerId: playerId),
-                        totalBlocks: curriculumTotalBlocks,
-                        recommendedActivity: skillProgressionRecommendation?.recommendedActivity,
-                        hasCompletedInitialTest: hasCompletedInitialTest,
-                        onViewPath: {
-                            router.push(.curriculum)
-                        },
-                        onStartTwoMinuteTest: {
-                            router.push(.twoMinuteRoleSelection)
-                        }
-                    )
-                    .modifier(StartPageCardStyle())
-
-                    homeProgressAndScoreSection
-                        .modifier(StartPageCardStyle())
-
-                    otherActivitiesSection
+                    secondaryActionsSection
                         .modifier(StartPageCardStyle())
 
                     Spacer(minLength: 40)
@@ -1207,65 +1285,6 @@ struct IntroView: View {
                     .foregroundColor(.white.opacity(0.9))
                 }
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button {
-                        hasSeenPlayerSwitcherTooltip = true
-                        showPlayersSheet = true
-                    } label: {
-                        Label("Switch Player", systemImage: "person.circle")
-                    }
-                    Button {
-                        router.push(.coachRemote)
-                    } label: {
-                        Label("Coach Remote", systemImage: "hand.raised")
-                    }
-                    Button {
-                        showBeepSelector = true
-                    } label: {
-                        Label("Training beep (A/B test)", systemImage: "speaker.wave.2")
-                    }
-                    if Config.isSupabaseConfigured {
-                        if authManager.currentSession != nil {
-                            Button(role: .destructive) {
-                                Task { await AuthManager.shared.signOut() }
-                            } label: {
-                                Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
-                            }
-                        } else {
-                            Button {
-                                showLoginSheet = true
-                            } label: {
-                                Label("Sign In", systemImage: "person.crop.circle.badge.plus")
-                            }
-                        }
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text("Coach & Player")
-                            .font(.subheadline.weight(.medium))
-                        Image(systemName: "chevron.down")
-                            .font(.caption2.weight(.semibold))
-                    }
-                    .foregroundColor(.white.opacity(0.95))
-                }
-                .accessibilityLabel("Coach and Player options")
-                .accessibilityHint("Double tap for Coach Remote and Switch Player.")
-            }
-        }
-        .overlay(alignment: .topTrailing) {
-            if !hasSeenPlayerSwitcherTooltip {
-                Text("Tap here to switch players.")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.85))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color.white.opacity(0.15))
-                    .cornerRadius(8)
-                    .padding(.top, 56)
-                    .padding(.trailing, 16)
-                    .allowsHitTesting(false)
-            }
         }
         .alert(snapshotMetricInfoToShow?.title ?? "", isPresented: Binding(
             get: { snapshotMetricInfoToShow != nil },
@@ -1279,6 +1298,8 @@ struct IntroView: View {
         }
         .sheet(isPresented: $showPlayersSheet) {
             PlayersSheetView(profileManager: profileManager)
+                .presentationDetents([.fraction(0.55), .large])
+                .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showBeepSelector) {
             PBABeepSelectorView()
@@ -1289,69 +1310,613 @@ struct IntroView: View {
                 statusUpgradeToast(status: s)
             }
         }
+        .overlay {
+            if let modal = activeProgressModal {
+                progressModalView(modal)
+                    .scaleEffect(progressModalScale)
+                    .opacity(progressModalOpacity)
+                    .onAppear {
+                        progressModalScale = 0.92
+                        progressModalOpacity = 0
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            progressModalScale = 1.0
+                            progressModalOpacity = 1.0
+                        }
+                        triggerProgressHaptic()
+                    }
+            }
+        }
         .task(id: playerId?.uuidString) {
             dashboardData = await HomeDashboardDataService.shared.fetchDashboardData(playerId: playerId)
+            refreshGuidedProgress()
         }
         .onAppear {
             showsTopToggle = false
             checkStatusUpgrade()
             popToRootTrigger.request = false
             profileManager.ensureWeeklyRolloverIfNeeded()
-            #if DEBUG
-            let lastRecord = progressStore.last(pinnedActivity, playerId: playerId)
-            print("[PBA-Debug] Home onAppear: pinnedActivity=\(pinnedActivity.rawValue), playerId=\(playerId?.uuidString ?? "nil"), lastRecord?.activity=\(lastRecord?.activity.rawValue ?? "nil"), lastRecord?.playerId=\(lastRecord?.playerId?.uuidString ?? "nil"), homeDecisionSpeedScore=\(homeDecisionSpeedScore ?? -1), localLatestScoredSession?.activity=\(localLatestScoredSession?.activity.rawValue ?? "nil"), progressStore.sessions.count=\(progressStore.sessions.count)")
-            #endif
+            refreshGuidedProgress()
+        }
+        .onChange(of: playerId?.uuidString) {
+            refreshGuidedProgress()
         }
         .onDisappear { showsTopToggle = true }
     }
 
-    /// 1. Daily Goal card (top): Last Decision Speed Score, Target = lastScore + 1, Start Training button.
-    private var dailyGoalCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Today's Goal")
-                    .font(.headline.weight(.semibold))
-                    .foregroundColor(.white)
-                Text("Beat Your Score")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.85))
-            }
-            HStack(alignment: .firstTextBaseline, spacing: 24) {
-                Text("Last Score: \(homeDecisionSpeedScore.map { "\($0)" } ?? "—")")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.95))
-                Text("Target: \((homeDecisionSpeedScore ?? 0) + 1)")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.yellow)
-            }
-            Button {
-                guard !isNavigatingToTraining else { return }
-                isNavigatingToTraining = true
-                isStartTrainingPressed = true
-                let route = routeForTrainNowActivity(pinnedActivity)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                    isStartTrainingPressed = false
-                    router.push(route)
-                    isNavigatingToTraining = false
-                }
-            } label: {
-                Text("Start Training")
-                    .font(.headline.weight(.semibold))
-                    .foregroundColor(.black)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
-                    .background(Color.yellow)
-                    .cornerRadius(14)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(PlainButtonStyle())
-            .scaleEffect(isStartTrainingPressed ? 0.98 : 1.0)
-            .animation(.spring(response: 0.25, dampingFraction: 0.6), value: isStartTrainingPressed)
-            .disabled(isNavigatingToTraining)
-            .accessibilityLabel("Start Training")
-            .accessibilityHint("Double tap to start recommended training.")
+    private func refreshGuidedProgress() {
+        let previousStage = loadLastSeenStage()
+        let previousLoop = loadLastSeenLoop()
+        let previousTier = loadLastSeenTier()
+        let previousIdentity = PlayerIdentityEngine.loadLastIdentity(playerId: playerId)
+        let previousStats = rollingPerformanceStats()
+        let selectedProfileSessions = profileManager.profile(id: playerId)?.sessionResults ?? []
+        let newIdentity = PlayerIdentityEngine.confirmedIdentity(from: selectedProfileSessions, previousIdentity: previousIdentity)
+        currentPlayerIdentity = newIdentity ?? previousIdentity
+        trendingIdentity = PlayerIdentityEngine.trendingTowardIdentity(from: selectedProfileSessions, currentIdentity: currentPlayerIdentity)
+        let wedgeDifficultyIncreased = WedgeDifficultyEngine.evaluateAndAdvanceIfNeeded(playerId: playerId, sessions: selectedProfileSessions)
+        let wedgeDifficultyLevel = WedgeDifficultyEngine.currentLevel(playerId: playerId)
+        guidedProgress = GuidedCurriculumEngine.evaluateAndAdvance(
+            playerId: playerId,
+            sessions: selectedProfileSessions
+        )
+        let newStats = rollingPerformanceStats()
+        evaluateProgressModals(
+            previousStage: previousStage,
+            previousLoop: previousLoop,
+            previousTier: previousTier,
+            previousIdentity: previousIdentity,
+            newIdentity: newIdentity,
+            previousStats: previousStats,
+            newStats: newStats,
+            sessions: selectedProfileSessions,
+            wedgeDifficultyIncreased: wedgeDifficultyIncreased,
+            wedgeDifficultyLevel: wedgeDifficultyLevel
+        )
+        saveLastSeenStage(guidedProgress.stage)
+        saveLastSeenLoop(guidedProgress.loop)
+        if let tier = newStats.tier {
+            saveLastSeenTier(tier)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        if let newIdentity {
+            PlayerIdentityEngine.saveIdentity(newIdentity, playerId: playerId)
+        }
+        #if DEBUG
+        let selected = playerId?.uuidString ?? "nil"
+        let currentProfileId = profileManager.currentProfile?.id.uuidString ?? "nil"
+        let afpSessions = selectedProfileSessions.filter { $0.activityType == .awayFromPressure }
+        let afpPlayerIds = afpSessions.map { $0.playerID.uuidString }.joined(separator: ",")
+        let lastRecord = progressStore.last(pinnedActivity, playerId: playerId)
+        let latestScored = localLatestScoredSession
+        let snapshotFirst = recentSessionsForSnapshot.first
+        let filteredForPlayer = progressStore.sessions.filter { $0.playerId == playerId }
+        let nilPlayerSessions = progressStore.sessions.filter { $0.playerId == nil }.count
+        print("[PBA-Debug] Home refresh: selectedPlayerId=\(selected), currentProfileId=\(currentProfileId), guided={\(GuidedCurriculumEngine.debugState(playerId: playerId))}")
+        print("[PBA-Debug] Home refresh data: pinnedActivity=\(pinnedActivity.rawValue), lastRecord.playerId=\(lastRecord?.playerId?.uuidString ?? "nil"), latestScored.playerId=\(latestScored?.playerId?.uuidString ?? "nil"), snapshotFirst.playerId=\(snapshotFirst?.playerID.uuidString ?? "nil"), homeDecisionSpeedScore=\(homeDecisionSpeedScore.map(String.init) ?? "nil"), selectedPlayerSessions=\(filteredForPlayer.count), nilPlayerSessions=\(nilPlayerSessions), afpSessionCount=\(afpSessions.count), afpPlayerIds=[\(afpPlayerIds)]")
+        #endif
+    }
+
+    private struct RollingStats {
+        let avgTime: Double?
+        let accuracyPercent: Int?
+        let tier: String?
+    }
+
+    private func rollingPerformanceStats() -> RollingStats {
+        let sessions = profileManager.profile(id: playerId)?.sessionResults ?? []
+        let training = sessions.filter { [.awayFromPressure, .dribbleOrPass, .oneTouchPassing].contains($0.activityType) }
+        let recent = Array(training.prefix(5))
+        let times = recent.compactMap(\.avgDecisionTime)
+        let avg = times.isEmpty ? nil : times.reduce(0, +) / Double(times.count)
+        let validAccSessions = recent.filter { $0.totalReps > 0 }
+        let acc: Int? = {
+            guard !validAccSessions.isEmpty else { return nil }
+            let avgAcc = validAccSessions.reduce(0.0) { $0 + (Double($1.correctCount) / Double($1.totalReps)) } / Double(validAccSessions.count)
+            return Int(round(avgAcc * 100.0))
+        }()
+        let tier: String? = {
+            guard let avg else { return nil }
+            if avg < 0.90 { return "Elite" }
+            if avg <= 1.10 { return "Strong" }
+            if avg <= 1.20 { return "Developing" }
+            return "Emerging"
+        }()
+        return RollingStats(avgTime: avg, accuracyPercent: acc, tier: tier)
+    }
+
+    private func tierRank(_ tier: String) -> Int {
+        switch tier {
+        case "Emerging": return 0
+        case "Developing": return 1
+        case "Strong": return 2
+        case "Elite": return 3
+        default: return -1
+        }
+    }
+
+    private func evaluateProgressModals(previousStage: Int?, previousLoop: Int?, previousTier: String?, previousIdentity: PlayerIdentity?, newIdentity: PlayerIdentity?, previousStats: RollingStats, newStats: RollingStats, sessions: [SessionResult], wedgeDifficultyIncreased: Bool, wedgeDifficultyLevel: Int) {
+        guard activeProgressModal == nil else { return }
+        if let prevLoop = previousLoop, guidedProgress.loop > prevLoop {
+            activeProgressModal = .curriculumComplete(
+                decisionSpeedChange: metricChangeText(oldValue: earlyAverageDecisionTime(from: sessions), newValue: recentAverageDecisionTime(from: sessions), unit: "s", lowerIsBetter: true),
+                accuracyChange: metricChangeText(oldValue: earlyAccuracyPercent(from: sessions), newValue: recentAccuracyPercent(from: sessions), unit: "%", lowerIsBetter: false),
+                forwardThinkingChange: metricChangeText(oldValue: earlyForwardThinkingPercent(from: sessions), newValue: recentForwardThinkingPercent(from: sessions), unit: "%", lowerIsBetter: false),
+                recommendedActivity: guidedProgress.nextActivity
+            )
+            return
+        }
+        if wedgeDifficultyIncreased {
+            activeProgressModal = .adaptiveWedgeDifficulty(level: wedgeDifficultyLevel)
+            return
+        }
+        if let prevTier = previousTier, let newTier = newStats.tier, tierRank(newTier) > tierRank(prevTier) {
+            activeProgressModal = .levelUp(
+                previousTier: prevTier,
+                newTier: newTier,
+                previousAvg: previousStats.avgTime,
+                newAvg: newStats.avgTime,
+                previousAccuracy: previousStats.accuracyPercent,
+                newAccuracy: newStats.accuracyPercent
+            )
+            return
+        }
+        if let prevStage = previousStage, guidedProgress.stage > prevStage {
+            activeProgressModal = .stageUnlocked(stage: guidedProgress.stage, activity: guidedProgress.nextActivity)
+            return
+        }
+        if let newIdentity, previousIdentity != nil, newIdentity != previousIdentity {
+            activeProgressModal = .identityChanged(identity: newIdentity)
+            return
+        }
+        if let badge = profileManager.dequeuePendingBadgeUnlock(playerId: playerId) {
+            activeProgressModal = .badgeUnlocked(badge: badge)
+        }
+    }
+
+    private func recentAverageDecisionTime(from sessions: [SessionResult]) -> Double? {
+        let training = sessions.filter { [.awayFromPressure, .dribbleOrPass, .oneTouchPassing].contains($0.activityType) }
+        let recent = Array(training.prefix(3)).compactMap(\.avgDecisionTime)
+        guard !recent.isEmpty else { return nil }
+        return recent.reduce(0, +) / Double(recent.count)
+    }
+
+    private func earlyAverageDecisionTime(from sessions: [SessionResult]) -> Double? {
+        let training = sessions.filter { [.awayFromPressure, .dribbleOrPass, .oneTouchPassing].contains($0.activityType) }
+        let early = Array(training.suffix(3)).compactMap(\.avgDecisionTime)
+        guard !early.isEmpty else { return nil }
+        return early.reduce(0, +) / Double(early.count)
+    }
+
+    private func recentAccuracyPercent(from sessions: [SessionResult]) -> Double? {
+        let training = Array(sessions.filter { [.awayFromPressure, .dribbleOrPass, .oneTouchPassing].contains($0.activityType) }.prefix(3))
+        let valid = training.filter { $0.totalReps > 0 }
+        guard !valid.isEmpty else { return nil }
+        return valid.reduce(0.0) { $0 + (Double($1.correctCount) / Double($1.totalReps) * 100.0) } / Double(valid.count)
+    }
+
+    private func earlyAccuracyPercent(from sessions: [SessionResult]) -> Double? {
+        let training = Array(sessions.filter { [.awayFromPressure, .dribbleOrPass, .oneTouchPassing].contains($0.activityType) }.suffix(3))
+        let valid = training.filter { $0.totalReps > 0 }
+        guard !valid.isEmpty else { return nil }
+        return valid.reduce(0.0) { $0 + (Double($1.correctCount) / Double($1.totalReps) * 100.0) } / Double(valid.count)
+    }
+
+    private func recentForwardThinkingPercent(from sessions: [SessionResult]) -> Double? {
+        let training = Array(sessions.filter { [.awayFromPressure, .dribbleOrPass, .oneTouchPassing].contains($0.activityType) }.prefix(3))
+        let values = training.compactMap { s -> Double? in
+            guard let opp = s.forwardOpportunityCount, opp > 0, let choices = s.forwardChoiceCount else { return nil }
+            return Double(choices) / Double(opp) * 100.0
+        }
+        guard !values.isEmpty else { return nil }
+        return values.reduce(0, +) / Double(values.count)
+    }
+
+    private func earlyForwardThinkingPercent(from sessions: [SessionResult]) -> Double? {
+        let training = Array(sessions.filter { [.awayFromPressure, .dribbleOrPass, .oneTouchPassing].contains($0.activityType) }.suffix(3))
+        let values = training.compactMap { s -> Double? in
+            guard let opp = s.forwardOpportunityCount, opp > 0, let choices = s.forwardChoiceCount else { return nil }
+            return Double(choices) / Double(opp) * 100.0
+        }
+        guard !values.isEmpty else { return nil }
+        return values.reduce(0, +) / Double(values.count)
+    }
+
+    private func metricChangeText(oldValue: Double?, newValue: Double?, unit: String, lowerIsBetter: Bool) -> String? {
+        guard let oldValue, let newValue else { return nil }
+        let delta = newValue - oldValue
+        let improved = lowerIsBetter ? (delta < 0) : (delta > 0)
+        let symbol = improved ? "▲" : "▼"
+        if unit == "s" {
+            return String(format: "%@ %.2f%@ → %.2f%@", symbol, oldValue, unit, newValue, unit)
+        }
+        return String(format: "%@ %.0f%@ → %.0f%@", symbol, oldValue, unit, newValue, unit)
+    }
+
+    private func progressModalView(_ modal: ProgressModalType) -> some View {
+        VStack(spacing: 12) {
+            switch modal {
+            case .levelUp(let previousTier, let newTier, let previousAvg, let newAvg, let previousAccuracy, let newAccuracy):
+                Text("Level Up")
+                    .font(.headline.weight(.bold))
+                    .foregroundColor(.yellow)
+                Text("\(newTier) Timing")
+                    .font(.title3.weight(.semibold))
+                    .foregroundColor(.white)
+                Text("You're now making faster decisions under pressure.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.9))
+                    .multilineTextAlignment(.center)
+                if let p = previousAvg, let n = newAvg {
+                    Text(String(format: "%.2fs → %.2fs", p, n))
+                        .font(.subheadline.monospacedDigit())
+                        .foregroundColor(.white.opacity(0.95))
+                }
+                if let pa = previousAccuracy, let na = newAccuracy {
+                    Text("Accuracy: \(pa)% → \(na)%")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.85))
+                }
+                Text("From \(previousTier) to \(newTier)")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.75))
+                Button("Keep Training") {
+                    dismissProgressModal()
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.black)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(Color.yellow)
+                .cornerRadius(12)
+            case .stageUnlocked(let stage, let activity):
+                Text("Stage Unlocked")
+                    .font(.headline.weight(.bold))
+                    .foregroundColor(.yellow)
+                Text(RecommendationEngine.activityTitle(activity))
+                    .font(.title3.weight(.semibold))
+                    .foregroundColor(.white)
+                Text(stageUnlockMessage(for: stage))
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.9))
+                    .multilineTextAlignment(.center)
+                Button("Start Stage \(stage)") {
+                    dismissProgressModal()
+                    router.push(routeForTrainNowActivity(activity))
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.black)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(Color.yellow)
+                .cornerRadius(12)
+                Button("Keep Training") {
+                    dismissProgressModal()
+                }
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.85))
+            case .curriculumComplete(let decisionSpeedChange, let accuracyChange, let forwardThinkingChange, let recommendedActivity):
+                Text("Curriculum Complete")
+                    .font(.headline.weight(.bold))
+                    .foregroundColor(.yellow)
+                Text("You completed all 3 stages.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.92))
+                    .multilineTextAlignment(.center)
+                VStack(alignment: .leading, spacing: 6) {
+                    if let decisionSpeedChange {
+                        Text("Decision Speed: \(decisionSpeedChange)")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.85))
+                    }
+                    if let accuracyChange {
+                        Text("Accuracy: \(accuracyChange)")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.85))
+                    }
+                    if let forwardThinkingChange {
+                        Text("Forward Thinking: \(forwardThinkingChange)")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.85))
+                    }
+                }
+                Text("Next Focus: \(RecommendationEngine.activityTitle(recommendedActivity))")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                    .multilineTextAlignment(.center)
+                Button("Start Next Focus") {
+                    dismissProgressModal()
+                    router.push(routeForTrainNowActivity(recommendedActivity))
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.black)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(Color.yellow)
+                .cornerRadius(12)
+                Button("Keep Training") {
+                    dismissProgressModal()
+                }
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.85))
+            case .adaptiveWedgeDifficulty:
+                Text("Your training just got sharper.")
+                    .font(.headline.weight(.bold))
+                    .foregroundColor(.yellow)
+                Text("You're reacting faster, so cues will be slightly less obvious.\nThis will help you read earlier and decide quicker.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.92))
+                    .multilineTextAlignment(.center)
+                Button("Keep Training") {
+                    dismissProgressModal()
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.black)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(Color.yellow)
+                .cornerRadius(12)
+            case .badgeUnlocked(let badge):
+                Text("Badge Unlocked")
+                    .font(.headline.weight(.bold))
+                    .foregroundColor(.yellow)
+                Text(badge.title)
+                    .font(.title3.weight(.semibold))
+                    .foregroundColor(.white)
+                Text(badge.unlockDescription)
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.92))
+                    .multilineTextAlignment(.center)
+                Button("Keep Training") {
+                    dismissProgressModal()
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.black)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(Color.yellow)
+                .cornerRadius(12)
+            case .identityChanged(let identity):
+                Text("New Identity")
+                    .font(.headline.weight(.bold))
+                    .foregroundColor(.yellow)
+                Text(identity.title)
+                    .font(.title3.weight(.semibold))
+                    .foregroundColor(.white)
+                Text(identity.changeMessage)
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.92))
+                    .multilineTextAlignment(.center)
+                Button("Keep Training") {
+                    dismissProgressModal()
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.black)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(Color.yellow)
+                .cornerRadius(12)
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: 420)
+        .background(Color.black.opacity(0.9))
+        .cornerRadius(16)
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(Color.yellow.opacity(0.35), lineWidth: 1)
+        )
+        .padding(.horizontal, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black.opacity(0.35).ignoresSafeArea())
+        .onTapGesture {}
+    }
+
+    private func stageUnlockMessage(for stage: Int) -> String {
+        switch stage {
+        case 2: return "You're ready to choose actions under pressure."
+        case 3: return "You're ready to decide before the ball arrives."
+        default: return "You've unlocked the next challenge."
+        }
+    }
+
+    private func dismissProgressModal() {
+        withAnimation(.easeIn(duration: 0.16)) {
+            progressModalOpacity = 0
+            progressModalScale = 0.96
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
+            activeProgressModal = nil
+            refreshGuidedProgress()
+        }
+    }
+
+    private func progressKey(_ base: String) -> String {
+        let pid = playerId?.uuidString ?? "global"
+        return "\(base)_\(pid)"
+    }
+
+    private func loadLastSeenTier() -> String? {
+        UserDefaults.standard.string(forKey: progressKey("pba_last_seen_tier"))
+    }
+
+    private func saveLastSeenTier(_ tier: String) {
+        UserDefaults.standard.set(tier, forKey: progressKey("pba_last_seen_tier"))
+    }
+
+    private func loadLastSeenStage() -> Int? {
+        let v = UserDefaults.standard.integer(forKey: progressKey("pba_last_seen_stage"))
+        return v == 0 ? nil : v
+    }
+
+    private func saveLastSeenStage(_ stage: Int) {
+        UserDefaults.standard.set(stage, forKey: progressKey("pba_last_seen_stage"))
+    }
+
+    private func loadLastSeenLoop() -> Int? {
+        let v = UserDefaults.standard.integer(forKey: progressKey("pba_last_seen_loop"))
+        return v == 0 ? nil : v
+    }
+
+    private func saveLastSeenLoop(_ loop: Int) {
+        UserDefaults.standard.set(loop, forKey: progressKey("pba_last_seen_loop"))
+    }
+
+    private func triggerProgressHaptic() {
+#if canImport(UIKit)
+        let generator = UIImpactFeedbackGenerator(style: .light)
+        generator.prepare()
+        generator.impactOccurred()
+#endif
+    }
+
+    private func resetCurriculumForSelectedPlayer() {
+        guidedProgress = GuidedCurriculumEngine.resetCurriculumForPlayer(
+            playerId: playerId,
+            baselineCompleted: false
+        )
+        refreshGuidedProgress()
+    }
+
+    /// 1. Next Training card (top): single dominant guided CTA with stage + path context.
+    private var dailyGoalCard: some View {
+        Group {
+            if needsBaselineAssessment {
+                VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Start Your Training")
+                            .font(.headline.weight(.semibold))
+                            .foregroundColor(.white)
+                        Text("Let’s get your baseline so we can personalize your training. Takes 2 minutes.")
+                            .font(.subheadline)
+                            .foregroundColor(.white.opacity(0.85))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Button {
+                        guard !isNavigatingToTraining else { return }
+                        isNavigatingToTraining = true
+                        isStartTrainingPressed = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                            isStartTrainingPressed = false
+                            router.push(.twoMinuteRoleSelection)
+                            isNavigatingToTraining = false
+                        }
+                    } label: {
+                        Text("Start 2-Minute Assessment")
+                            .font(.headline.weight(.semibold))
+                            .foregroundColor(.black)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16)
+                            .background(Color.yellow)
+                            .cornerRadius(14)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .scaleEffect(isStartTrainingPressed ? 0.98 : 1.0)
+                    .animation(.spring(response: 0.25, dampingFraction: 0.6), value: isStartTrainingPressed)
+                    .disabled(isNavigatingToTraining)
+                    .accessibilityLabel("Start 2-Minute Assessment")
+                    .accessibilityHint("Double tap to run your baseline assessment.")
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Next Training")
+                            .font(.headline.weight(.semibold))
+                            .foregroundColor(.white)
+                        Text(RecommendationEngine.activityTitle(continueTrainingCardActivity))
+                            .font(.subheadline)
+                            .foregroundColor(.white.opacity(0.85))
+                    }
+                    HStack {
+                        Text(nextTrainingStageLabel)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.yellow)
+                        Spacer()
+                        Text("Loop \(guidedProgress.loop)")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.7))
+                    }
+                    trainingPathIndicator
+                    Text("Playing Away From Pressure → Dribble or Pass → One-Touch Passing")
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.7))
+                    Text("Focus: \(focusText)")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.85))
+#if DEBUG
+                    Text("DEBUG: Wedge Difficulty Level \(wedgeDifficultyLevel)")
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.7))
+#endif
+                    Button {
+                        guard !isNavigatingToTraining else { return }
+                        isNavigatingToTraining = true
+                        isStartTrainingPressed = true
+                        let route = routeForTrainNowActivity(continueTrainingCardActivity)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                            isStartTrainingPressed = false
+                            router.push(route)
+                            isNavigatingToTraining = false
+                        }
+                    } label: {
+                        Text("Start Training")
+                            .font(.headline.weight(.semibold))
+                            .foregroundColor(.black)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16)
+                            .background(Color.yellow)
+                            .cornerRadius(14)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .scaleEffect(isStartTrainingPressed ? 0.98 : 1.0)
+                    .animation(.spring(response: 0.25, dampingFraction: 0.6), value: isStartTrainingPressed)
+                    .disabled(isNavigatingToTraining)
+                    .accessibilityLabel("Start Training")
+                    .accessibilityHint("Double tap to continue the guided training path.")
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private var trainingPathIndicator: some View {
+        HStack(spacing: 8) {
+            stageDot(1, title: "AFP")
+            stageConnector
+            stageDot(2, title: "DOP")
+            stageConnector
+            stageDot(3, title: "OTP")
+        }
+    }
+
+    private var currentStageIndex: Int {
+        switch continueTrainingCardActivity {
+        case .awayFromPressure: return 1
+        case .dribbleOrPass: return 2
+        case .oneTouchPassing: return 3
+        case .twoMinuteTest: return 1
+        }
+    }
+
+    private func stageDot(_ stage: Int, title: String) -> some View {
+        let isActive = stage == currentStageIndex
+        let isCompleted = stage < currentStageIndex
+        return HStack(spacing: 4) {
+            Circle()
+                .fill(isActive ? Color.yellow : (isCompleted ? Color.green : Color.white.opacity(0.35)))
+                .frame(width: 10, height: 10)
+            Text(title)
+                .font(.caption2.weight(isActive ? .semibold : .regular))
+                .foregroundColor(isActive ? .yellow : .white.opacity(0.75))
+        }
+    }
+
+    private var stageConnector: some View {
+        Rectangle()
+            .fill(Color.white.opacity(0.25))
+            .frame(height: 1)
+            .frame(maxWidth: .infinity)
     }
 
     /// 2. Decision Speed Score: latest score and improvement since previous session. Uses same source as Player progress (ProgressStore) so both cards stay in sync.
@@ -1360,12 +1925,25 @@ struct IntroView: View {
             Text("Decision Speed Score")
                 .font(.subheadline.weight(.medium))
                 .foregroundColor(.white.opacity(0.9))
-            if let score = homeDecisionSpeedScore {
+            // Important: score 0 is valid and must be displayed. Only nil means no data.
+            switch homeDecisionSpeedScore {
+            case .some(let score):
                 Text("\(score)")
                     .font(.title.weight(.bold))
                     .foregroundColor(.white)
+                if isBaselineDecisionSpeedScore {
+                    Text("Baseline Score")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.yellow)
+                }
+                if score == 0 {
+                    Text("Coach Note: Your decisions are being logged, but they are currently landing in the slow range. Keep training to raise this score.")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.8))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 homeImprovementText
-            } else {
+            case .none:
                 Text("—")
                     .font(.title.weight(.bold))
                     .foregroundColor(.white.opacity(0.7))
@@ -1429,40 +2007,165 @@ struct IntroView: View {
         let acc = dashboardData?.accuracy ?? localLatestScoredSession.flatMap { s in s.decisionsCompleted > 0 ? Double(s.correct) / Double(s.decisionsCompleted) : nil }
         let avgReactionMs = dashboardData?.avgReactionMs ?? localLatestScoredSession.flatMap { $0.avgLatency }.map { $0 * 1000 }
         let fastPercent = dashboardData?.fastPercent ?? localFastPercent
+        let avgSeconds = avgReactionMs.map { $0 / 1000.0 }
+        let decisionZone: String? = avgSeconds.map { t in
+            if t < 0.90 { return "Early" }
+            if t <= 1.10 { return "On Time" }
+            if t <= 1.20 { return "Late" }
+            return "Too Late"
+        }
+        let decisionZoneEmoji: String = {
+            switch decisionZone {
+            case "Early": return "🟢"
+            case "On Time": return "🔵"
+            case "Late": return "🟠"
+            case "Too Late": return "🔴"
+            default: return "⚪"
+            }
+        }()
+        let decisionMessage: String? = {
+            switch decisionZone {
+            case "Late": return "You're close — commit slightly earlier."
+            case "Too Late": return "Decisions are coming too late — scan earlier."
+            case "On Time": return "Good timing — push toward earlier decisions."
+            case "Early": return "Excellent — you're deciding early."
+            default: return nil
+            }
+        }()
+        let nextTargetText: String? = {
+            switch decisionZone {
+            case "Too Late": return "Next Target: Late (< 1.20s)"
+            case "Late": return "Next Target: On Time (< 1.10s)"
+            case "On Time": return "Next Target: Early (< 0.90s)"
+            case "Early": return "Next Target: Keep Early consistently"
+            default: return nil
+            }
+        }()
+        let zoneProgress: Double? = avgSeconds.map { t in
+            let minSec = 0.80
+            let maxSec = 1.30
+            let normalized = (t - minSec) / (maxSec - minSec)
+            return max(0.0, min(1.0, 1.0 - normalized))
+        }
+        let accuracyMessage: String? = {
+            guard let acc else { return nil }
+            if acc >= 0.90, decisionZone == "Late" || decisionZone == "Too Late" {
+                return "Excellent accuracy — now focus on deciding faster."
+            }
+            if acc < 0.75 {
+                return "Slow down slightly to improve decision quality."
+            }
+            return nil
+        }()
+        let latestForwardThinkingPercent: Int? = {
+            let sessions = profileManager.profile(id: playerId)?.sessionResults ?? []
+            guard let latestWithForward = sessions.first(where: { ($0.forwardOpportunityCount ?? 0) > 0 }),
+                  let opp = latestWithForward.forwardOpportunityCount,
+                  let choice = latestWithForward.forwardChoiceCount,
+                  opp > 0 else { return nil }
+            return Int(round(Double(choice) / Double(opp) * 100.0))
+        }()
+        let forwardMessage: String? = {
+            guard let pct = latestForwardThinkingPercent else { return nil }
+            if pct < 50 { return "Look forward more when space is available." }
+            if pct < 70 { return "Good forward intent — keep spotting forward options." }
+            return "Excellent forward thinking."
+        }()
+        let overallSummary: String? = {
+            guard let zone = decisionZone, let acc else { return nil }
+            let accuracyStrong = acc >= 0.85
+            if (zone == "Late" || zone == "Too Late") && accuracyStrong {
+                return "You're accurate, but slightly late. Speed up your decision timing to unlock higher-level play."
+            }
+            if zone == "On Time" && accuracyStrong {
+                return "Good balance: accurate and on time. Push toward earlier decisions."
+            }
+            if zone == "Early" && accuracyStrong {
+                return "Excellent profile: early decisions with strong accuracy."
+            }
+            return "Keep building: improve both timing and decision quality."
+        }()
         return VStack(alignment: .leading, spacing: 10) {
             Text("Performance Breakdown")
                 .font(.subheadline.weight(.medium))
                 .foregroundColor(.white.opacity(0.9))
-            HStack(alignment: .top, spacing: 20) {
-                if let acc = acc {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Accuracy")
+            if let zone = decisionZone, let sec = avgSeconds {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Decision Speed")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.75))
+                    Text("\(decisionZoneEmoji) \(zone) (\(String(format: "%.2fs", sec)))")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white)
+                    if let p = zoneProgress {
+                        decisionZoneProgressBar(progress: p)
+                    }
+                    if let decisionMessage {
+                        Text(decisionMessage)
                             .font(.caption)
-                            .foregroundColor(.white.opacity(0.75))
-                        Text("\(Int(round(acc * 100)))%")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundColor(.white)
+                            .foregroundColor(.white.opacity(0.86))
+                    }
+                    if let nextTargetText {
+                        Text(nextTargetText)
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.yellow.opacity(0.95))
                     }
                 }
-                if let ms = avgReactionMs {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Avg Reaction")
+            }
+
+            if let acc = acc {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Accuracy")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.75))
+                    Text("🟢 \(Int(round(acc * 100)))%")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white)
+                    if let accuracyMessage {
+                        Text(accuracyMessage)
                             .font(.caption)
-                            .foregroundColor(.white.opacity(0.75))
-                        Text("\(Int(round(ms))) ms")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundColor(.white)
+                            .foregroundColor(.white.opacity(0.86))
                     }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Forward Thinking")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.75))
+                if let forwardPct = latestForwardThinkingPercent {
+                    Text("\(forwardPct)%")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white)
+                    if let forwardMessage {
+                        Text(forwardMessage)
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.86))
+                    }
+                } else {
+                    Text("Complete more sessions to unlock")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.75))
+                }
+            }
+
+            if let overallSummary {
+                Text(overallSummary)
+                    .font(.caption)
+                    .foregroundColor(.yellow.opacity(0.95))
+                    .padding(.top, 2)
+            }
+
+            HStack(spacing: 12) {
+                if let score = homeDecisionSpeedScore {
+                    Text("Score: \(score)")
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.65))
                 }
                 if let fast = fastPercent {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Fast Decision %")
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.75))
-                        Text("\(Int(round(fast * 100)))%")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundColor(.white)
-                    }
+                    Text("Fast %: \(Int(round(fast * 100)))%")
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.65))
                 }
             }
             if acc == nil && avgReactionMs == nil && fastPercent == nil {
@@ -1472,6 +2175,54 @@ struct IntroView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func decisionZoneProgressBar(progress: Double) -> some View {
+        GeometryReader { geo in
+            let width = max(geo.size.width, 1)
+            let markerX = CGFloat(progress) * width
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.white.opacity(0.15))
+                    .frame(height: 8)
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.red.opacity(0.9),
+                                Color.orange.opacity(0.9),
+                                Color.blue.opacity(0.9),
+                                Color.green.opacity(0.9)
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(height: 8)
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: 12, height: 12)
+                    .overlay(Circle().stroke(Color.black.opacity(0.25), lineWidth: 1))
+                    .offset(x: max(0, min(width - 12, markerX - 6)))
+            }
+        }
+        .frame(height: 12)
+        .overlay(
+            HStack {
+                Text("Too Late")
+                Spacer()
+                Text("Late")
+                Spacer()
+                Text("On Time")
+                Spacer()
+                Text("Early")
+            }
+            .font(.caption2)
+            .foregroundColor(.white.opacity(0.72))
+            .offset(y: 12),
+            alignment: .bottom
+        )
+        .padding(.bottom, 12)
     }
 
     /// 5. Training Streak: current streak in days.
@@ -1587,7 +2338,7 @@ struct IntroView: View {
         }
     }
 
-    /// Personal Bests: Fastest Decision Speed (with band + explanation), Best Pressure Escape Rate, Best Forward Intent.
+    /// Personal Bests: Fastest Decision Speed (with band + explanation), Best Pressure Escape Rate, Best Forward Thinking.
     private var personalBestsCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("🏆 Personal Bests")
@@ -1595,7 +2346,7 @@ struct IntroView: View {
                 .foregroundColor(.white)
             personalBestDecisionSpeedRow(seconds: profileManager.fastestDecisionSpeedSeconds())
             personalBestRow(label: "Best Pressure Escape Rate", value: profileManager.bestPressureEscapePercent().map { String(format: "%.0f%%", $0) })
-            personalBestRow(label: "Best Forward Intent", value: profileManager.bestForwardIntentPercent().map { String(format: "%.0f%%", $0) })
+            personalBestRow(label: "Best Forward Thinking", value: profileManager.bestForwardIntentPercent().map { String(format: "%.0f%%", $0) })
         }
     }
 
@@ -1634,18 +2385,148 @@ struct IntroView: View {
         }
     }
 
-    /// Top of Home: Streak and greeting only. Primary action moved to Recommended Training hero.
+    /// Top bar: left player selector, right home icon.
     private var homeTopSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(dayStreakTitle)
-                .font(.headline.weight(.semibold))
-                .foregroundColor(.white)
-            Text("Hi, \(playerStore.selectedPlayer?.name ?? "Player")")
-                .font(.title3.weight(.medium))
-                .foregroundColor(.white.opacity(0.95))
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Button {
+                    hasSeenPlayerSwitcherTooltip = true
+                    showPlayersSheet = true
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(playerStore.selectedPlayer?.name ?? "Player")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.white)
+                        Text("▼")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.white.opacity(0.8))
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.white.opacity(0.12))
+                    .cornerRadius(10)
+                }
+                .buttonStyle(PlainButtonStyle())
+                Spacer()
+            }
+            if let identity = currentPlayerIdentity {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(identity.emojiTitle)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.yellow)
+                    Text(identity.shortDescription)
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.78))
+                    if let trendingIdentity {
+                        Text("Trending toward \(trendingIdentity.title)")
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.6))
+                    }
+                }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
+        .padding(.vertical, 8)
+    }
+
+    private var quickPerformanceSnapshotSection: some View {
+        let sec = snapshotDecisionSpeedSeconds
+        let tier: String = {
+            guard let s = sec else { return "—" }
+            if s < 0.85 { return "Elite" }
+            if s < 1.10 { return "Fast" }
+            if s <= 1.35 { return "Average" }
+            return "Slow"
+        }()
+        let trend = (dashboardData?.trendScores).flatMap { $0.isEmpty ? nil : $0 } ?? localTrendScores
+        return VStack(alignment: .leading, spacing: 10) {
+            Text("Quick Performance Snapshot")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.white)
+            HStack(spacing: 10) {
+                Text("Decision Speed:")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.75))
+                Text(sec.map { String(format: "%.2fs", $0) } ?? "—")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                Text("•")
+                    .foregroundColor(.white.opacity(0.5))
+                Text(tier)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.yellow)
+            }
+            if !trend.isEmpty {
+                ProgressLineChartView(
+                    title: "",
+                    points: trend.enumerated().map { ChartDataPoint(sessionIndex: $0.offset + 1, value: Double($0.element)) },
+                    valueLabel: "",
+                    yAxisRange: nil,
+                    emptyStateMessage: nil
+                )
+                .padding(.horizontal, -16)
+                .padding(.vertical, -8)
+            } else {
+                Text("Complete sessions to see trend.")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.6))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var stageProgressSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Stage Progress")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.white)
+            if needsBaselineAssessment {
+                Text("Stage not set")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundColor(.white.opacity(0.9))
+                Text("Complete your 2-minute assessment to begin.")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.7))
+            } else {
+                Text(nextTrainingStageLabel)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundColor(.yellow)
+                trainingPathIndicator
+                Text(currentStageIndex == 3 ? "Stage 3 → Loop next" : "Stage \(currentStageIndex) → Stage \(currentStageIndex + 1)")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.75))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var secondaryActionsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("More")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.white.opacity(0.9))
+            otherActivityRow(title: "View Path", subtitle: "See curriculum stages") {
+                router.push(.curriculum)
+            }
+            otherActivityRow(title: "View Progress", subtitle: "Check trends and report card") {
+                router.push(.progress)
+            }
+            otherActivityRow(title: "Achievements", subtitle: "See earned and locked badges") {
+                router.push(.achievements)
+            }
+            otherActivityRow(title: "Coach Remote", subtitle: "Open partner training remote") {
+                router.push(.coachRemote)
+            }
+            otherActivityRow(title: "Scan Warmups", subtitle: "Open warmup activities") {
+                router.push(.warmupHub)
+            }
+#if DEBUG
+            otherActivityRow(title: "Reset curriculum for selected player", subtitle: "Debug: clear guided stage/loop/recommendation") {
+                resetCurriculumForSelectedPlayer()
+            }
+#endif
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// Largest element on screen: Recommended Training title + one primary CTA button.
@@ -1702,11 +2583,15 @@ struct IntroView: View {
                 router.push(.progress)
             } label: {
                 Text("View Progress")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.black)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundColor(.white.opacity(0.9))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
-                    .background(Color.yellow)
+                    .background(Color.white.opacity(0.08))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                    )
                     .cornerRadius(12)
                     .contentShape(Rectangle())
             }
@@ -1715,47 +2600,28 @@ struct IntroView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// Other activities in a smaller list: Progress, 2-Minute Test, Curriculum, Daily Training, Personal Bests, Warmups.
+    /// Other activities in a smaller list. These are secondary to the guided Next Training action.
     private var otherActivitiesSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Other Activities")
+            Text("Other Activities (Secondary)")
                 .font(.subheadline.weight(.semibold))
                 .foregroundColor(.white.opacity(0.9))
 
             VStack(spacing: 8) {
+                otherActivityRow(title: "View Path", subtitle: "See full progression and current stage") {
+                    router.push(.curriculum)
+                }
+                otherActivityRow(title: "Coach Remote", subtitle: "Open remote controls for partner training") {
+                    router.push(.coachRemote)
+                }
                 otherActivityRow(title: "2-Minute Test", subtitle: "Benchmark your decision speed") {
                     router.push(.twoMinuteRoleSelection)
-                }
-                Button {
-                    router.push(.curriculum)
-                } label: {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Perception Training Path")
-                                .font(.footnote.weight(.medium))
-                                .foregroundColor(.white.opacity(0.9))
-                            Text("Playing Away From Pressure → Dribble or Pass → One-Touch Passing")
-                                .font(.caption2)
-                                .foregroundColor(.white.opacity(0.6))
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.caption2)
-                            .foregroundColor(.white.opacity(0.5))
-                    }
-                    .padding(.vertical, 8)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(PlainButtonStyle())
-                otherActivityRow(title: "Recommended Daily Training", subtitle: "About 10 min · 3 blocks") {
-                    router.push(routeForTrainNowActivity(dailyPlanBlocks.first ?? .awayFromPressure))
                 }
                 otherActivityRow(title: "Personal Bests", subtitle: "Fastest decision speed, escape rate, forward intent") {
                     router.push(.progress)
                 }
                 Button {
-                    warmupDisplayMode = .colors
-                    router.push(.warmup(warmupDisplayMode))
+                    router.push(.warmupHub)
                 } label: {
                     HStack {
                         Text("Scan Warmups")
@@ -1847,8 +2713,7 @@ struct IntroView: View {
 
     private func warmupTile(_ title: String, mode: DisplayMode) -> some View {
         Button {
-            warmupDisplayMode = mode
-            router.push(.warmup(warmupDisplayMode))
+            router.push(.warmup(mode))
         } label: {
             Text(title)
                 .font(.caption.weight(.medium))
@@ -2087,6 +2952,7 @@ struct TwoMinuteRoleSelectionView: View {
     @EnvironmentObject private var playerStore: PlayerStore
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
     @EnvironmentObject private var router: AppRouter
+    @State private var showTrainingModeSelection = false
 
     var body: some View {
         VStack(spacing: 24) {
@@ -2109,7 +2975,7 @@ struct TwoMinuteRoleSelectionView: View {
 
             VStack(spacing: 16) {
                 Button {
-                    router.push(.trainingModeSelection(activityTitle: "2-Minute Test"))
+                    showTrainingModeSelection = true
                 } label: {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
@@ -2176,6 +3042,19 @@ struct TwoMinuteRoleSelectionView: View {
         .preferredColorScheme(.dark)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(isPresented: $showTrainingModeSelection) {
+            TrainingModeSelectionView(activityTitle: "2-Minute Test") { mode in
+                TwoMinuteTestSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                    .environmentObject(progressStore)
+                    .environmentObject(playerStore)
+                    .environmentObject(popToRootTrigger)
+                    .environmentObject(router)
+            }
+            .environmentObject(progressStore)
+            .environmentObject(playerStore)
+            .environmentObject(popToRootTrigger)
+            .environmentObject(router)
+        }
     }
 }
 
@@ -2189,6 +3068,7 @@ struct TwoMinuteTestSetupView: View {
     @EnvironmentObject private var router: AppRouter
     @AppStorage("hasSeenTwoMinuteOnboarding") private var hasSeenTwoMinuteOnboarding = false
     @State private var showOnboarding = false
+    @State private var navigateToGetReady = false
 
     var body: some View {
         VStack(spacing: 18) {
@@ -2219,7 +3099,7 @@ struct TwoMinuteTestSetupView: View {
 
             Button {
                 popToRootTrigger.request = false
-                router.push(.twoMinuteGetReady(mode: mode))
+                navigateToGetReady = true
             } label: {
                 Text("Continue")
                     .font(.system(size: 20, weight: .bold, design: .rounded))
@@ -2251,15 +3131,12 @@ struct TwoMinuteTestSetupView: View {
         .preferredColorScheme(.dark)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    router.popToRoot()
-                } label: {
-                    Image(systemName: "house.fill")
-                }
-                .foregroundColor(.white.opacity(0.9))
-            }
+        .navigationDestination(isPresented: $navigateToGetReady) {
+            TwoMinuteGetReadyView(mode: mode, config: TwoMinuteTestConfig.baseline, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
         }
         .onAppear {
             if !hasSeenTwoMinuteOnboarding { showOnboarding = true }
@@ -2304,16 +3181,6 @@ struct TwoMinuteGetReadyView: View {
                 ActivityInstructionView(activity: .twoMinuteTest) {
                     phase = .session
                 }
-            }
-        }
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showLeaveAlert = true
-                } label: {
-                    Image(systemName: "house.fill")
-                }
-                .foregroundColor(.white.opacity(0.9))
             }
         }
         .alert("Leave training?", isPresented: $showLeaveAlert) {
@@ -2476,9 +3343,72 @@ private struct ScanningActivitiesSectionView: View {
     }
 }
 
+private struct WarmupHubView: View {
+    @EnvironmentObject private var router: AppRouter
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Scan Warmups")
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .foregroundColor(.white)
+
+                Text("Choose a warmup. Each one opens its own setup screen with customization options.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.8))
+
+                VStack(spacing: 10) {
+                    warmupRow("Color Scan", mode: .colors)
+                    warmupRow("Number Scan", mode: .numbers)
+                    warmupRow("Arrow Scan", mode: .colorsArrows)
+                    warmupRow("Lane Scan", mode: .lanes)
+                    warmupRow("Colors + Numbers", mode: .colorsNumbers)
+                }
+            }
+            .padding(20)
+        }
+        .background(
+            LinearGradient(
+                gradient: Gradient(colors: [
+                    Color(red: 0.05, green: 0.05, blue: 0.1),
+                    Color(red: 0.1, green: 0.1, blue: 0.15)
+                ]),
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+        )
+        .navigationTitle("Warmups")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func warmupRow(_ title: String, mode: DisplayMode) -> some View {
+        Button {
+            router.push(.warmup(mode))
+        } label: {
+            HStack {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.7))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 14)
+            .background(Color.white.opacity(0.08))
+            .cornerRadius(12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+}
+
 struct MainView: View {
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
+    let showModeSelection: Bool
     
     @State private var selectedColors: [Color] = []
     @State private var selectedNumbers: Set<Int> = []
@@ -2584,9 +3514,10 @@ struct MainView: View {
 
     let availableLanes = ["Left", "Center", "Right"]
     
-    init(settingsViewModel: SettingsViewModel, profileManager: UserProfileManager, selectedColors: [Color] = [], displayMode: DisplayMode = .colors, changeInterval: Double = 1.5, selectedNumbers: Set<Int> = []) {
+    init(settingsViewModel: SettingsViewModel, profileManager: UserProfileManager, selectedColors: [Color] = [], displayMode: DisplayMode = .colors, changeInterval: Double = 1.5, selectedNumbers: Set<Int> = [], showModeSelection: Bool = true) {
         self.settingsViewModel = settingsViewModel
         self.profileManager = profileManager
+        self.showModeSelection = showModeSelection
         self.selectedColors = selectedColors
         self.displayMode = displayMode
         self.changeInterval = changeInterval
@@ -2713,14 +3644,16 @@ struct MainView: View {
                         }
                         .padding(.horizontal)
                         
-                        // Mode Selection
-                        ScanningActivitiesSectionView(
-                            displayMode: $displayMode,
-                            selectedNumbers: $selectedNumbers,
-                            selectedLanes: $selectedLanes,
-                            selectedColors: $selectedColors,
-                            selectedBeepInterval: $selectedBeepInterval
-                        )
+                        // Mode selection is shown only in the full warmup browser.
+                        if showModeSelection {
+                            ScanningActivitiesSectionView(
+                                displayMode: $displayMode,
+                                selectedNumbers: $selectedNumbers,
+                                selectedLanes: $selectedLanes,
+                                selectedColors: $selectedColors,
+                                selectedBeepInterval: $selectedBeepInterval
+                            )
+                        }
                             
                             // Number Color Selection (for modes that use numbers)
                             if displayMode == .numbers || displayMode == .colorsNumbers {
@@ -4013,12 +4946,21 @@ struct MainView: View {
                         .padding(.vertical)
                     }
                 }
-                .navigationTitle("Select Your Options")
+                .navigationTitle(setupTitle)
                 .navigationBarTitleDisplayMode(.large)
                 .toolbarColorScheme(.dark, for: .navigationBar)
                 .toolbarBackground(.visible, for: .navigationBar)
                 .toolbarBackground(Color.clear, for: .navigationBar)
                 .foregroundColor(.white)
+                .safeAreaInset(edge: .top) {
+                    if !showModeSelection {
+                        Text(setupSubtitle)
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.8))
+                            .padding(.horizontal, 20)
+                            .padding(.top, 4)
+                    }
+                }
                 .sheet(isPresented: $showActivities) {
                     ActivitiesGuideView(selectedMode: displayMode)
                 }
@@ -4084,6 +5026,34 @@ struct MainView: View {
         case .fourGoalGame:
             // 4-Goal Game works with default values
             return true
+        }
+    }
+
+    private var setupTitle: String {
+        switch displayMode {
+        case .colors: return "Color Scan Setup"
+        case .numbers: return "Number Scan Setup"
+        case .colorsArrows: return "Arrow Scan Setup"
+        case .lanes: return "Lane Scan Setup"
+        case .colorsNumbers: return "Colors + Numbers Setup"
+        case .scanningGame: return "Dribble or Pass Setup"
+        case .pressureResponse: return "Playing Away From Pressure Setup"
+        case .oneTouchPassing: return "One-Touch Passing Setup"
+        case .fourGoalGame: return "4-Goal Game Setup"
+        }
+    }
+
+    private var setupSubtitle: String {
+        switch displayMode {
+        case .colors: return "Choose colors and timing before you begin."
+        case .numbers: return "Choose number set, colors, and timing."
+        case .colorsArrows: return "Choose arrows, colors, and timing."
+        case .lanes: return "Choose lanes, colors, and movement speed."
+        case .colorsNumbers: return "Combine color + number cues with your preferred timing."
+        case .scanningGame: return "Set team colors, player mix, and speed."
+        case .pressureResponse: return "Set pressure-response colors and speed."
+        case .oneTouchPassing: return "Set one-touch passing colors and movement settings."
+        case .fourGoalGame: return "Set gate colors and movement settings."
         }
     }
     
@@ -4257,6 +5227,10 @@ struct DisplayView: View {
     @State private var showNumberOrArrow: Bool = false
     @State private var beepTimer: Timer?
     @State private var isBeepScheduled: Bool = false // Prevent multiple concurrent beep schedules
+    @State private var isBeepLockActive: Bool = false
+    @State private var resumeColorTimerWorkItem: DispatchWorkItem?
+    private let beepLockDuration: TimeInterval = 0.20
+    private let cueVisibleDuration: TimeInterval = 1.40
         
         // Session tracking
         @State private var sessionStartTime: Date?
@@ -5093,6 +6067,8 @@ struct DisplayView: View {
     private func startTimer() {
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: changeInterval, repeats: true) { _ in
+            // Avoid changing visual cues while the beep is playing.
+            if isBeepLockActive { return }
             if displayMode == .colors || displayMode == .colorsNumbers || displayMode == .colorsArrows {
                 currentColor = getRandomColor(excluding: currentColor, from: selectedColors)
             } else if displayMode == .numbers {
@@ -5141,7 +6117,11 @@ struct DisplayView: View {
             
             // Play beep (PBA training beep)
             if soundEnabled {
+                isBeepLockActive = true
                 PBABeepSoundManager.shared.play(soundEnabled: true)
+                DispatchQueue.main.asyncAfter(deadline: .now() + beepLockDuration) {
+                    isBeepLockActive = false
+                }
             }
             
             // Show number or arrow for specific modes
@@ -5150,17 +6130,19 @@ struct DisplayView: View {
                     currentNumber = randomNumber
                 }
                 showNumberOrArrow = true
+                suspendColorTimerForCue()
                 
-                // Hide after 1 second
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                // Hide cue after configured visibility window.
+                DispatchQueue.main.asyncAfter(deadline: .now() + cueVisibleDuration) {
                     showNumberOrArrow = false
                 }
             } else if displayMode == .colorsArrows {
                 currentArrowDirection = selectedArrows.randomElement() ?? "arrow.up"
                 showNumberOrArrow = true
+                suspendColorTimerForCue()
                 
-                // Hide after 1 second
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                // Hide cue after configured visibility window.
+                DispatchQueue.main.asyncAfter(deadline: .now() + cueVisibleDuration) {
                     showNumberOrArrow = false
                 }
             }
@@ -5176,6 +6158,19 @@ struct DisplayView: View {
         beepTimer?.invalidate()
         beepTimer = nil
         isBeepScheduled = false
+    }
+
+    private func suspendColorTimerForCue() {
+        guard displayMode == .colorsNumbers || displayMode == .colorsArrows else { return }
+        timer?.invalidate()
+        timer = nil
+        resumeColorTimerWorkItem?.cancel()
+        let work = DispatchWorkItem {
+            guard isActive else { return }
+            self.startTimer()
+        }
+        resumeColorTimerWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + cueVisibleDuration, execute: work)
     }
     
     private func scheduleRandomBeep() {
@@ -5194,6 +6189,8 @@ struct DisplayView: View {
     }
     
     private func stopTimer() {
+        resumeColorTimerWorkItem?.cancel()
+        resumeColorTimerWorkItem = nil
         countdownTimer?.invalidate()
         countdownTimer = nil
         timer?.invalidate()

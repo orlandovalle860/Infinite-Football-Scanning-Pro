@@ -6,6 +6,9 @@
 //
 
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 private func activityDisplayName(_ kind: ActivityKind) -> String {
     switch kind {
@@ -33,6 +36,10 @@ struct SessionSummaryView: View {
     var isNewPersonalBest: Bool = false
     /// New personal bests from this block (decision speed, pressure escape, forward intent). When non-empty, show celebration banner.
     var newPersonalBests: [NewPersonalBest] = []
+    /// XP earned from this completed session.
+    var xpEarned: Int = 0
+    /// Newly unlocked badges from this completed session.
+    var newlyUnlockedBadges: [PlayerBadge] = []
     /// When set (e.g. from block summary), "Back to Home" calls this to pop to Progress instead of one level.
     var onBackToHome: (() -> Void)? = nil
     @ObservedObject var profileManager: UserProfileManager
@@ -46,9 +53,157 @@ struct SessionSummaryView: View {
     @State private var showShare = false
     @State private var shareReportItems: [Any] = []
     @State private var navigateToTrainAnother = false
+    @State private var navigateToProgress = false
+    @State private var decisionScoreScale: CGFloat = 0.8
+    @State private var animatedXPEarned: Int = 0
+    @State private var showBadgeUnlockAnimation = false
 
     private var activityName: String { activityDisplayName(session.activityType) }
     private var coachInsightText: String { CoachInsightGenerator.coachInsight(for: session) }
+    private var avgReactionTimeSecondsDisplay: String {
+        String(format: "%.2fs", session.avgDecisionTime ?? 0)
+    }
+    private var accuracyPercentValue: Int {
+        guard session.totalReps > 0 else { return 0 }
+        return Int(round(Double(session.correctCount) / Double(session.totalReps) * 100.0))
+    }
+    private var accuracyDisplayText: String {
+        "\(session.correctCount)/\(session.totalReps) (\(accuracyPercentValue)%)"
+    }
+    private var accuracyTierLabel: String {
+        if accuracyPercentValue >= 90 { return "Elite" }
+        if accuracyPercentValue >= 75 { return "Good" }
+        return "Needs Work"
+    }
+    private var decisionSpeedTierLabel: String {
+        let t = session.avgDecisionTime ?? 9
+        if t < 0.85 { return "Elite" }
+        if t < 1.10 { return "Fast" }
+        if t <= 1.35 { return "Average" }
+        return "Slow"
+    }
+    private var decisionSpeedTierScore: Int {
+        let t = session.avgDecisionTime ?? 9
+        if t < 0.85 { return 3 }      // Elite
+        if t < 1.10 { return 2 }      // Fast
+        if t <= 1.35 { return 1 }     // Average
+        return 0                      // Slow
+    }
+    private var avgDecisionTimeSeconds: Double {
+        session.avgDecisionTime ?? 0
+    }
+    private var decisionSpeedZone: String {
+        let t = avgDecisionTimeSeconds
+        if t < 0.90 { return "Early" }
+        if t <= 1.10 { return "On Time" }
+        if t <= 1.20 { return "Slightly Late" }
+        return "Too Late"
+    }
+    private var decisionSpeedHeadline: String {
+        switch decisionSpeedZone {
+        case "Early": return "Early Decisions"
+        case "On Time": return "On-Time Decisions"
+        case "Slightly Late": return "Slightly Late Decisions"
+        default: return "Too Late"
+        }
+    }
+    private var decisionSpeedZoneEmoji: String {
+        switch decisionSpeedZone {
+        case "Early": return "🟢"
+        case "On Time": return "🔵"
+        case "Slightly Late": return "🟠"
+        default: return "🔴"
+        }
+    }
+    private var decisionSpeedCoachingMessage: String {
+        switch decisionSpeedZone {
+        case "Early": return "Excellent — you're deciding early."
+        case "On Time": return "Good timing — push toward earlier decisions."
+        case "Slightly Late": return "You're reading it well, but committing slightly late."
+        default: return "You're waiting too long — decide earlier."
+        }
+    }
+    private var decisionSpeedNextTarget: String {
+        switch decisionSpeedZone {
+        case "Too Late": return "Next Target: Slightly Late (< 1.20s)"
+        case "Slightly Late": return "Next Target: On Time (< 1.10s)"
+        case "On Time": return "Next Target: Early (< 0.90s)"
+        default: return "Next Target: Keep Early consistency"
+        }
+    }
+    /// Maps avg decision time to a left-to-right marker:
+    /// left=Too Late, right=Early.
+    private var decisionSpeedZoneProgress: Double {
+        let minSec = 0.75
+        let maxSec = 1.35
+        let normalized = (avgDecisionTimeSeconds - minSec) / (maxSec - minSec)
+        return max(0.0, min(1.0, 1.0 - normalized))
+    }
+    private var forwardThinkingStats: (choices: Int, opportunities: Int, percent: Int, tier: String)? {
+        guard let opp = session.forwardOpportunityCount, opp > 0,
+              let choice = session.forwardChoiceCount else { return nil }
+        let pct = Int(round(Double(choice) / Double(opp) * 100.0))
+        let tier: String
+        if pct >= 70 { tier = "Elite" }
+        else if pct >= 50 { tier = "Positive" }
+        else { tier = "Safe" }
+        return (choice, opp, pct, tier)
+    }
+    private var forwardThinkingTierScore: Int? {
+        guard let f = forwardThinkingStats else { return nil }
+        if f.percent >= 70 { return 3 }      // Elite
+        if f.percent >= 50 { return 2 }      // Positive
+        return 1                             // Safe
+    }
+    private var accuracyTierScore: Int {
+        if accuracyPercentValue >= 90 { return 3 }   // Elite
+        if accuracyPercentValue >= 75 { return 2 }   // Good
+        return 1                                     // Needs Work
+    }
+    private var keyInsight: (focus: String, strength: String?) {
+        var metrics: [(name: String, score: Int)] = [
+            ("Decision Speed", decisionSpeedTierScore),
+            ("Accuracy", accuracyTierScore)
+        ]
+        if let forwardScore = forwardThinkingTierScore {
+            metrics.append(("Forward Thinking", forwardScore))
+        }
+        let sorted = metrics.sorted { $0.score < $1.score }
+        let weakest = sorted.first?.name ?? "Decision Speed"
+        let strongest = sorted.last?.name
+        let strength = (weakest == strongest) ? nil : strongest
+        return (focus: weakest, strength: strength)
+    }
+    private var keyInsightLine: String {
+        let insight = keyInsight
+        let focusScore = [
+            "Decision Speed": decisionSpeedTierScore,
+            "Accuracy": accuracyTierScore,
+            "Forward Thinking": forwardThinkingTierScore ?? 2
+        ][insight.focus] ?? 2
+        if focusScore <= 1 {
+            return "Focus Next: \(insight.focus)"
+        }
+        if let strength = insight.strength {
+            return "Strength: \(strength)"
+        }
+        return "Focus Next: \(insight.focus)"
+    }
+    private var progressionMessage: String? {
+        let progress = GuidedCurriculumEngine.currentProgress(playerId: session.playerID)
+        let accuracy = Double(accuracyPercentValue)
+        let avg = session.avgDecisionTime ?? 9
+        let forwardPct = forwardThinkingStats?.percent
+        switch progress.stage {
+        case 1:
+            if accuracy >= 65, avg <= 1.35 { return "You're close to Stage 2." }
+        case 2:
+            if accuracy >= 65, avg <= 1.20, (forwardPct ?? 0) >= 35 { return "You're close to Stage 3." }
+        default:
+            if accuracy >= 70, avg <= 1.05 { return "You're close to the next loop." }
+        }
+        return nil
+    }
 
     /// Display-only Decision Speed Score (0–100) derived from session correctness and avg reaction time. No backend change.
     private var displayDecisionSpeedScore: Int? {
@@ -56,7 +211,14 @@ struct SessionSummaryView: View {
         let ms = Int((session.avgDecisionTime ?? 1.0) * 1000)
         let reactionTimesMs = [Int](repeating: ms, count: session.totalReps)
         let correct = (0..<session.correctCount).map { _ in true } + (0..<(session.totalReps - session.correctCount)).map { _ in false }
-        return DecisionSpeedScore.sessionScore(reactionTimesMs: reactionTimesMs, correct: correct)
+        switch session.activityType {
+        case .dribbleOrPass:
+            return DecisionSpeedScore.dribbleOrPassSessionScore(reactionTimesMs: reactionTimesMs, correct: correct)
+        case .oneTouchPassing:
+            return DecisionSpeedScore.oneTouchSessionScore(reactionTimesMs: reactionTimesMs, correct: correct)
+        case .awayFromPressure, .twoMinuteTest:
+            return DecisionSpeedScore.sessionScore(reactionTimesMs: reactionTimesMs, correct: correct)
+        }
     }
 
     private var newPersonalBestBanner: some View {
@@ -78,6 +240,29 @@ struct SessionSummaryView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
         .background(Color.yellow.opacity(0.15))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.yellow.opacity(0.5), lineWidth: 1)
+        )
+        .cornerRadius(12)
+        .opacity(showBadgeUnlockAnimation ? 1 : 0)
+        .scaleEffect(showBadgeUnlockAnimation ? 1.0 : 0.94)
+    }
+
+    private var badgesUnlockedBanner: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Badge Unlocked!")
+                .font(.headline.weight(.semibold))
+                .foregroundColor(.yellow)
+            ForEach(newlyUnlockedBadges, id: \.rawValue) { badge in
+                Text("• \(badge.title)")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.95))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(Color.white.opacity(0.08))
         .overlay(
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color.yellow.opacity(0.5), lineWidth: 1)
@@ -124,15 +309,9 @@ struct SessionSummaryView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 decisionSpeedHeroSection
-
-                performanceStatSections
-
-                if session.activityType == .awayFromPressure {
-                    pressureEscapesCard
-                }
-                biasCard
-
-                coachInsightCard
+                coreMetricsSection
+                keyInsightCard
+                xpFeedbackCard
 
                 buttonsSection
             }
@@ -154,12 +333,20 @@ struct SessionSummaryView: View {
         }
         .onAppear {
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
+            runFeedbackAnimations()
         }
         .sheet(isPresented: $showShare) {
             ShareSheet(items: shareReportItems)
         }
         .navigationDestination(isPresented: $navigateToTrainAnother) {
             trainAnotherDestination
+        }
+        .navigationDestination(isPresented: $navigateToProgress) {
+            PBAProgressView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
         }
     }
 
@@ -171,13 +358,54 @@ struct SessionSummaryView: View {
                 .foregroundColor(.white.opacity(0.8))
                 .frame(maxWidth: .infinity)
 
+            Text(decisionSpeedHeadline)
+                .font(.headline.weight(.semibold))
+                .foregroundColor(.white)
+
+            Text("\(decisionSpeedZoneEmoji) \(decisionSpeedZone) (\(avgReactionTimeSecondsDisplay))")
+                .font(.title3.weight(.bold))
+                .foregroundColor(.white)
+
+            HStack(spacing: 24) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Avg Decision Time")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.75))
+                    Text(avgReactionTimeSecondsDisplay)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Accuracy")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.75))
+                    Text("\(accuracyPercentValue)%")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white)
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity)
+
+            decisionSpeedZoneBar
+
+            Text(decisionSpeedCoachingMessage)
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.9))
+                .multilineTextAlignment(.center)
+
+            Text(decisionSpeedNextTarget)
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.yellow.opacity(0.95))
+
             if let score = displayDecisionSpeedScore {
                 Text("\(score)")
-                    .font(.system(size: 56, weight: .bold, design: .rounded))
-                    .foregroundColor(.white)
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .foregroundColor(.white.opacity(0.7))
+                    .scaleEffect(decisionScoreScale)
                 Text("Decision Speed Score")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundColor(.white.opacity(0.8))
+                    .font(.caption.weight(.medium))
+                    .foregroundColor(.white.opacity(0.6))
 
                 if !newPersonalBests.isEmpty {
                     newPersonalBestBanner
@@ -186,37 +414,102 @@ struct SessionSummaryView: View {
                         .font(.subheadline.weight(.semibold))
                         .foregroundColor(.yellow)
                 }
+                if !newlyUnlockedBadges.isEmpty {
+                    badgesUnlockedBanner
+                }
 
-                Text("Next Target: \(score + 1)")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundColor(.yellow.opacity(0.95))
             } else {
                 Text("—")
-                    .font(.system(size: 56, weight: .bold, design: .rounded))
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
                     .foregroundColor(.white.opacity(0.5))
                 Text("Decision Speed Score")
-                    .font(.subheadline.weight(.medium))
+                    .font(.caption.weight(.medium))
                     .foregroundColor(.white.opacity(0.7))
                 if !newPersonalBests.isEmpty { newPersonalBestBanner }
+                if !newlyUnlockedBadges.isEmpty { badgesUnlockedBanner }
             }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
     }
 
-    /// 2. Performance stats in clean sections: Average Reaction Time, Correct Decisions.
-    private var performanceStatSections: some View {
-        let prev = progressStore.previous(session.activityType, playerId: session.playerID)
-        return VStack(spacing: 16) {
+    private var decisionSpeedZoneBar: some View {
+        GeometryReader { geo in
+            let width = max(geo.size.width, 1)
+            let markerX = CGFloat(decisionSpeedZoneProgress) * width
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.white.opacity(0.15))
+                    .frame(height: 8)
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.red.opacity(0.9),
+                                Color.orange.opacity(0.9),
+                                Color.blue.opacity(0.9),
+                                Color.green.opacity(0.9)
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(height: 8)
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: 14, height: 14)
+                    .overlay(Circle().stroke(Color.black.opacity(0.25), lineWidth: 1))
+                    .offset(x: max(0, min(width - 14, markerX - 7)))
+            }
+        }
+        .frame(height: 14)
+        .padding(.horizontal, 6)
+        .overlay(
+            HStack {
+                Text("Too Late")
+                Spacer()
+                Text("Late")
+                Spacer()
+                Text("On Time")
+                Spacer()
+                Text("Early")
+            }
+            .font(.caption2.weight(.medium))
+            .foregroundColor(.white.opacity(0.75))
+            .offset(y: 14),
+            alignment: .bottom
+        )
+        .padding(.bottom, 14)
+    }
+
+    /// 2) Core Metrics: Decision Accuracy, Forward Thinking, Decision Speed.
+    private var coreMetricsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Core Metrics")
+                .font(.headline.weight(.semibold))
+                .foregroundColor(.white)
             statSection(
-                label: "Average Reaction Time",
-                value: session.avgDecisionTime.map { String(format: "%.2fs", $0) } ?? "—",
-                improvement: reactionTimeImprovement(previous: prev)
+                label: "Decision Accuracy",
+                value: "\(accuracyDisplayText) • \(accuracyTierLabel)",
+                improvement: nil
             )
+            if let f = forwardThinkingStats {
+                statSection(
+                    label: "Forward Thinking",
+                    value: "\(f.choices)/\(f.opportunities) (\(f.percent)%) • \(f.tier)",
+                    improvement: nil
+                )
+            } else {
+                statSection(
+                    label: "Forward Thinking",
+                    value: "No forward opportunities this session",
+                    improvement: nil
+                )
+            }
             statSection(
-                label: "Correct Decisions",
-                value: "\(session.correctCount) / \(session.totalReps)",
-                improvement: correctDecisionsImprovement(previous: prev)
+                label: "Decision Speed",
+                value: "\(avgReactionTimeSecondsDisplay) • \(decisionSpeedTierLabel)",
+                improvement: nil
             )
         }
     }
@@ -391,12 +684,48 @@ struct SessionSummaryView: View {
         .cornerRadius(14)
     }
 
+    private var keyInsightCard: some View {
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("Key Insight")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.yellow)
+            Text(keyInsightLine)
+                .font(.subheadline.weight(.medium))
+                .foregroundColor(.white.opacity(0.95))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(Color.white.opacity(0.06))
+        .cornerRadius(12)
+    }
+
+    /// 4) XP feedback + progression cue.
+    private var xpFeedbackCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("XP Feedback")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.yellow)
+            Text("+\(animatedXPEarned) XP this session")
+                .font(.subheadline.weight(.medium))
+                .foregroundColor(.white.opacity(0.95))
+            if let msg = progressionMessage {
+                Text(msg)
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.85))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(Color.white.opacity(0.06))
+        .cornerRadius(12)
+    }
+
     private var buttonsSection: some View {
         VStack(spacing: 12) {
             Button {
                 navigateToTrainAnother = true
             } label: {
-                Text("Train Another Block")
+                Text("Train Again")
                     .font(.headline)
                     .foregroundColor(.black)
                     .frame(maxWidth: .infinity)
@@ -410,26 +739,6 @@ struct SessionSummaryView: View {
                 router.popToRoot()
             } label: {
                 Text("Back to Home")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.9))
-            }
-            .buttonStyle(PlainButtonStyle())
-
-            Button {
-                var items: [Any] = []
-                if let image = SessionReportExporter.exportImage(session: session, playerName: playerName) {
-                    items.append(image)
-                }
-                if let pdfURL = SessionReportExporter.exportPDF(session: session, playerName: playerName) {
-                    items.append(pdfURL)
-                }
-                if items.isEmpty {
-                    items.append(shareText)
-                }
-                shareReportItems = items
-                showShare = !items.isEmpty
-            } label: {
-                Text("Share Report")
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.9))
             }
@@ -463,19 +772,19 @@ struct SessionSummaryView: View {
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
         case .awayFromPressure:
-            AwayFromPressureDisplaySessionView(config: AwayFromPressureConfig.config(for: session.difficulty ?? .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+            AwayFromPressureRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
         case .dribbleOrPass:
-            DribbleOrPassDisplaySessionView(config: DribbleOrPassConfig.defaultConfig(for: session.difficulty ?? .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+            DribbleOrPassRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
         case .oneTouchPassing:
-            OneTouchPassingDisplaySessionView(config: OneTouchPassingConfig.defaultConfig(for: session.difficulty ?? .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+            OneTouchPassingRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
@@ -489,6 +798,42 @@ struct SessionSummaryView: View {
             .padding(16)
             .background(Color.white.opacity(0.08))
             .cornerRadius(12)
+    }
+
+    private func runFeedbackAnimations() {
+        decisionScoreScale = 0.8
+        withAnimation(.easeOut(duration: 0.22)) {
+            decisionScoreScale = 1.0
+        }
+
+        animatedXPEarned = 0
+        if xpEarned > 0 {
+            Task { @MainActor in
+                let steps = min(24, max(8, xpEarned / 8))
+                for step in 1...steps {
+                    let progress = Double(step) / Double(steps)
+                    animatedXPEarned = Int((Double(xpEarned) * progress).rounded())
+                    try? await Task.sleep(nanoseconds: 18_000_000)
+                }
+                animatedXPEarned = xpEarned
+            }
+        }
+
+        showBadgeUnlockAnimation = false
+        if !newlyUnlockedBadges.isEmpty {
+            withAnimation(.easeOut(duration: 0.2).delay(0.06)) {
+                showBadgeUnlockAnimation = true
+            }
+            triggerBadgeHaptic()
+        }
+    }
+
+    private func triggerBadgeHaptic() {
+#if canImport(UIKit)
+        let generator = UIImpactFeedbackGenerator(style: .light)
+        generator.prepare()
+        generator.impactOccurred()
+#endif
     }
 }
 

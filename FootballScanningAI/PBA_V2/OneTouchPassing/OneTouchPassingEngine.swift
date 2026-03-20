@@ -239,7 +239,7 @@ final class OneTouchPassingEngine: ObservableObject {
 
         let p = plan[repIndex]
         let correct = p.greenDirections.contains(gate)
-        let speed = classifyDecisionSpeed(reactionTimeSeconds)
+        let speed = TimingThresholds.oneTouchDecisionSpeed(for: reactionTimeSeconds)
         let result = OneTouchRepResult(
             repIndex: repIndex,
             correct: correct,
@@ -282,7 +282,7 @@ final class OneTouchPassingEngine: ObservableObject {
         }
 
         let p = plan[repIndex]
-        let speed = classifyDecisionSpeed(reactionTimeSeconds)
+        let speed = TimingThresholds.oneTouchDecisionSpeed(for: reactionTimeSeconds)
         let result = OneTouchRepResult(
             repIndex: repIndex,
             correct: false,

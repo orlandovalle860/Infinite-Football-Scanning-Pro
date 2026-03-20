@@ -47,6 +47,7 @@ struct TwoMinuteCriticalScanSessionView: View {
     @StateObject private var resultsCoverPathHolder = ResultsCoverPathHolder()
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var currentSessionStore = CurrentSessionStore.shared
+    @State private var pendingTrainingRoute: AppRoute?
 
     init(config: TwoMinuteTestConfig, mode: TrainingMode, settingsViewModel: SettingsViewModel, profileManager: UserProfileManager) {
         self.config = config
@@ -102,7 +103,12 @@ struct TwoMinuteCriticalScanSessionView: View {
                         settingsViewModel: settingsViewModel,
                         onDismissCover: { testResultItem = nil },
                         onStartTraining: { activity in
-                            resultsCoverPathHolder.push(routeForActivity(activity))
+                            let route = routeForActivity(activity)
+                            #if DEBUG
+                            print("[PBA-Debug] TwoMinute StartTraining tapped: selectedPlayerId=\(playerStore.selectedPlayerId?.uuidString ?? "nil"), route=\(route)")
+                            #endif
+                            pendingTrainingRoute = route
+                            testResultItem = nil
                         }
                     )
                     .environmentObject(progressStore)
@@ -183,7 +189,17 @@ struct TwoMinuteCriticalScanSessionView: View {
     }
 
     private func handleTestResultItemChange(old: TwoMinuteResultItem?, new: TwoMinuteResultItem?) {
-        if old != nil && new == nil { router.popToRoot() }
+        if old != nil && new == nil {
+            if let route = pendingTrainingRoute {
+                pendingTrainingRoute = nil
+                router.popToRoot()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    router.push(route)
+                }
+            } else {
+                router.popToRoot()
+            }
+        }
     }
 
     private func handlePopToRootChange(old: Bool, new: Bool) {
@@ -236,21 +252,57 @@ struct TwoMinuteCriticalScanSessionView: View {
         case .awayFromPressureSetup(let mode):
             AwayFromPressureSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
         case .dribbleOrPassRoleSelection:
-            DribbleOrPassRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+            if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
+                DribbleOrPassRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+            } else {
+                PremiumPaywallView(profileManager: profileManager)
+                    .environmentObject(playerStore)
+                    .environmentObject(router)
+            }
         case .dribbleOrPassTrainingModeSelection:
-            TrainingModeSelectionView(activityTitle: "Dribble or Pass", onSelectMode: { mode in
-                pathHolder.push(.dribbleOrPassSetup(mode: mode))
-            }) { _ in EmptyView() }
+            if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
+                TrainingModeSelectionView(activityTitle: "Dribble or Pass", onSelectMode: { mode in
+                    pathHolder.push(.dribbleOrPassSetup(mode: mode))
+                }) { _ in EmptyView() }
+            } else {
+                PremiumPaywallView(profileManager: profileManager)
+                    .environmentObject(playerStore)
+                    .environmentObject(router)
+            }
         case .dribbleOrPassSetup(let mode):
-            DribbleOrPassSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+            if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
+                DribbleOrPassSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+            } else {
+                PremiumPaywallView(profileManager: profileManager)
+                    .environmentObject(playerStore)
+                    .environmentObject(router)
+            }
         case .oneTouchPassingRoleSelection:
-            OneTouchPassingRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+            if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
+                OneTouchPassingRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+            } else {
+                PremiumPaywallView(profileManager: profileManager)
+                    .environmentObject(playerStore)
+                    .environmentObject(router)
+            }
         case .oneTouchPassingTrainingModeSelection:
-            TrainingModeSelectionView(activityTitle: "One-Touch Passing", onSelectMode: { mode in
-                pathHolder.push(.oneTouchPassingSetup(mode: mode))
-            }) { _ in EmptyView() }
+            if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
+                TrainingModeSelectionView(activityTitle: "One-Touch Passing", onSelectMode: { mode in
+                    pathHolder.push(.oneTouchPassingSetup(mode: mode))
+                }) { _ in EmptyView() }
+            } else {
+                PremiumPaywallView(profileManager: profileManager)
+                    .environmentObject(playerStore)
+                    .environmentObject(router)
+            }
         case .oneTouchPassingSetup(let mode):
-            OneTouchPassingSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+            if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
+                OneTouchPassingSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+            } else {
+                PremiumPaywallView(profileManager: profileManager)
+                    .environmentObject(playerStore)
+                    .environmentObject(router)
+            }
         default:
             EmptyView()
         }
@@ -371,7 +423,7 @@ struct TwoMinuteCriticalScanSessionView: View {
     private var dribbleOrPassLayout: some View {
         GeometryReader { geo in
             let positions = TwoMinuteSlotPositions.positionsForCurrentScreen()
-            let center = TwoMinuteSlotPositions.centerPosition()
+            let center = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
 
             ZStack {
                 // Center marker (same as Dribble or Pass)

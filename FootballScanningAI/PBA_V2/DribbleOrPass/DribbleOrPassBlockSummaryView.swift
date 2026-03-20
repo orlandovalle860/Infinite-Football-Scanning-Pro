@@ -26,6 +26,8 @@ struct DribbleOrPassBlockSummaryView: View {
     @State private var sessionResultForSummary: SessionResult?
     @State private var isNewPersonalBestForSummary = false
     @State private var newPersonalBestsFromBlock: [NewPersonalBest] = []
+    @State private var xpEarnedFromBlock: Int = 0
+    @State private var newlyUnlockedBadgesFromBlock: [PlayerBadge] = []
     @State private var decisionSpeedPercentile: Int?
     @State private var previousSessionForComparison: SessionRecord?
     @State private var personalBestScore: Int?
@@ -36,10 +38,11 @@ struct DribbleOrPassBlockSummaryView: View {
     }
 
     /// Decision Speed Score (0–100) from correctness and reaction times; nil when no reps.
+    /// DOP curve uses a wider window for coach-tapped workflow: (1800ms - rt)/1000.
     private var decisionSpeedScoreValue: Int? {
         let ms = results.map { Int($0.decisionTime * 1000) }
         let correct = results.map(\.correct)
-        return DecisionSpeedScore.sessionScore(reactionTimesMs: ms, correct: correct)
+        return DecisionSpeedScore.dribbleOrPassSessionScore(reactionTimesMs: ms, correct: correct)
     }
 
     /// Decision-hierarchy tiers (score 0–60): Elite → Playmaker → Forward Thinker → Positive Player → Safe Player.
@@ -190,6 +193,8 @@ struct DribbleOrPassBlockSummaryView: View {
                     playerName: profileManager.currentProfile?.name ?? "Player",
                     isNewPersonalBest: isNewPersonalBestForSummary,
                     newPersonalBests: newPersonalBestsFromBlock,
+                    xpEarned: xpEarnedFromBlock,
+                    newlyUnlockedBadges: newlyUnlockedBadgesFromBlock,
                     profileManager: profileManager,
                     settingsViewModel: settingsViewModel
                 )
@@ -227,6 +232,9 @@ struct DribbleOrPassBlockSummaryView: View {
                 )
                 #if DEBUG
                 print("[PBA-Debug] SessionRecord created (DOP, no sessionId). decisionSpeedScore=\(record.decisionSpeedScore ?? -1), playerId=\(record.playerId?.uuidString ?? "nil")")
+                let savedScore = record.decisionSpeedScore.map(String.init) ?? "nil"
+                print("[PBA-Debug] Saved session score: \(savedScore)")
+                print("[PBA-Debug] Player ID match: \(record.playerId == playerStore.selectedPlayerId)")
                 #endif
                 previousSessionForComparison = progressStore.last(record.activity, playerId: record.playerId)
                 let previousBest = progressStore.bestDecisionSpeedScore(activity: record.activity, playerId: record.playerId)
@@ -258,6 +266,9 @@ struct DribbleOrPassBlockSummaryView: View {
             )
             #if DEBUG
             print("[PBA-Debug] SessionRecord created (DOP, with sessionId). decisionSpeedScore=\(record.decisionSpeedScore ?? -1), playerId=\(record.playerId?.uuidString ?? "nil")")
+            let savedScore = record.decisionSpeedScore.map(String.init) ?? "nil"
+            print("[PBA-Debug] Saved session score: \(savedScore)")
+            print("[PBA-Debug] Player ID match: \(record.playerId == playerStore.selectedPlayerId)")
             #endif
             previousSessionForComparison = progressStore.last(record.activity, playerId: record.playerId)
             let previousBest = progressStore.bestDecisionSpeedScore(activity: record.activity, playerId: record.playerId)
@@ -290,7 +301,10 @@ struct DribbleOrPassBlockSummaryView: View {
             }
             if let result = sessionResult {
                 isNewPersonalBestForSummary = profileManager.wouldBeNewPersonalBest(session: result)
-                newPersonalBestsFromBlock = profileManager.addSessionResult(result)
+                let rewards = profileManager.addSessionResult(result)
+                newPersonalBestsFromBlock = rewards.newPersonalBests
+                xpEarnedFromBlock = rewards.xpEarned
+                newlyUnlockedBadgesFromBlock = rewards.newlyUnlockedBadges
                 sessionResultForSummary = result
             }
             if let score = decisionSpeedScoreValue {

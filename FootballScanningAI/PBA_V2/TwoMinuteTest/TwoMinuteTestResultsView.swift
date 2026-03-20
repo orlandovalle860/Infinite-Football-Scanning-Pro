@@ -39,6 +39,8 @@ struct TwoMinuteTestResultsView: View {
     @State private var navigateToEmailAuth = false
     @State private var navigateToCreateProfile = false
     @State private var navigateToPlayerReport = false
+    private let plannedTestReps: Int = 10
+    private var loggedReps: Int { result.totalReps }
 
     private var type: PlayerType {
         TwoMinutePlayerType.determinePlayerType(
@@ -61,14 +63,17 @@ struct TwoMinuteTestResultsView: View {
             bias: bias
         )
     }
-    private var recommendation: (activity: ActivityKind, focus: String) {
-        TwoMinuteRecommendedNext.recommendedNext(
-            for: type,
-            slow: result.slowCount,
-            correct: result.correctCount,
-            total: result.totalReps,
-            bias: bias
-        )
+    private var startingPointFocus: String {
+        switch type {
+        case .reactor:
+            return "Build clean first decisions away from pressure."
+        case .scanner:
+            return "Scan early and commit to the escape direction."
+        case .anticipator:
+            return "Keep early reads and execute cleaner escapes."
+        case .playmaker:
+            return "Set the standard with fast, accurate pressure escapes."
+        }
     }
 
     private static func formatDecisionTime(_ seconds: Double?) -> String {
@@ -195,7 +200,7 @@ struct TwoMinuteTestResultsView: View {
     /// Top-of-screen result for onboarding: decisions count, average speed, elite benchmark.
     private var onboardingResultSummary: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("You made \(result.totalReps) decisions in 2 minutes.")
+            Text("Completed reps: \(loggedReps) / \(plannedTestReps)")
                 .font(.title3.weight(.semibold))
                 .foregroundColor(.white)
             Text("Average decision speed: \(Self.formatDecisionTime(result.avgDecisionTime))")
@@ -282,9 +287,15 @@ struct TwoMinuteTestResultsView: View {
     private var metricsCard: some View {
         sectionCard(title: "Metrics") {
             VStack(alignment: .leading, spacing: 12) {
-                row("Correct", "\(result.correctCount) / \(result.totalReps)")
+                row("Completed Reps", "\(loggedReps) / \(plannedTestReps)")
+                row("Correct", "\(result.correctCount) / \(loggedReps)")
                 row("Decision Speed", "Fast \(result.fastCount) • Med \(result.mediumCount) • Slow \(result.slowCount)")
                 row("Bias", bias?.userFacingName ?? "None")
+                if loggedReps < plannedTestReps {
+                    Text("\(plannedTestReps - loggedReps) \(plannedTestReps - loggedReps == 1 ? "rep was" : "reps were") not completed or recorded.")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.7))
+                }
             }
         }
     }
@@ -300,12 +311,15 @@ struct TwoMinuteTestResultsView: View {
     }
 
     private var recommendedNextCard: some View {
-        sectionCard(title: "Recommended Next") {
+        sectionCard(title: "Your Starting Point") {
             VStack(alignment: .leading, spacing: 6) {
-                Text(activityDisplayName(recommendation.activity))
+                Text("Stage 1 of 3")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.yellow)
+                Text(activityDisplayName(.awayFromPressure))
                     .font(.headline)
                     .foregroundColor(.white)
-                Text("Focus: \(recommendation.focus)")
+                Text("Focus: \(startingPointFocus)")
                     .font(.subheadline)
                     .foregroundColor(.yellow.opacity(0.95))
             }
@@ -357,9 +371,9 @@ struct TwoMinuteTestResultsView: View {
 
             Button {
                 if let onStartTraining = onStartTraining {
-                    onStartTraining(recommendation.activity)
+                    onStartTraining(.awayFromPressure)
                 } else {
-                    trainingTarget = recommendation.activity
+                    trainingTarget = .awayFromPressure
                 }
             } label: {
                 Text("Start Training")
@@ -454,6 +468,11 @@ struct TwoMinuteTestResultsView: View {
             return
         }
         let playerId = profileManager.currentProfile?.id ?? playerStore.selectedPlayerId
+        let isNewPlayerForCurriculum: Bool = {
+            guard let pid = playerId else { return false }
+            let existing = profileManager.profiles.first(where: { $0.id == pid })?.sessionResults ?? []
+            return !existing.contains { [.awayFromPressure, .dribbleOrPass, .oneTouchPassing].contains($0.activityType) }
+        }()
         let speedBucket: SpeedBucket = {
             let (f, m, s) = (result.fastCount, result.mediumCount, result.slowCount)
             if f >= m && f >= s { return .fast }
@@ -536,6 +555,9 @@ struct TwoMinuteTestResultsView: View {
                 forwardOpportunityCount: result.forwardOpportunityCount
             )
             profileManager.addSessionResult(sessionResult)
+            if isNewPlayerForCurriculum {
+                _ = GuidedCurriculumEngine.assignBaselineStage(playerId: pid, baseline: sessionResult)
+            }
         }
     }
 }

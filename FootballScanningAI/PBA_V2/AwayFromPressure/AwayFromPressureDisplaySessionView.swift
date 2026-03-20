@@ -27,6 +27,7 @@ struct AwayFromPressureDisplaySessionView: View {
     @State private var showLeaveAlert = false
     @State private var nextRepIndex = 0
     @State private var audioInterruptionObserver: NSObjectProtocol?
+    @State private var wedgeStyle: WedgeCueStyle = WedgeCueStyle.style(for: 1)
 
     init(config: AwayFromPressureConfig, mode: TrainingMode, settingsViewModel: SettingsViewModel, profileManager: UserProfileManager) {
         self.config = config
@@ -94,6 +95,8 @@ struct AwayFromPressureDisplaySessionView: View {
         .onAppear {
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
             if mode == .partner { connectionManager.startHosting() }
+            let pid = playerStore.selectedPlayerId ?? profileManager.currentProfile?.id
+            wedgeStyle = WedgeDifficultyEngine.currentStyle(playerId: pid)
             activateAudioSession()
             subscribeToAudioInterruption()
             AnalyticsManager.shared.track(.trainingSessionStarted, playerId: playerStore.selectedPlayerId)
@@ -295,7 +298,7 @@ struct AwayFromPressureDisplaySessionView: View {
 
     private var dribbleOrPassLayout: some View {
         GeometryReader { geo in
-            let center = TwoMinuteSlotPositions.centerPosition()
+            let center = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
 
             ZStack {
                 VStack(spacing: 10) {
@@ -307,7 +310,7 @@ struct AwayFromPressureDisplaySessionView: View {
                 .position(x: center.x, y: center.y)
 
                 if case .markerVisible(_, let pressureGate, _) = engine.phase {
-                    DangerZoneOverlay(gate: pressureGate)
+                    DangerZoneOverlay(gate: pressureGate, style: wedgeStyle)
                         .zIndex(1)
                 }
             }

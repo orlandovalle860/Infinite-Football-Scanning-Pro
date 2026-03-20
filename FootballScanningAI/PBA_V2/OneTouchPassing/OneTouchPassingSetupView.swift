@@ -19,8 +19,12 @@ struct OneTouchPassingSetupView: View {
     @State private var showInstructions = false
     @State private var navigateToSession = false
 
+    private var loopLevel: Int {
+        GuidedCurriculumEngine.currentProgress(playerId: playerStore.selectedPlayerId).loop
+    }
+
     private var config: OneTouchPassingConfig {
-        OneTouchPassingConfig.defaultConfig(for: difficulty)
+        OneTouchPassingConfig.defaultConfig(for: difficulty, loopLevel: loopLevel)
     }
 
     var body: some View {
@@ -81,18 +85,6 @@ struct OneTouchPassingSetupView: View {
         .preferredColorScheme(.dark)
         .navigationTitle("One-Touch Passing")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    print("[SetupScreen OTP] Home tapped, router path count before = \(router.pathCount)")
-                    router.popToRoot()
-                    print("[SetupScreen OTP] after popToRoot, router path count = \(router.pathCount)")
-                } label: {
-                    Image(systemName: "house.fill")
-                }
-                .foregroundColor(.white.opacity(0.9))
-            }
-        }
         .onAppear {
             print("[SetupScreen OTP] onAppear, router path count = \(router.pathCount)")
         }

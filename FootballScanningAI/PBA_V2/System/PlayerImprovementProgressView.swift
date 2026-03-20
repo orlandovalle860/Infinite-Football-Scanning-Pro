@@ -20,6 +20,18 @@ struct PlayerImprovementProgressView: View {
 
     private var activeProfile: UserProfile? { profileManager.currentProfile }
     private var playerId: UUID? { activeProfile?.id }
+    private var playerIdentity: PlayerIdentity? {
+        guard let activeProfile else { return nil }
+        return PlayerIdentityEngine.confirmedIdentity(
+            from: activeProfile.sessionResults,
+            previousIdentity: PlayerIdentityEngine.loadLastIdentity(playerId: activeProfile.id)
+        )
+            ?? PlayerIdentityEngine.loadLastIdentity(playerId: activeProfile.id)
+    }
+    private var trendingIdentity: PlayerIdentity? {
+        guard let activeProfile else { return nil }
+        return PlayerIdentityEngine.trendingTowardIdentity(from: activeProfile.sessionResults, currentIdentity: playerIdentity)
+    }
 
     /// Sessions sorted by date (oldest first) for charts and metrics.
     private var chartSessions: [SessionResult] {
@@ -57,17 +69,8 @@ struct PlayerImprovementProgressView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                header
-                metricsGrid
-                decisionSpeedChartSection
-                viewFullDashboardLink
-            }
-            .padding(20)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(
+        ZStack(alignment: .top) {
+            // Background only ignores safe area — scroll content stays below nav bar.
             LinearGradient(
                 gradient: Gradient(colors: [
                     Color(red: 0.05, green: 0.05, blue: 0.1),
@@ -76,21 +79,50 @@ struct PlayerImprovementProgressView: View {
                 startPoint: .top,
                 endPoint: .bottom
             )
-        )
-        .ignoresSafeArea()
+            .ignoresSafeArea()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    scrollHeader
+                    metricsGrid
+                    decisionSpeedChartSection
+                    viewFullDashboardLink
+                }
+                .padding(20)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(.visible, for: .navigationBar)
         .onAppear {
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
         }
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
+            // Title + identity live in the bar center so they never sit under Back / Home.
+            ToolbarItem(placement: .principal) {
+                VStack(spacing: 2) {
+                    Text("Progress")
+                        .font(.headline.weight(.bold))
+                        .foregroundColor(.white)
+                    if let playerIdentity {
+                        Text(playerIdentity.emojiTitle)
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.yellow)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     router.popToRoot()
                 } label: {
                     Image(systemName: "house.fill")
                 }
                 .foregroundColor(.white.opacity(0.9))
+                .accessibilityLabel("Home")
             }
         }
         .navigationDestination(isPresented: $navigateToDashboard) {
@@ -102,15 +134,26 @@ struct PlayerImprovementProgressView: View {
         }
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Progress")
-                .font(.system(size: 28, weight: .bold, design: .rounded))
-                .foregroundColor(.white)
+    /// Body copy only — title and identity line are in the navigation bar (`.principal`) so toolbar never covers them.
+    private var scrollHeader: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let playerIdentity {
+                Text(playerIdentity.shortDescription)
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.9))
+                    .fixedSize(horizontal: false, vertical: true)
+                if let trendingIdentity {
+                    Text("Trending toward \(trendingIdentity.title)")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.62))
+                }
+            }
             Text("See how your decision speed improves over time.")
                 .font(.subheadline)
                 .foregroundColor(.white.opacity(0.8))
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 4)
     }
 
     private var metricsGrid: some View {

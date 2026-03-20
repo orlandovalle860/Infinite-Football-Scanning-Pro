@@ -310,7 +310,7 @@ struct PlayerDevelopmentSnapshotView: View {
                     improved: pressureEscapeMetric.improved
                 )
                 SnapshotMetricRow(
-                    label: "Forward Intent",
+                    label: "Forward Thinking",
                     currentDisplay: forwardIntentMetric.current,
                     improvementText: forwardIntentMetric.improvement,
                     progress: forwardIntentMetric.progress,

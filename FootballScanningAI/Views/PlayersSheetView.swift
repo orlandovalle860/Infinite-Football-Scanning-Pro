@@ -1,423 +1,248 @@
 import SwiftUI
 
-// MARK: - Last trained label from lastActive date
-private func lastTrainedLabel(for date: Date) -> String {
-    let cal = Calendar.current
-    if cal.isDateInToday(date) { return "Today" }
-    if cal.isDateInYesterday(date) { return "Yesterday" }
-    let days = cal.dateComponents([.day], from: date, to: Date()).day ?? 0
-    if days == 2 { return "2 days ago" }
-    if days < 7 { return "\(days) days ago" }
-    let formatter = DateFormatter()
-    formatter.dateStyle = .medium
-    return formatter.string(from: date)
-}
-
-// MARK: - Players Sheet (switch who you're training)
 struct PlayersSheetView: View {
     @ObservedObject var profileManager: UserProfileManager
     @EnvironmentObject private var playerStore: PlayerStore
+    @EnvironmentObject private var progressStore: ProgressStore
     @Environment(\.dismiss) private var dismiss
 
-    @State private var isEditMode = false
-    @State private var showingAddPlayer = false
-    @State private var profileToRename: UserProfile?
-    @State private var profileToRemove: UserProfile?
-    @State private var showingRemoveAlert = false
+    @State private var showAddPlayerSheet = false
+    @State private var newPlayerName = ""
+    @State private var pendingDeleteProfile: UserProfile?
+    @State private var showDeleteConfirm = false
+    @State private var showCannotDeleteLastPlayerAlert = false
+    @State private var showDeleteErrorAlert = false
+    @State private var deleteErrorMessage = ""
+    @State private var isDeletingPlayer = false
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                LinearGradient(
-                    gradient: Gradient(colors: [
-                        Color(red: 0.05, green: 0.05, blue: 0.1),
-                        Color(red: 0.1, green: 0.1, blue: 0.15)
-                    ]),
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea()
+        ZStack {
+            LinearGradient(
+                gradient: Gradient(colors: [
+                    Color(red: 0.05, green: 0.05, blue: 0.1),
+                    Color(red: 0.1, green: 0.1, blue: 0.15)
+                ]),
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
 
-                VStack(spacing: 0) {
-                    Text("Switch who you're training.")
-                        .font(.subheadline)
-                        .foregroundColor(.white.opacity(0.8))
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 4)
-                        .padding(.bottom, 12)
-
-                    ScrollView {
-                        LazyVStack(spacing: 0) {
-                            ForEach(profileManager.profiles) { profile in
-                                PlayerRowView(
-                                    profile: profile,
-                                    isCurrent: profileManager.currentProfile?.id == profile.id,
-                                    isEditMode: isEditMode,
-                                    lastTrainedText: lastTrainedLabel(for: profile.lastActive),
-                                    onTap: {
-                                        if isEditMode { return }
-                                        profileManager.switchToProfile(profile)
-                                        playerStore.selectPlayer(id: profile.id)
-                                        dismiss()
-                                    },
-                                    onRename: { profileToRename = profile },
-                                    onRemove: { profileToRemove = profile; showingRemoveAlert = true }
-                                )
-                            }
-                        }
-                        .padding(.horizontal)
-                    }
-
-                    VStack(spacing: 12) {
-                        Button(action: { showingAddPlayer = true }) {
-                            HStack {
-                                Image(systemName: "plus")
-                                Text("Add Player")
-                            }
-                            .font(.headline)
-                            .foregroundColor(.black)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 16)
-                            .background(Color.yellow)
-                            .cornerRadius(14)
-                        }
-                        .buttonStyle(PlainButtonStyle())
-
-                        Text("Great for siblings or training groups.")
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.6))
-
-                        Button(action: { isEditMode.toggle() }) {
-                            Text("Edit")
-                                .font(.subheadline.weight(.medium))
-                                .foregroundColor(.white.opacity(0.9))
-                        }
-                        .padding(.vertical, 8)
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 16)
-                    .padding(.bottom, 24)
-                }
-            }
-            .navigationTitle("Players")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarColorScheme(.dark, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
-            .toolbarBackground(Color.clear, for: .navigationBar)
-            .foregroundColor(.white)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
-                        .foregroundColor(.white)
-                }
-            }
-            .sheet(isPresented: $showingAddPlayer) {
-                AddPlayerView(profileManager: profileManager)
-            }
-            .sheet(item: $profileToRename) { profile in
-                RenamePlayerView(profileManager: profileManager, profile: profile) {
-                    profileToRename = nil
-                }
-            }
-            .alert("Remove Player?", isPresented: $showingRemoveAlert) {
-                Button("Cancel", role: .cancel) {
-                    profileToRemove = nil
-                }
-                Button("Remove", role: .destructive) {
-                    if let p = profileToRemove {
-                        ProgressStore.shared.removeSessions(forPlayerId: p.id)
-                        profileManager.deleteProfile(p)
-                        playerStore.removePlayer(id: p.id)
-                        if profileManager.profiles.isEmpty {
-                            playerStore.clearAll()
-                        }
-                    }
-                    profileToRemove = nil
-                    if profileManager.profiles.isEmpty { dismiss() }
-                }
-            } message: {
-                Text("This will delete their progress from this device.")
-            }
-        }
-    }
-}
-
-// MARK: - Player row (name, last trained, Training now pill; edit: Rename / Remove)
-struct PlayerRowView: View {
-    let profile: UserProfile
-    let isCurrent: Bool
-    let isEditMode: Bool
-    let lastTrainedText: String
-    let onTap: () -> Void
-    let onRename: () -> Void
-    let onRemove: () -> Void
-
-    var body: some View {
-        Group {
-            if isEditMode {
-                rowContent
-                    .contentShape(Rectangle())
-            } else {
-                Button(action: onTap) {
-                    rowContent
-                }
-            }
-        }
-        .padding(.vertical, 14)
-        .padding(.horizontal, 16)
-        .background(Color.white.opacity(isCurrent && !isEditMode ? 0.12 : 0.06))
-        .cornerRadius(12)
-    }
-
-    private var rowContent: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(profile.name)
-                    .font(.body.weight(.semibold))
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Switch Player")
+                    .font(.headline.weight(.semibold))
                     .foregroundColor(.white)
-                Text("Last trained: \(lastTrainedText)")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.7))
-            }
-            Spacer(minLength: 8)
-            if isEditMode {
-                HStack(spacing: 12) {
-                    Button("Rename", action: onRename)
-                        .font(.subheadline.weight(.medium))
-                        .foregroundColor(.yellow)
-                        .buttonStyle(.borderless)
-                        Button("Remove", action: onRemove)
-                            .font(.subheadline.weight(.medium))
-                            .foregroundColor(.red)
-                            .buttonStyle(.borderless)
-                }
-            } else {
-                if isCurrent {
-                    Text("Training now")
-                        .font(.caption.weight(.medium))
-                        .foregroundColor(.black)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(Color.yellow)
-                        .cornerRadius(20)
-                }
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundColor(.white.opacity(0.5))
-            }
-        }
-    }
-}
-
-// MARK: - Add Player
-struct AddPlayerView: View {
-    @ObservedObject var profileManager: UserProfileManager
-    @EnvironmentObject private var playerStore: PlayerStore
-    @Environment(\.dismiss) private var dismiss
-
-    @State private var name = ""
-    @State private var age = ""
-    @State private var team = ""
-    @State private var position = ""
-    @State private var showMore = false
-    @State private var validationMessage = ""
-
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                LinearGradient(
-                    gradient: Gradient(colors: [
-                        Color(red: 0.05, green: 0.05, blue: 0.1),
-                        Color(red: 0.1, green: 0.1, blue: 0.15)
-                    ]),
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea()
+                Text("Choose who is training right now.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.75))
 
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Name")
-                                .font(.subheadline.weight(.medium))
-                                .foregroundColor(.white)
-                            TextField("Enter name", text: $name)
-                                .textContentType(.name)
-                                .padding()
-                                .background(Color.white)
-                                .foregroundColor(.black)
-                                .cornerRadius(10)
-                            if !validationMessage.isEmpty {
-                                Text(validationMessage)
-                                    .font(.caption)
-                                    .foregroundColor(.red)
-                            }
-                        }
-
-                        Button(action: { showMore.toggle() }) {
-                            HStack {
-                                Text("More")
-                                    .font(.subheadline.weight(.medium))
-                                    .foregroundColor(.white.opacity(0.9))
-                                Image(systemName: showMore ? "chevron.up" : "chevron.down")
-                                    .font(.caption)
-                                    .foregroundColor(.white.opacity(0.7))
-                            }
-                        }
-
-                        if showMore {
-                            VStack(alignment: .leading, spacing: 16) {
-                                optionalField("Age (optional)", placeholder: "e.g. 12", text: $age)
-                                    .keyboardType(.numberPad)
-                                optionalField("Team (optional)", placeholder: "e.g. Hartford United", text: $team)
-                                optionalField("Position (optional)", placeholder: "e.g. Midfielder", text: $position)
-                            }
+                    VStack(spacing: 8) {
+                        ForEach(profileManager.profiles) { profile in
+                            playerRow(profile: profile)
                         }
                     }
-                    .padding(20)
                 }
+
+                Button {
+                    newPlayerName = ""
+                    showAddPlayerSheet = true
+                } label: {
+                    HStack {
+                        Image(systemName: "plus")
+                        Text("Add New Player")
+                            .fontWeight(.semibold)
+                    }
+                    .foregroundColor(.yellow)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 12)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.yellow.opacity(0.8), lineWidth: 1)
+                    )
+                }
+                .buttonStyle(PlainButtonStyle())
             }
-            .navigationTitle("Add Player")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarColorScheme(.dark, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
-            .toolbarBackground(Color.clear, for: .navigationBar)
-            .foregroundColor(.white)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") { dismiss() }
+            .padding(20)
+        }
+        .sheet(isPresented: $showAddPlayerSheet) {
+            AddPlayerSheet(
+                initialName: newPlayerName,
+                onCancel: { showAddPlayerSheet = false },
+                onAdd: { enteredName in
+                    let trimmed = enteredName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let finalName = trimmed.isEmpty ? "Player \(profileManager.profiles.count + 1)" : trimmed
+                    let newProfile = profileManager.addProfile(name: finalName, email: nil, age: nil, team: nil, position: nil)
+                    playerStore.addPlayer(id: newProfile.id, name: finalName)
+                    profileManager.switchToProfile(newProfile)
+                    playerStore.selectPlayer(id: newProfile.id)
+                    showAddPlayerSheet = false
+                    dismiss()
+                }
+            )
+            .presentationDetents([.height(240)])
+            .presentationDragIndicator(.visible)
+        }
+        .confirmationDialog(
+            "Delete Player?",
+            isPresented: $showDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let profile = pendingDeleteProfile {
+                    Task { await deletePlayer(profile) }
+                }
+                pendingDeleteProfile = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteProfile = nil
+            }
+        } message: {
+            Text("This removes the player profile and local session history on this device.")
+        }
+        .alert("Can't Delete Last Player", isPresented: $showCannotDeleteLastPlayerAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Add another player before deleting this one.")
+        }
+        .alert("Delete Failed", isPresented: $showDeleteErrorAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(deleteErrorMessage)
+        }
+    }
+
+    private func playerRow(profile: UserProfile) -> some View {
+        let isCurrent = profileManager.currentProfile?.id == profile.id
+        return HStack(spacing: 10) {
+            Button {
+                profileManager.switchToProfile(profile)
+                playerStore.selectPlayer(id: profile.id)
+                dismiss()
+            } label: {
+                HStack {
+                    Text(profile.name)
+                        .font(.body.weight(.semibold))
                         .foregroundColor(.white)
+                    Spacer()
+                    Image(systemName: isCurrent ? "checkmark.circle.fill" : "circle")
+                        .foregroundColor(isCurrent ? .yellow : .white.opacity(0.5))
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Save") { save() }
-                        .fontWeight(.semibold)
-                        .foregroundColor(.yellow)
+                .padding(.vertical, 12)
+                .padding(.horizontal, 14)
+                .frame(maxWidth: .infinity)
+                .background(Color.white.opacity(isCurrent ? 0.14 : 0.06))
+                .cornerRadius(12)
+            }
+            .buttonStyle(PlainButtonStyle())
+
+            Button {
+                guard !isDeletingPlayer else { return }
+                guard profileManager.profiles.count > 1 else {
+                    showCannotDeleteLastPlayerAlert = true
+                    return
                 }
+                pendingDeleteProfile = profile
+                showDeleteConfirm = true
+            } label: {
+                Image(systemName: "trash")
+                    .foregroundColor(.red.opacity(0.9))
+                    .padding(10)
+                    .background(Color.white.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
+            .buttonStyle(PlainButtonStyle())
+            .accessibilityLabel("Delete \(profile.name)")
+        }
+    }
+
+    private func deletePlayer(_ profile: UserProfile) async {
+        guard !isDeletingPlayer else { return }
+        isDeletingPlayer = true
+        defer { isDeletingPlayer = false }
+
+        #if DEBUG
+        print("[PBA-Debug] Delete player requested: id=\(profile.id.uuidString), name=\(profile.name)")
+        #endif
+
+        // Remote-first delete so relaunch hydration cannot restore this player.
+        if Config.isSupabaseConfigured, AuthManager.shared.currentUserId != nil {
+            do {
+                try await SupabasePlayerService.shared.deletePlayer(id: profile.id)
+                #if DEBUG
+                print("[PBA-Debug] Supabase delete success: id=\(profile.id.uuidString)")
+                #endif
+            } catch {
+                SupabasePlayerService.shared.markPendingDelete(id: profile.id)
+                #if DEBUG
+                print("[PBA-Debug] Supabase delete failed: id=\(profile.id.uuidString), error=\(error.localizedDescription)")
+                #endif
+                deleteErrorMessage = "Cloud delete is pending retry. Player is removed on this device and will retry in background.\n\n\(error.localizedDescription)"
+                showDeleteErrorAlert = true
             }
         }
-    }
 
-    private func optionalField(_ label: String, placeholder: String, text: Binding<String>) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(label)
-                .font(.subheadline.weight(.medium))
-                .foregroundColor(.white.opacity(0.9))
-            TextField(placeholder, text: text)
-                .padding()
-                .background(Color.white)
-                .foregroundColor(.black)
-                .cornerRadius(10)
-        }
-    }
+        let wasSelected = playerStore.selectedPlayerId == profile.id
+        progressStore.removeSessions(forPlayerId: profile.id)
+        profileManager.deleteProfile(profile)
+        playerStore.removePlayer(id: profile.id)
+        #if DEBUG
+        print("[PBA-Debug] Local delete success: id=\(profile.id.uuidString), remainingPlayers=\(playerStore.players.count)")
+        #endif
 
-    private func save() {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            validationMessage = "Please enter a name."
-            return
+        if let selectedId = playerStore.selectedPlayerId,
+           let selectedProfile = profileManager.profile(id: selectedId) {
+            profileManager.switchToProfile(selectedProfile)
+            #if DEBUG
+            print("[PBA-Debug] Selected player reassigned: newSelectedId=\(selectedId.uuidString)")
+            #endif
+        } else if wasSelected {
+            #if DEBUG
+            print("[PBA-Debug] Deleted selected player; selection cleared (no valid remaining profile).")
+            #endif
         }
-        validationMessage = ""
-        let ageTrim = age.trimmingCharacters(in: .whitespacesAndNewlines)
-        let teamTrim = team.trimmingCharacters(in: .whitespacesAndNewlines)
-        let positionTrim = position.trimmingCharacters(in: .whitespacesAndNewlines)
-        let newProfile = profileManager.addProfile(
-            name: trimmed,
-            email: nil,
-            age: ageTrim.isEmpty ? nil : ageTrim,
-            team: teamTrim.isEmpty ? nil : teamTrim,
-            position: positionTrim.isEmpty ? nil : positionTrim
-        )
-        playerStore.addPlayer(id: newProfile.id, name: trimmed)
-        dismiss()
+        if playerStore.players.isEmpty {
+            dismiss()
+        }
     }
 }
 
-// MARK: - Rename Player
-struct RenamePlayerView: View {
-    @ObservedObject var profileManager: UserProfileManager
-    let profile: UserProfile
-    let onDismiss: () -> Void
-    @Environment(\.dismiss) private var dismiss
-
+private struct AddPlayerSheet: View {
+    let initialName: String
+    let onCancel: () -> Void
+    let onAdd: (String) -> Void
     @State private var name: String = ""
-    @State private var validationMessage = ""
+    @FocusState private var nameFocused: Bool
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                LinearGradient(
-                    gradient: Gradient(colors: [
-                        Color(red: 0.05, green: 0.05, blue: 0.1),
-                        Color(red: 0.1, green: 0.1, blue: 0.15)
-                    ]),
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea()
-
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("Name")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundColor(.white)
-                    TextField("Enter name", text: $name)
-                        .textContentType(.name)
-                        .padding()
-                        .background(Color.white)
-                        .foregroundColor(.black)
-                        .cornerRadius(10)
-                    if !validationMessage.isEmpty {
-                        Text(validationMessage)
-                            .font(.caption)
-                            .foregroundColor(.red)
-                    }
-                    Spacer()
-                }
-                .padding(20)
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Add New Player")
+                .font(.headline.weight(.semibold))
+                .foregroundColor(.white)
+            TextField("Player name", text: $name)
+                .textFieldStyle(.roundedBorder)
+                .focused($nameFocused)
+            HStack {
+                Button("Cancel", role: .cancel) { onCancel() }
+                    .foregroundColor(.white.opacity(0.85))
+                Spacer()
+                Button("Add") { onAdd(name) }
+                    .fontWeight(.semibold)
             }
-            .navigationTitle("Rename Player")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarColorScheme(.dark, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
-            .toolbarBackground(Color.clear, for: .navigationBar)
-            .foregroundColor(.white)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") {
-                        onDismiss()
-                        dismiss()
-                    }
-                    .foregroundColor(.white)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Save") { save() }
-                        .fontWeight(.semibold)
-                        .foregroundColor(.yellow)
-                }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color(red: 0.08, green: 0.08, blue: 0.12))
+        .onAppear {
+            name = initialName
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                nameFocused = true
             }
-            .onAppear { name = profile.name }
         }
-    }
-
-    private func save() {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            validationMessage = "Please enter a name."
-            return
-        }
-        validationMessage = ""
-        var updated = profile
-        updated.name = trimmed
-        profileManager.updateProfile(updated)
-        onDismiss()
-        dismiss()
     }
 }
 
 #Preview("Players sheet") {
     PlayersSheetView(profileManager: UserProfileManager())
         .environmentObject(PlayerStore())
-}
-
-#Preview("Add Player") {
-    AddPlayerView(profileManager: UserProfileManager())
+        .environmentObject(ProgressStore.shared)
 }

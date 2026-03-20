@@ -33,7 +33,9 @@ struct DribbleOrPassRoleSelectionView: View {
                 .padding(.horizontal, 28)
 
             VStack(spacing: 16) {
-                NavigationLink(value: AppRoute.dribbleOrPassTrainingModeSelection) {
+                Button {
+                    router.push(.dribbleOrPassTrainingModeSelection)
+                } label: {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             Image(systemName: "tv")

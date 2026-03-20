@@ -57,7 +57,7 @@ struct OneTouchGateOverlay: View {
                     }
                 }
             } else {
-                DangerZoneOverlay(gate: gate, laneSpan: laneSpan, insetFraction: insetFraction)
+                DangerZoneOverlay(gate: gate)
             }
         }
         .allowsHitTesting(false)

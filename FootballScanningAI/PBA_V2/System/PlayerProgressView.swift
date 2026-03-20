@@ -100,20 +100,9 @@ struct PlayerProgressView: View {
         }
     }
 
-    // MARK: - Derived analytics (Early Decision Rate, First Touch Commitment, Forward Intent)
+    // MARK: - Derived analytics (trustworthy v1 metrics only: Accuracy, Decision Speed, Forward Thinking)
 
-    /// Early Decision Rate: % of reps where decisionTime was Fast. Chart points per session.
-    private var earlyDecisionRatePoints: [ChartDataPoint] {
-        chartSessions.enumerated().map { index, s in
-            let value = s.totalReps > 0 ? Double(s.speedCounts.fast) / Double(s.totalReps) * 100.0 : 0
-            return ChartDataPoint(sessionIndex: index + 1, value: value)
-        }
-    }
-
-    /// First Touch Commitment: % where first-touch direction matched exit. Same data as firstTouchAccuracy; label differs.
-    private var firstTouchCommitmentPoints: [ChartDataPoint] { firstTouchAccuracyPoints }
-
-    /// Forward Intent: % of forward opportunities where player chose forward. Only sessions with data.
+    /// Forward Thinking: % of forward opportunities where player chose forward. Only sessions with data.
     private var forwardIntentPoints: [ChartDataPoint] {
         chartSessions.enumerated().compactMap { index, s in
             guard let opp = s.forwardOpportunityCount, opp > 0, let choice = s.forwardChoiceCount else { return nil }
@@ -122,72 +111,16 @@ struct PlayerProgressView: View {
         }
     }
 
-    /// Current Early Decision Rate % from most recent session (or nil).
-    private var earlyDecisionRateCurrent: Int? {
+    /// Accuracy % from most recent session.
+    private var accuracyCurrent: Int? {
         guard let s = chartSessions.last, s.totalReps > 0 else { return nil }
-        return Int(round(Double(s.speedCounts.fast) / Double(s.totalReps) * 100.0))
+        return Int(round(Double(s.correctCount) / Double(s.totalReps) * 100.0))
     }
 
-    /// Current First Touch Commitment % from most recent session that has the metric.
-    private var firstTouchCommitmentCurrent: Int? {
-        guard let s = chartSessions.last, let match = s.firstTouchMatchCount, s.totalReps > 0 else { return nil }
-        return Int(round(Double(match) / Double(s.totalReps) * 100.0))
-    }
-
-    /// Current Forward Intent % from most recent session that has the metric.
+    /// Current Forward Thinking % from most recent session that has the metric.
     private var forwardIntentCurrent: Int? {
         guard let s = chartSessions.last, let opp = s.forwardOpportunityCount, opp > 0, let choice = s.forwardChoiceCount else { return nil }
         return Int(round(Double(choice) / Double(opp) * 100.0))
-    }
-
-    // MARK: - Scan Efficiency (accuracy + first-touch + speed)
-
-    /// Scan Efficiency per session: 0–100 combined score. Tracked over time.
-    private var scanEfficiencyPoints: [ChartDataPoint] {
-        chartSessions.enumerated().map { index, s in
-            let value = ScanEfficiency.score(from: s)
-            return ChartDataPoint(sessionIndex: index + 1, value: value)
-        }
-    }
-
-    /// Current Scan Efficiency from most recent session.
-    private var scanEfficiencyCurrent: Int? {
-        guard let s = chartSessions.last else { return nil }
-        return Int(round(ScanEfficiency.score(from: s)))
-    }
-
-    // MARK: - Pre-Receive Decision Rate (decisionTime < threshold AND firstTouch == correct)
-
-    /// Pre-Receive Decision Rate % per session — only sessions that have the metric (AFP, DOP).
-    private var preReceiveDecisionRatePoints: [ChartDataPoint] {
-        chartSessions.enumerated().compactMap { index, s in
-            guard let count = s.preReceiveDecisionCount, s.totalReps > 0 else { return nil }
-            let pct = Double(count) / Double(s.totalReps) * 100.0
-            return ChartDataPoint(sessionIndex: index + 1, value: pct)
-        }
-    }
-
-    /// Current Pre-Receive Decision Rate % from most recent session that has the metric.
-    private var preReceiveDecisionRateCurrent: Int? {
-        guard let s = chartSessions.last, let count = s.preReceiveDecisionCount, s.totalReps > 0 else { return nil }
-        return Int(round(Double(count) / Double(s.totalReps) * 100.0))
-    }
-
-    // MARK: - Pressure Escape Rate (AFP: % of reps where player successfully escaped)
-
-    /// Pressure Escape Rate % per AFP session (successful escapes / total reps). Only Away From Pressure sessions.
-    private var pressureEscapeRatePoints: [ChartDataPoint] {
-        let afpSessions = chartSessions.filter { $0.activityType == .awayFromPressure }
-        return afpSessions.enumerated().map { index, s in
-            let value = s.totalReps > 0 ? Double(s.correctCount) / Double(s.totalReps) * 100.0 : 0
-            return ChartDataPoint(sessionIndex: index + 1, value: value)
-        }
-    }
-
-    /// Current Pressure Escape Rate % from most recent AFP session.
-    private var pressureEscapeRateCurrent: Int? {
-        guard let s = chartSessions.last(where: { $0.activityType == .awayFromPressure }), s.totalReps > 0 else { return nil }
-        return Int(round(Double(s.correctCount) / Double(s.totalReps) * 100.0))
     }
 
     var body: some View {
@@ -391,7 +324,6 @@ struct PlayerProgressView: View {
                 ProgressLineChartView(title: "Decision Score", points: decisionScorePoints, valueLabel: "%", yAxisRange: (0, 100))
                 ProgressLineChartView(title: "Avg Decision Time", points: decisionSpeedPoints, valueLabel: "s", yAxisRange: nil, emptyStateMessage: "Complete at least 2 Dribble or Pass sessions to see your trend.")
                 ProgressLineChartView(title: "Correct Decisions", points: correctPercentPoints, valueLabel: "%", yAxisRange: (0, 100))
-                ProgressLineChartView(title: "Scan Efficiency", points: scanEfficiencyPoints, valueLabel: "", yAxisRange: (0, 100))
             }
         }
         .padding(18)
@@ -406,36 +338,22 @@ struct PlayerProgressView: View {
 
     private var derivedAnalyticsSection: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Derived Analytics")
+            Text("Core Analytics")
                 .font(.headline)
                 .foregroundColor(.white)
             analyticsMetricCard(
-                title: "Scan Efficiency",
-                definition: "Combines decision accuracy and decision speed into one score. Measures how efficiently you convert perception into action.",
-                currentPercent: scanEfficiencyCurrent,
-                points: scanEfficiencyPoints,
-                emptyStateMessage: nil
+                title: "Accuracy",
+                definition: "Percentage of correct decisions.",
+                currentPercent: accuracyCurrent,
+                points: correctPercentPoints,
+                emptyStateMessage: "Complete at least 2 sessions to see your trend."
             )
             analyticsMetricCard(
-                title: "Early Decision Rate",
-                definition: "Percentage of reps where decision time was Fast. Measures how often you decide before receiving the ball.",
-                currentPercent: earlyDecisionRateCurrent,
-                points: earlyDecisionRatePoints,
-                emptyStateMessage: nil
-            )
-            analyticsMetricCard(
-                title: "Forward Intent",
+                title: "Forward Thinking",
                 definition: "How often you choose the forward option when it is available.",
                 currentPercent: forwardIntentCurrent,
                 points: forwardIntentPoints,
                 emptyStateMessage: "Complete at least 2 Dribble or Pass or One-Touch Passing sessions (with forward opportunities) to see your trend."
-            )
-            analyticsMetricCard(
-                title: "Pressure Escape Rate",
-                definition: "Percentage of reps where you successfully escaped pressure (correct direction chosen and exit through that gate). Playing Away From Pressure only.",
-                currentPercent: pressureEscapeRateCurrent,
-                points: pressureEscapeRatePoints,
-                emptyStateMessage: "Complete at least 2 Playing Away From Pressure sessions to see your trend."
             )
         }
         .padding(18)
@@ -538,7 +456,7 @@ struct PlayerProgressView: View {
             Button {
                 navigateToReportCard = true
             } label: {
-                Text("Report Card")
+                Text("Player Development")
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.9))
             }

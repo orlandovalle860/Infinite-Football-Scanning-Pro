@@ -69,6 +69,27 @@ struct ReportCardData {
     let firstTouchCommitment: String
     let pressureEscape: String
     let overallGrade: String
+    let overallTier: String
+    let overallTierDisplay: String
+    let overallStageContext: String
+    let overallSupportMessage: String
+    let overallProgressionMessage: String
+    let overallNextTarget: String
+    let focusNext: String
+    let nextLevelName: String
+    let nextLevelRequirements: [String]
+    let strength: String
+    let limiter: String
+    let decisionSpeedTier: String
+    let decisionSpeedAvgTime: Double?
+    let decisionSpeedZone: String
+    let decisionSpeedMessage: String
+    let accuracyPercent: Int?
+    let accuracyTier: String
+    let accuracyMessage: String
+    let forwardThinkingPercent: Int?
+    let forwardThinkingTier: String
+    let forwardThinkingMessage: String
     let coachingInsight: String
 }
 
@@ -81,38 +102,287 @@ enum ReportCardGenerator {
         last5: [SessionRecord],
         trainingRecommendation: TrainingRecommendationResult
     ) -> ReportCardData {
-        let dbc = gradeDecisionBeforeContact(sessions: chartSessions)
         let speed = gradeDecisionSpeed(sessions: chartSessions)
-        let ftc = gradeFirstTouchCommitment(sessions: chartSessions)
         let pressure = gradePressureEscape(sessions: chartSessions)
-        let overall = gradeOverall(last5: last5, categoryGrades: [dbc, speed, ftc, pressure])
+        let overall = gradeOverall(last5: last5, categoryGrades: [speed, pressure])
+        let overallTier = overallTierName(from: overall)
+        let overallTierDisplay = overallTierDisplay(from: overall)
+        let stageContext = overallStageContext(from: overall)
+        let supportMessage = overallSupportMessage(chartSessions: chartSessions)
+        let progressionMessage = overallProgressionMessage(from: overall)
+        let nextTarget = overallNextTarget(chartSessions: chartSessions)
+        let speedAvg = rollingAverageDecisionTime(chartSessions: chartSessions)
+        let speedZone = decisionSpeedZone(from: speedAvg)
+        let speedTier = decisionSpeedTier(from: speedAvg)
+        let speedMsg = decisionSpeedMessage(from: speedZone)
+        let accuracyPercent = rollingAccuracyPercent(chartSessions: chartSessions)
+        let accuracyTier = accuracyTier(from: accuracyPercent)
+        let accuracyMsg = accuracyMessage(from: accuracyPercent, speedZone: speedZone)
+        let forwardPercent = rollingForwardThinkingPercent(chartSessions: chartSessions)
+        let forwardTier = forwardThinkingTier(from: forwardPercent)
+        let forwardMsg = forwardThinkingMessage(from: forwardPercent)
+        let focusNext = focusNext(speedZone: speedZone, accuracyPercent: accuracyPercent, forwardPercent: forwardPercent)
+        let nextLevel = nextLevelName(currentTier: overallTier)
+        let nextRequirements = nextLevelRequirements(currentTier: overallTier, speedAvg: speedAvg, accuracyPercent: accuracyPercent)
+        let strength = strengthInsight(speedZone: speedZone, accuracyPercent: accuracyPercent, forwardPercent: forwardPercent)
+        let limiter = limiterInsight(speedZone: speedZone, accuracyPercent: accuracyPercent, forwardPercent: forwardPercent)
         let insight = coachingInsight(
             trainingRecommendation: trainingRecommendation,
-            decisionBeforeContact: dbc,
             decisionSpeed: speed,
-            firstTouchCommitment: ftc,
             pressureEscape: pressure
         )
         let decisionSpeedDisplay = decisionSpeedDisplayString(sessions: chartSessions, grade: speed)
         return ReportCardData(
-            decisionBeforeContact: dbc?.display ?? "—",
+            decisionBeforeContact: "—",
             decisionSpeed: decisionSpeedDisplay,
-            firstTouchCommitment: ftc?.display ?? "—",
+            firstTouchCommitment: "—",
             pressureEscape: pressure?.display ?? "—",
             overallGrade: overall?.display ?? "—",
+            overallTier: overallTier,
+            overallTierDisplay: overallTierDisplay,
+            overallStageContext: stageContext,
+            overallSupportMessage: supportMessage,
+            overallProgressionMessage: progressionMessage,
+            overallNextTarget: nextTarget,
+            focusNext: focusNext,
+            nextLevelName: nextLevel,
+            nextLevelRequirements: nextRequirements,
+            strength: strength,
+            limiter: limiter,
+            decisionSpeedTier: speedTier,
+            decisionSpeedAvgTime: speedAvg,
+            decisionSpeedZone: speedZone,
+            decisionSpeedMessage: speedMsg,
+            accuracyPercent: accuracyPercent,
+            accuracyTier: accuracyTier,
+            accuracyMessage: accuracyMsg,
+            forwardThinkingPercent: forwardPercent,
+            forwardThinkingTier: forwardTier,
+            forwardThinkingMessage: forwardMsg,
             coachingInsight: insight
         )
     }
 
-    /// Decision Before Contact: % where decisionTime < threshold and firstTouch == correct. From sessions that have preReceiveDecisionCount.
-    private static func gradeDecisionBeforeContact(sessions: [SessionResult]) -> ReportCardGrade? {
-        let withData = sessions.filter { $0.preReceiveDecisionCount != nil && $0.totalReps > 0 }
-        guard !withData.isEmpty else { return nil }
-        let sum = withData.reduce(0.0) { acc, s in
-            acc + Double(s.preReceiveDecisionCount!) / Double(s.totalReps) * 100.0
+    private static func nextLevelName(currentTier: String) -> String {
+        switch currentTier {
+        case "Needs Work", "Emerging": return "Developing"
+        case "Developing": return "Strong"
+        case "Strong": return "Elite"
+        default: return "Elite"
         }
-        let pct = sum / Double(withData.count)
-        return ReportCardGrade.from(percentage: pct)
+    }
+
+    private static func nextLevelRequirements(currentTier: String, speedAvg: Double?, accuracyPercent: Int?) -> [String] {
+        switch currentTier {
+        case "Needs Work", "Emerging":
+            return [
+                "Avg decision time < 1.10s",
+                "Accuracy >= 80%"
+            ]
+        case "Developing":
+            return [
+                "Avg decision time < 0.95s",
+                "Accuracy >= 85%"
+            ]
+        case "Strong":
+            return [
+                "Avg decision time < 0.90s",
+                "Accuracy >= 90%"
+            ]
+        default:
+            var requirements: [String] = []
+            if let speedAvg { requirements.append(String(format: "Maintain speed around %.2fs", speedAvg)) }
+            if let accuracyPercent { requirements.append("Maintain accuracy around \(accuracyPercent)%") }
+            return requirements.isEmpty ? ["Maintain elite consistency"] : requirements
+        }
+    }
+
+    private static func strengthInsight(speedZone: String, accuracyPercent: Int?, forwardPercent: Int?) -> String {
+        if let accuracyPercent, accuracyPercent >= 90 { return "Decision Accuracy (\(accuracyPercent)%)" }
+        if speedZone == "Early" || speedZone == "On Time" { return "Decision Speed (\(speedZone))" }
+        if let forwardPercent, forwardPercent >= 60 { return "Forward Thinking (\(forwardPercent)%)" }
+        return "Consistency in training sessions"
+    }
+
+    private static func limiterInsight(speedZone: String, accuracyPercent: Int?, forwardPercent: Int?) -> String {
+        if speedZone == "Too Late" || speedZone == "Late" { return "Decision Speed timing is late" }
+        if let accuracyPercent, accuracyPercent < 75 { return "Decision Accuracy consistency" }
+        if let forwardPercent, forwardPercent < 50 { return "Forward Thinking choices" }
+        return "Maintaining consistency under pressure"
+    }
+
+    private static func overallTierName(from grade: ReportCardGrade?) -> String {
+        guard let grade else { return "No grade yet" }
+        switch grade {
+        case .aPlus, .a, .aMinus: return "Elite"
+        case .bPlus, .b, .bMinus: return "Strong"
+        case .cPlus, .c, .cMinus: return "Developing"
+        case .dPlus, .d, .dMinus: return "Emerging"
+        case .f: return "Needs Work"
+        }
+    }
+
+    private static func overallTierDisplay(from grade: ReportCardGrade?) -> String {
+        guard let grade else { return "⚪ No Grade Yet" }
+        let label = overallTierName(from: grade)
+        let icon: String
+        switch label {
+        case "Elite": icon = "🟢"
+        case "Strong": icon = "🔵"
+        case "Developing": icon = "🟡"
+        case "Emerging": icon = "🟠"
+        default: icon = "🔴"
+        }
+        return "\(icon) \(label) Timing"
+    }
+
+    private static func overallSupportMessage(chartSessions: [SessionResult]) -> String {
+        let recent = Array(chartSessions.prefix(5))
+        let withTime = recent.compactMap(\.avgDecisionTime)
+        let avgTime = withTime.isEmpty ? nil : withTime.reduce(0, +) / Double(withTime.count)
+        let accuracyPct: Double? = {
+            guard !recent.isEmpty else { return nil }
+            let valid = recent.filter { $0.totalReps > 0 }
+            guard !valid.isEmpty else { return nil }
+            let accs = valid.map { Double($0.correctCount) / Double($0.totalReps) }
+            return accs.reduce(0, +) / Double(accs.count)
+        }()
+
+        if let accuracyPct, let avgTime, accuracyPct >= 0.80, avgTime > 1.10 {
+            return "You're making the right decisions, but slightly late."
+        }
+        if let accuracyPct, accuracyPct >= 0.80 {
+            return "You're making strong decisions with good consistency."
+        }
+        if let avgTime, avgTime > 1.20 {
+            return "Your timing is lagging under pressure—commit to decisions earlier."
+        }
+        return "You're building your timing and decision quality."
+    }
+
+    private static func overallProgressionMessage(from grade: ReportCardGrade?) -> String {
+        guard let grade else { return "Complete more sessions to unlock your next tier." }
+        switch grade {
+        case .aPlus, .a, .aMinus:
+            return "You're performing at an Elite level—maintain this standard."
+        case .bPlus, .b, .bMinus:
+            return "You're close to Elite (Early Decisions)."
+        case .cPlus, .c, .cMinus:
+            return "You're close to Strong (On-Time Decisions)."
+        case .dPlus, .d, .dMinus:
+            return "You're close to Developing (On-Time Decisions)."
+        case .f:
+            return "You're close to Emerging (Slightly Late Decisions)."
+        }
+    }
+
+    private static func overallStageContext(from grade: ReportCardGrade?) -> String {
+        guard let grade else { return "Stage 1 — Building Decision Timing" }
+        switch grade {
+        case .aPlus, .a, .aMinus: return "Stage 4 — Sustaining Elite Decisions"
+        case .bPlus, .b, .bMinus: return "Stage 3 — Strengthening Decision Timing"
+        case .cPlus, .c, .cMinus: return "Stage 2 — Developing Decision Timing"
+        case .dPlus, .d, .dMinus, .f: return "Stage 1 — Building Decision Timing"
+        }
+    }
+
+    private static func overallNextTarget(chartSessions: [SessionResult]) -> String {
+        let recent = Array(chartSessions.prefix(5))
+        let withTime = recent.compactMap(\.avgDecisionTime)
+        guard !withTime.isEmpty else { return "Next Target: Complete 3 timed sessions" }
+        let avgTime = withTime.reduce(0, +) / Double(withTime.count)
+        if avgTime > 1.20 { return "Next Target: < 1.20s" }
+        if avgTime > 1.10 { return "Next Target: < 1.10s" }
+        if avgTime > 0.90 { return "Next Target: < 0.90s" }
+        return "Next Target: Keep < 0.90s consistently"
+    }
+
+    private static func rollingAverageDecisionTime(chartSessions: [SessionResult]) -> Double? {
+        let recent = Array(chartSessions.prefix(5)).compactMap(\.avgDecisionTime)
+        guard !recent.isEmpty else { return nil }
+        return recent.reduce(0, +) / Double(recent.count)
+    }
+
+    private static func decisionSpeedZone(from avg: Double?) -> String {
+        guard let avg else { return "No timing data yet" }
+        if avg < 0.90 { return "Early" }
+        if avg <= 1.10 { return "On Time" }
+        if avg <= 1.20 { return "Late" }
+        return "Too Late"
+    }
+
+    private static func decisionSpeedTier(from avg: Double?) -> String {
+        guard let avg else { return "Emerging" }
+        if avg < 0.90 { return "Elite" }
+        if avg <= 1.10 { return "Strong" }
+        if avg <= 1.20 { return "Developing" }
+        return "Emerging"
+    }
+
+    private static func decisionSpeedMessage(from zone: String) -> String {
+        switch zone {
+        case "Early": return "Excellent — you're deciding before pressure."
+        case "On Time": return "Good timing — push toward earlier decisions."
+        case "Late": return "You're reading it well, but committing slightly late."
+        case "Too Late": return "You're waiting too long — decide earlier."
+        default: return "Complete more sessions to unlock timing feedback."
+        }
+    }
+
+    private static func rollingAccuracyPercent(chartSessions: [SessionResult]) -> Int? {
+        let recent = Array(chartSessions.prefix(5)).filter { $0.totalReps > 0 }
+        guard !recent.isEmpty else { return nil }
+        let avg = recent.reduce(0.0) { $0 + (Double($1.correctCount) / Double($1.totalReps)) } / Double(recent.count)
+        return Int(round(avg * 100.0))
+    }
+
+    private static func accuracyTier(from percent: Int?) -> String {
+        guard let percent else { return "Developing" }
+        if percent >= 90 { return "Elite" }
+        if percent >= 75 { return "Strong" }
+        if percent >= 60 { return "Developing" }
+        return "Emerging"
+    }
+
+    private static func accuracyMessage(from percent: Int?, speedZone: String) -> String {
+        guard let percent else { return "Complete more sessions to unlock accuracy coaching." }
+        if percent >= 85 && (speedZone == "Late" || speedZone == "Too Late") {
+            return "Excellent accuracy — now focus on deciding faster."
+        }
+        if percent >= 85 { return "Great decision quality — keep consistency high." }
+        if percent >= 70 { return "Good base — sharpen consistency under pressure." }
+        return "Slow down slightly to improve decision quality."
+    }
+
+    private static func rollingForwardThinkingPercent(chartSessions: [SessionResult]) -> Int? {
+        let recent = Array(chartSessions.prefix(5))
+        let values: [Double] = recent.compactMap { s in
+            guard let opp = s.forwardOpportunityCount, opp > 0, let choice = s.forwardChoiceCount else { return nil }
+            return Double(choice) / Double(opp)
+        }
+        guard !values.isEmpty else { return nil }
+        return Int(round((values.reduce(0, +) / Double(values.count)) * 100.0))
+    }
+
+    private static func forwardThinkingTier(from percent: Int?) -> String {
+        guard let percent else { return "Locked" }
+        if percent >= 70 { return "Elite" }
+        if percent >= 50 { return "Strong" }
+        return "Developing"
+    }
+
+    private static func forwardThinkingMessage(from percent: Int?) -> String {
+        guard let percent else { return "Complete more sessions to unlock." }
+        if percent < 50 { return "Look forward more when space is available." }
+        if percent < 70 { return "Good forward intent — keep scanning for forward options." }
+        return "Excellent forward decision-making."
+    }
+
+    private static func focusNext(speedZone: String, accuracyPercent: Int?, forwardPercent: Int?) -> String {
+        if speedZone == "Too Late" || speedZone == "Late" { return "Decision Speed" }
+        if let accuracyPercent, accuracyPercent < 75 { return "Decision Accuracy" }
+        if let forwardPercent, forwardPercent < 50 { return "Forward Thinking" }
+        return "Decision Speed"
     }
 
     /// Decision Speed: grade from rolling average decision time (most recent 3–5 sessions). Requires at least 3 sessions with avgDecisionTime; otherwise nil (caller shows "Not enough data for grade" or "—").
@@ -132,17 +402,6 @@ enum ReportCardGenerator {
         if let g = grade { return g.display }
         if withTimeCount >= 1 { return "Not enough data for grade" }
         return "—"
-    }
-
-    /// First Touch Commitment: % where first touch matched correct direction.
-    private static func gradeFirstTouchCommitment(sessions: [SessionResult]) -> ReportCardGrade? {
-        let withData = sessions.filter { $0.firstTouchMatchCount != nil && $0.totalReps > 0 }
-        guard !withData.isEmpty else { return nil }
-        let sum = withData.reduce(0.0) { acc, s in
-            acc + Double(s.firstTouchMatchCount!) / Double(s.totalReps) * 100.0
-        }
-        let pct = sum / Double(withData.count)
-        return ReportCardGrade.from(percentage: pct)
     }
 
     /// Pressure Escape: AFP only, % correct (successful escapes).
@@ -187,23 +446,17 @@ enum ReportCardGenerator {
 
     private static func coachingInsight(
         trainingRecommendation: TrainingRecommendationResult,
-        decisionBeforeContact: ReportCardGrade?,
         decisionSpeed: ReportCardGrade?,
-        firstTouchCommitment: ReportCardGrade?,
         pressureEscape: ReportCardGrade?
     ) -> String {
-        let grades = [decisionBeforeContact, decisionSpeed, firstTouchCommitment, pressureEscape]
+        let grades = [decisionSpeed, pressureEscape]
         let hasData = grades.contains { $0 != nil }
         guard hasData else {
             return "Complete a few training blocks to see your report card and personalized coaching insight."
         }
         let weakest: String
-        if let dbc = decisionBeforeContact, dbc == .f || dbc == .d || dbc == .dMinus || dbc == .dPlus {
-            weakest = "Deciding before the ball arrives"
-        } else if let sp = decisionSpeed, sp == .f || sp == .d || sp == .dMinus || sp == .dPlus {
+        if let sp = decisionSpeed, sp == .f || sp == .d || sp == .dMinus || sp == .dPlus {
             weakest = "Decision speed"
-        } else if let ftc = firstTouchCommitment, ftc == .f || ftc == .d || ftc == .dMinus || ftc == .dPlus {
-            weakest = "First touch commitment"
         } else if let pe = pressureEscape, pe == .f || pe == .d || pe == .dMinus || pe == .dPlus {
             weakest = "Escaping pressure"
         } else {

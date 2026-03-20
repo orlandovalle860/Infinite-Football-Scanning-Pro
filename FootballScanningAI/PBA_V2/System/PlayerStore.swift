@@ -10,10 +10,15 @@ import Combine
 
 final class PlayerStore: ObservableObject {
     @Published private(set) var players: [Player] = []
-    @Published var selectedPlayerId: UUID?
+    @Published var selectedPlayerId: UUID? {
+        didSet {
+            persistSelection()
+        }
+    }
 
     private let playersKey = "pba_players_v1"
     private let selectedKey = "pba_selected_player_v1"
+    private let lastSelectedKey = "pba_last_selected_player_v1"
 
     func load() {
         if let data = UserDefaults.standard.data(forKey: playersKey),
@@ -22,8 +27,12 @@ final class PlayerStore: ObservableObject {
         } else {
             players = []
         }
-        if let uuidString = UserDefaults.standard.string(forKey: selectedKey),
+        if let uuidString = UserDefaults.standard.string(forKey: lastSelectedKey),
            let uuid = UUID(uuidString: uuidString) {
+            selectedPlayerId = players.contains(where: { $0.id == uuid }) ? uuid : players.first?.id
+        } else if let uuidString = UserDefaults.standard.string(forKey: selectedKey),
+                  let uuid = UUID(uuidString: uuidString) {
+            // Backward compatibility with older selection key.
             selectedPlayerId = players.contains(where: { $0.id == uuid }) ? uuid : players.first?.id
         } else {
             selectedPlayerId = players.first?.id
@@ -34,10 +43,16 @@ final class PlayerStore: ObservableObject {
         if let data = try? JSONEncoder().encode(players) {
             UserDefaults.standard.set(data, forKey: playersKey)
         }
+        persistSelection()
+    }
+
+    private func persistSelection() {
         if let id = selectedPlayerId {
             UserDefaults.standard.set(id.uuidString, forKey: selectedKey)
+            UserDefaults.standard.set(id.uuidString, forKey: lastSelectedKey)
         } else {
             UserDefaults.standard.removeObject(forKey: selectedKey)
+            UserDefaults.standard.removeObject(forKey: lastSelectedKey)
         }
     }
 
@@ -93,6 +108,7 @@ final class PlayerStore: ObservableObject {
         selectedPlayerId = nil
         UserDefaults.standard.removeObject(forKey: playersKey)
         UserDefaults.standard.removeObject(forKey: selectedKey)
+        UserDefaults.standard.removeObject(forKey: lastSelectedKey)
     }
 
     func selectPlayer(id: UUID) {

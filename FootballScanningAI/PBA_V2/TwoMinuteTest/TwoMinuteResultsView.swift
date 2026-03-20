@@ -26,6 +26,10 @@ struct TwoMinuteResultsView: View {
     @State private var sessionResultForSummary: SessionResult?
     @State private var isNewPersonalBestForSummary = false
     @State private var newPersonalBestsFromBlock: [NewPersonalBest] = []
+    @State private var xpEarnedFromBlock: Int = 0
+    @State private var newlyUnlockedBadgesFromBlock: [PlayerBadge] = []
+    @State private var baselineRecommendation: GuidedCurriculumProgress?
+    @State private var showBaselineRecommendation = false
 
     private var earlyDecisions: Int { logs.filter(\.correct).count }
     private var forwardCorrect: Int { logs.filter { $0.ballGate == .up && $0.correct }.count }
@@ -154,10 +158,21 @@ struct TwoMinuteResultsView: View {
         }
     }
 
+    private func activityTitle(_ activity: ActivityKind) -> String {
+        switch activity {
+        case .twoMinuteTest: return "2-Minute Test"
+        case .awayFromPressure: return "Playing Away From Pressure"
+        case .dribbleOrPass: return "Dribble or Pass"
+        case .oneTouchPassing: return "One-Touch Passing"
+        }
+    }
+
     var body: some View {
         Group {
-            if let s = sessionResultForSummary {
-                SessionSummaryView(session: s, playerName: profileManager.currentProfile?.name ?? playerStore.selectedPlayer?.name ?? "Player", isNewPersonalBest: isNewPersonalBestForSummary, newPersonalBests: newPersonalBestsFromBlock, profileManager: profileManager, settingsViewModel: settingsViewModel)
+            if showBaselineRecommendation, let rec = baselineRecommendation, let baseline = sessionResult {
+                baselineRecommendationContent(recommendation: rec, baseline: baseline)
+            } else if let s = sessionResultForSummary {
+                SessionSummaryView(session: s, playerName: profileManager.currentProfile?.name ?? playerStore.selectedPlayer?.name ?? "Player", isNewPersonalBest: isNewPersonalBestForSummary, newPersonalBests: newPersonalBestsFromBlock, xpEarned: xpEarnedFromBlock, newlyUnlockedBadges: newlyUnlockedBadgesFromBlock, profileManager: profileManager, settingsViewModel: settingsViewModel)
                     .environmentObject(progressStore)
                     .environmentObject(playerStore)
                     .environmentObject(popToRootTrigger)
@@ -168,6 +183,7 @@ struct TwoMinuteResultsView: View {
         }
         .onAppear {
             guard !didSave else { return }
+            let wasNewPlayer = !(profileManager.currentProfile?.sessionResults.contains { [.awayFromPressure, .dribbleOrPass, .oneTouchPassing].contains($0.activityType) } ?? false)
             guard let sessionId = CurrentSessionStore.shared.sessionId else {
                 let record = SessionRecord(
                     id: UUID(),
@@ -188,8 +204,17 @@ struct TwoMinuteResultsView: View {
                 progressStore.add(record)
                 if let result = sessionResult {
                     isNewPersonalBestForSummary = profileManager.wouldBeNewPersonalBest(session: result)
-                    newPersonalBestsFromBlock = profileManager.addSessionResult(result)
-                    sessionResultForSummary = result
+                    let rewards = profileManager.addSessionResult(result)
+                    newPersonalBestsFromBlock = rewards.newPersonalBests
+                    xpEarnedFromBlock = rewards.xpEarned
+                    newlyUnlockedBadgesFromBlock = rewards.newlyUnlockedBadges
+                    if wasNewPlayer {
+                        let rec = GuidedCurriculumEngine.assignBaselineStage(playerId: result.playerID, baseline: result)
+                        baselineRecommendation = rec
+                        showBaselineRecommendation = true
+                    } else {
+                        sessionResultForSummary = result
+                    }
                 }
                 didSave = true
                 return
@@ -235,8 +260,17 @@ struct TwoMinuteResultsView: View {
             }
             if let result = sessionResult {
                 isNewPersonalBestForSummary = profileManager.wouldBeNewPersonalBest(session: result)
-                newPersonalBestsFromBlock = profileManager.addSessionResult(result)
-                sessionResultForSummary = result
+                let rewards = profileManager.addSessionResult(result)
+                newPersonalBestsFromBlock = rewards.newPersonalBests
+                xpEarnedFromBlock = rewards.xpEarned
+                newlyUnlockedBadgesFromBlock = rewards.newlyUnlockedBadges
+                if wasNewPlayer {
+                    let rec = GuidedCurriculumEngine.assignBaselineStage(playerId: result.playerID, baseline: result)
+                    baselineRecommendation = rec
+                    showBaselineRecommendation = true
+                } else {
+                    sessionResultForSummary = result
+                }
             }
             didSave = true
         }
@@ -274,6 +308,79 @@ struct TwoMinuteResultsView: View {
         .sheet(isPresented: $showRenameSheet) {
             renamePlayerSheet
         }
+    }
+
+    @ViewBuilder
+    private func baselineRecommendationContent(recommendation: GuidedCurriculumProgress, baseline: SessionResult) -> some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text("Your Starting Point")
+                .font(.system(size: 30, weight: .bold, design: .rounded))
+                .foregroundColor(.white)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Baseline Summary")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.yellow)
+                Text("Decision Speed: \(baseline.avgDecisionTime.map { String(format: "%.2fs", $0) } ?? "—")")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.9))
+                let accuracyPct = baseline.totalReps > 0 ? Int(round(Double(baseline.correctCount) / Double(baseline.totalReps) * 100.0)) : 0
+                Text("Accuracy: \(accuracyPct)%")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.9))
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Based on your baseline, we recommend starting with:")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.9))
+                Text("Stage \(recommendation.stage) of 3")
+                    .font(.title3.weight(.bold))
+                    .foregroundColor(.yellow)
+                Text(activityTitle(recommendation.nextActivity))
+                    .font(.headline)
+                    .foregroundColor(.white)
+                Text("Focus: \(recommendation.focus)")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.85))
+            }
+
+            Button {
+                switch recommendation.nextActivity {
+                case .awayFromPressure:
+                    router.push(.awayFromPressureRoleSelection)
+                case .dribbleOrPass:
+                    router.push(.dribbleOrPassRoleSelection)
+                case .oneTouchPassing:
+                    router.push(.oneTouchPassingRoleSelection)
+                case .twoMinuteTest:
+                    router.push(.twoMinuteRoleSelection)
+                }
+            } label: {
+                Text("Start Training")
+                    .font(.headline.weight(.semibold))
+                    .foregroundColor(.black)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                    .background(Color.yellow)
+                    .cornerRadius(14)
+            }
+            .buttonStyle(PlainButtonStyle())
+
+            Button {
+                router.popToRoot()
+            } label: {
+                Text("Go to Home")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.9))
+            }
+            .buttonStyle(PlainButtonStyle())
+
+            Spacer(minLength: 0)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color(red: 0.08, green: 0.08, blue: 0.12))
     }
 
     private var resultsContent: some View {

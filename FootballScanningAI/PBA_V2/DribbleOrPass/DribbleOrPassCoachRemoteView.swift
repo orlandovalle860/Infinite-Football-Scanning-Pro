@@ -134,6 +134,20 @@ struct DribbleOrPassCoachRemoteView: View {
                 Text("Tap the direction the player chose, or ✕ if incorrect.")
                     .font(.footnote)
                     .foregroundColor(.white.opacity(0.7))
+                Button {
+                    connectionManager.sendTwoMinuteMessage(.passTriggered(repIndex: repIndex, timestamp: Date()))
+                } label: {
+                    Text("Re-send PASS")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.yellow)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .overlay(
+                            Capsule()
+                                .stroke(Color.yellow.opacity(0.8), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(PlainButtonStyle())
                 decisionPad(repIndex: repIndex)
             }
             Spacer(minLength: 0)

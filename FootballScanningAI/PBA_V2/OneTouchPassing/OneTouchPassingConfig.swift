@@ -55,6 +55,40 @@ struct OneTouchPassingConfig {
         }
     }
 
+    /// Loop scaling for guided curriculum (v1 supports loops 1...3).
+    /// Loop 1 = default, loop 2/3 = faster tempo + shorter windows.
+    static func defaultConfig(for difficulty: TestDifficulty, loopLevel: Int) -> OneTouchPassingConfig {
+        let base = defaultConfig(for: difficulty)
+        switch max(1, min(3, loopLevel)) {
+        case 1:
+            return base
+        case 2:
+            return OneTouchPassingConfig(
+                difficulty: difficulty,
+                checkDelayMin: max(1.8, base.checkDelayMin * 0.9),
+                checkDelayMax: max(2.6, base.checkDelayMax * 0.9),
+                revealStyle: base.revealStyle,
+                revealSpacingSeconds: max(0.08, base.revealSpacingSeconds * 0.9),
+                cueVisibleSeconds: max(0.40, base.cueVisibleSeconds * 0.9)
+            )
+        default:
+            let advancedStyle: OneTouchRevealStyle
+            switch base.revealStyle {
+            case .simultaneous: advancedStyle = .twoStage
+            case .twoStage: advancedStyle = .sequential
+            case .sequential: advancedStyle = .sequential
+            }
+            return OneTouchPassingConfig(
+                difficulty: difficulty,
+                checkDelayMin: max(1.6, base.checkDelayMin * 0.8),
+                checkDelayMax: max(2.2, base.checkDelayMax * 0.8),
+                revealStyle: advancedStyle,
+                revealSpacingSeconds: max(0.07, base.revealSpacingSeconds * 0.8),
+                cueVisibleSeconds: max(0.35, base.cueVisibleSeconds * 0.8)
+            )
+        }
+    }
+
     /// Random delay for this rep within the difficulty range.
     func randomCheckDelay() -> Double {
         Double.random(in: checkDelayMin...checkDelayMax)

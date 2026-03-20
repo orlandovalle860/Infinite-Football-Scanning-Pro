@@ -27,6 +27,8 @@ struct OneTouchPassingBlockSummaryView: View {
     @State private var sessionResultForSummary: SessionResult?
     @State private var isNewPersonalBestForSummary = false
     @State private var newPersonalBestsFromBlock: [NewPersonalBest] = []
+    @State private var xpEarnedFromBlock: Int = 0
+    @State private var newlyUnlockedBadgesFromBlock: [PlayerBadge] = []
     @State private var decisionSpeedPercentile: Int?
     @State private var previousSessionForComparison: SessionRecord?
     @State private var personalBestScore: Int?
@@ -36,11 +38,12 @@ struct OneTouchPassingBlockSummaryView: View {
         OneTouchBlockResult.from(repResults: results)
     }
 
-    /// Decision Speed Score (0–100) from correctness and reaction times; nil when no reps.
+    /// Decision Speed Score (0–100) from correctness and reaction times.
+    /// One-Touch uses a wider timing curve: (1600ms - rt)/1200, clamped to 0...1.
     private var decisionSpeedScoreValue: Int? {
         let ms = results.map { Int($0.decisionTime * 1000) }
         let correct = results.map(\.correct)
-        return DecisionSpeedScore.sessionScore(reactionTimesMs: ms, correct: correct)
+        return DecisionSpeedScore.oneTouchSessionScore(reactionTimesMs: ms, correct: correct)
     }
 
     private var performanceLabel: String {
@@ -187,6 +190,8 @@ struct OneTouchPassingBlockSummaryView: View {
                     playerName: profileManager.currentProfile?.name ?? "Player",
                     isNewPersonalBest: isNewPersonalBestForSummary,
                     newPersonalBests: newPersonalBestsFromBlock,
+                    xpEarned: xpEarnedFromBlock,
+                    newlyUnlockedBadges: newlyUnlockedBadgesFromBlock,
                     profileManager: profileManager,
                     settingsViewModel: settingsViewModel
                 )
@@ -287,7 +292,10 @@ struct OneTouchPassingBlockSummaryView: View {
             }
             if let result = sessionResult {
                 isNewPersonalBestForSummary = profileManager.wouldBeNewPersonalBest(session: result)
-                newPersonalBestsFromBlock = profileManager.addSessionResult(result)
+                let rewards = profileManager.addSessionResult(result)
+                newPersonalBestsFromBlock = rewards.newPersonalBests
+                xpEarnedFromBlock = rewards.xpEarned
+                newlyUnlockedBadgesFromBlock = rewards.newlyUnlockedBadges
                 sessionResultForSummary = result
             }
             if let score = decisionSpeedScoreValue {

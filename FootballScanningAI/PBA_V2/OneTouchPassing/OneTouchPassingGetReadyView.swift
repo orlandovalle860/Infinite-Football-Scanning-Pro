@@ -82,16 +82,6 @@ struct OneTouchPassingGetReadyView: View {
         .preferredColorScheme(.dark)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showLeaveAlert = true
-                } label: {
-                    Image(systemName: "house.fill")
-                }
-                .foregroundColor(.white.opacity(0.9))
-            }
-        }
         .alert("Leave training?", isPresented: $showLeaveAlert) {
             Button("Stay", role: .cancel) {}
             Button("Leave", role: .destructive) {

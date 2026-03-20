@@ -279,7 +279,7 @@ struct OneTouchPassingDisplaySessionView: View {
 
     private var layoutWithGates: some View {
         GeometryReader { geo in
-            let center = TwoMinuteSlotPositions.centerPosition()
+            let center = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
             ZStack {
                 VStack(spacing: 10) {
                     Text("X")

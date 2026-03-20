@@ -35,7 +35,9 @@ struct OneTouchPassingRoleSelectionView: View {
                 .padding(.horizontal, 28)
 
             VStack(spacing: 16) {
-                NavigationLink(value: AppRoute.oneTouchPassingTrainingModeSelection) {
+                Button {
+                    router.push(.oneTouchPassingTrainingModeSelection)
+                } label: {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             Image(systemName: "tv")

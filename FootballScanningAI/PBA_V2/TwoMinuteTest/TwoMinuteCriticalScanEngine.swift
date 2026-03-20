@@ -97,8 +97,9 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
         RunLoop.main.add(ballHideTimer!, forMode: .common)
     }
 
-    /// Max reaction time (trigger → confirmation); reps above this are discarded.
-    private static let maxReactionTimeSeconds: TimeInterval = 2.0
+    /// Max reaction time (trigger -> confirmation); reps above this are discarded.
+    /// Slightly wider in real coach-operated workflows to reduce false drops.
+    private static let maxReactionTimeSeconds: TimeInterval = 3.5
 
     /// Returns reaction time in seconds when rep was saved; nil when discarded.
     func onExitLogged(repIndex: Int, gate: Gate, timestamp: Date) -> Double? {
@@ -117,10 +118,13 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
             return nil
         }
         guard let ri = rIdx, ri == repIndex else { return nil }
-        guard let triggerTime = passTriggeredAt else { return nil }
+        let triggerTime = passTriggeredAt ?? infoShownAtForCurrentRep ?? startedAtForCurrentRep ?? timestamp
 
         let reactionTimeSeconds = timestamp.timeIntervalSince(triggerTime)
         if reactionTimeSeconds > Self.maxReactionTimeSeconds {
+            #if DEBUG
+            print("[PBA-Debug] 2MT rep discarded (slow): rep=\(repIndex), reaction=\(String(format: "%.2f", reactionTimeSeconds))s, max=\(Self.maxReactionTimeSeconds)s, hadPassTrigger=\(passTriggeredAt != nil)")
+            #endif
             passTriggeredAt = nil
             if repIndex + 1 >= plan.count { phase = .complete } else { phase = .waitingForNextRep }
             return nil
@@ -161,10 +165,13 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
         default: break
         }
         guard ballGate != nil else { return nil }
-        guard let triggerTime = passTriggeredAt else { return nil }
+        let triggerTime = passTriggeredAt ?? infoShownAtForCurrentRep ?? startedAtForCurrentRep ?? timestamp
 
         let reactionTimeSeconds = timestamp.timeIntervalSince(triggerTime)
         if reactionTimeSeconds > Self.maxReactionTimeSeconds {
+            #if DEBUG
+            print("[PBA-Debug] 2MT incorrect rep discarded (slow): rep=\(repIndex), reaction=\(String(format: "%.2f", reactionTimeSeconds))s, max=\(Self.maxReactionTimeSeconds)s, hadPassTrigger=\(passTriggeredAt != nil)")
+            #endif
             passTriggeredAt = nil
             if repIndex + 1 >= plan.count { phase = .complete } else { phase = .waitingForNextRep }
             return nil

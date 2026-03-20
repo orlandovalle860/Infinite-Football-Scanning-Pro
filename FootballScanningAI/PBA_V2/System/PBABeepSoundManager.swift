@@ -48,6 +48,9 @@ final class PBABeepSoundManager {
         player = nil
         currentVariant = variant
         guard let url = Bundle.main.url(forResource: variant.resourceName, withExtension: "wav") else {
+            #if DEBUG
+            print("[PBA-Debug] Beep preload missing file: \(variant.resourceName).wav")
+            #endif
             return
         }
         do {
@@ -55,7 +58,11 @@ final class PBABeepSoundManager {
             p.prepareToPlay()
             p.numberOfLoops = 0
             player = p
-        } catch {}
+        } catch {
+            #if DEBUG
+            print("[PBA-Debug] Beep preload failed: \(variant.resourceName), error=\(error.localizedDescription)")
+            #endif
+        }
     }
 
     /// Preload using the current value from UserDefaults (selectedBeepSound). Call from app launch and when selector changes.
@@ -67,11 +74,37 @@ final class PBABeepSoundManager {
 
     /// Play the currently selected beep. No-op if sound is disabled or preload failed. Activates session if needed; call from main.
     func play(soundEnabled: Bool = true) {
-        guard soundEnabled else { return }
+        guard soundEnabled else {
+            #if DEBUG
+            print("[PBA-Debug] Beep skipped: soundEnabled=false")
+            #endif
+            return
+        }
+
+        activateSessionIfNeeded()
         preloadCurrent()
-        guard let p = player else { return }
+        guard let p = player else {
+            #if DEBUG
+            print("[PBA-Debug] Beep play failed: player=nil")
+            #endif
+            return
+        }
         p.currentTime = 0
-        p.play()
+        let played = p.play()
+
+        // Rarely AVAudioPlayer can fail to start after route/interruption changes.
+        // Reload the selected asset and retry once.
+        if !played {
+            #if DEBUG
+            print("[PBA-Debug] Beep first play() returned false; reloading and retrying")
+            #endif
+            let raw = UserDefaults.standard.string(forKey: Self.selectedBeepStorageKey) ?? "A"
+            let variant = PBABeepVariant(rawValue: raw) ?? .a
+            currentVariant = nil
+            preload(variant: variant)
+            player?.currentTime = 0
+            _ = player?.play()
+        }
     }
 
     /// Activate audio session for playback. Call once before first play (e.g. from display views that already do this).

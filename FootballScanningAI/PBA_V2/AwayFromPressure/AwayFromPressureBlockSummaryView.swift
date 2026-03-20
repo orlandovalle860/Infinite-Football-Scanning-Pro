@@ -27,6 +27,8 @@ struct AwayFromPressureBlockSummaryView: View {
     @State private var sessionResultForSummary: SessionResult?
     @State private var isNewPersonalBestForSummary = false
     @State private var newPersonalBestsFromBlock: [NewPersonalBest] = []
+    @State private var xpEarnedFromBlock: Int = 0
+    @State private var newlyUnlockedBadgesFromBlock: [PlayerBadge] = []
     @State private var decisionSpeedPercentile: Int?
     @State private var previousSessionForComparison: SessionRecord?
     @State private var personalBestScore: Int?
@@ -248,6 +250,8 @@ struct AwayFromPressureBlockSummaryView: View {
                     playerName: profileManager.currentProfile?.name ?? "Player",
                     isNewPersonalBest: isNewPersonalBestForSummary,
                     newPersonalBests: newPersonalBestsFromBlock,
+                    xpEarned: xpEarnedFromBlock,
+                    newlyUnlockedBadges: newlyUnlockedBadgesFromBlock,
                     profileManager: profileManager,
                     settingsViewModel: settingsViewModel
                 )
@@ -291,6 +295,9 @@ struct AwayFromPressureBlockSummaryView: View {
                 )
                 #if DEBUG
                 print("[PBA-Debug] SessionRecord created (no sessionId). activity=\(record.activity.rawValue), decisionSpeedScore=\(record.decisionSpeedScore ?? -1), playerId=\(record.playerId?.uuidString ?? "nil"), correct=\(record.correct)/\(record.decisionsCompleted)")
+                let savedScore = record.decisionSpeedScore.map(String.init) ?? "nil"
+                print("[PBA-Debug] Saved session score: \(savedScore)")
+                print("[PBA-Debug] Player ID match: \(record.playerId == playerId)")
                 #endif
                 previousSessionForComparison = progressStore.last(record.activity, playerId: record.playerId)
                 let previousBest = progressStore.bestDecisionSpeedScore(activity: record.activity, playerId: record.playerId)
@@ -322,6 +329,9 @@ struct AwayFromPressureBlockSummaryView: View {
             )
             #if DEBUG
             print("[PBA-Debug] SessionRecord created (with sessionId). activity=\(record.activity.rawValue), decisionSpeedScore=\(record.decisionSpeedScore ?? -1), playerId=\(record.playerId?.uuidString ?? "nil"), correct=\(record.correct)/\(record.decisionsCompleted)")
+            let savedScore = record.decisionSpeedScore.map(String.init) ?? "nil"
+            print("[PBA-Debug] Saved session score: \(savedScore)")
+            print("[PBA-Debug] Player ID match: \(record.playerId == playerId)")
             #endif
             previousSessionForComparison = progressStore.last(record.activity, playerId: record.playerId)
             let previousBest = progressStore.bestDecisionSpeedScore(activity: record.activity, playerId: record.playerId)
@@ -354,7 +364,10 @@ struct AwayFromPressureBlockSummaryView: View {
             }
             if let result = sessionResult {
                 isNewPersonalBestForSummary = profileManager.wouldBeNewPersonalBest(session: result)
-                newPersonalBestsFromBlock = profileManager.addSessionResult(result)
+                let rewards = profileManager.addSessionResult(result)
+                newPersonalBestsFromBlock = rewards.newPersonalBests
+                xpEarnedFromBlock = rewards.xpEarned
+                newlyUnlockedBadgesFromBlock = rewards.newlyUnlockedBadges
                 sessionResultForSummary = result
             }
             if let score = decisionSpeedScoreValue {

@@ -19,6 +19,10 @@ struct AwayFromPressureSetupView: View {
     @State private var showInstructions = false
     @State private var navigateToSession = false
 
+    private var loopLevel: Int {
+        GuidedCurriculumEngine.currentProgress(playerId: playerStore.selectedPlayerId).loop
+    }
+
     var body: some View {
         VStack(spacing: 18) {
             Spacer(minLength: 20)
@@ -99,18 +103,6 @@ struct AwayFromPressureSetupView: View {
         .preferredColorScheme(.dark)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    print("[SetupScreen AFP] Home tapped, router path count before = \(router.pathCount)")
-                    router.popToRoot()
-                    print("[SetupScreen AFP] after popToRoot, router path count = \(router.pathCount)")
-                } label: {
-                    Image(systemName: "house.fill")
-                }
-                .foregroundColor(.white.opacity(0.9))
-            }
-        }
         .onAppear {
             print("[SetupScreen AFP] onAppear, router path count = \(router.pathCount)")
         }
@@ -121,7 +113,7 @@ struct AwayFromPressureSetupView: View {
             }
         }
         .navigationDestination(isPresented: $navigateToSession) {
-            AwayFromPressureDisplaySessionView(config: AwayFromPressureConfig.config(for: difficulty), mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+            AwayFromPressureDisplaySessionView(config: AwayFromPressureConfig.config(for: difficulty, loopLevel: loopLevel), mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)

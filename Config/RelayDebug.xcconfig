@@ -1,0 +1,6 @@
+// DEBUG / local development — PBA relay HTTP API (no trailing slash).
+// Edit RELAY_HOST to match the machine running `npm start` in /relay (LAN address for physical devices).
+// Build `//` without writing `//` in one token — xcconfig treats `//` as start of a comment.
+// Value is substituted into Info.plist `$(RELAY_HTTP_BASE_URL)`.
+SLASH = /
+RELAY_HTTP_BASE_URL = https:$(SLASH)$(SLASH)relay.infinite-football.com

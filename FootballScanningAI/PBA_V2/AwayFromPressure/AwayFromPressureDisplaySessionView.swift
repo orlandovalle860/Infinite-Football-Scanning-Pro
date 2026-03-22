@@ -28,6 +28,7 @@ struct AwayFromPressureDisplaySessionView: View {
     @State private var nextRepIndex = 0
     @State private var audioInterruptionObserver: NSObjectProtocol?
     @State private var wedgeStyle: WedgeCueStyle = WedgeCueStyle.style(for: 1)
+    @State private var hasSentSessionEnded = false
 
     init(config: AwayFromPressureConfig, mode: TrainingMode, settingsViewModel: SettingsViewModel, profileManager: UserProfileManager) {
         self.config = config
@@ -81,6 +82,8 @@ struct AwayFromPressureDisplaySessionView: View {
                 }
             case .coachPaired:
                 break
+            case .sessionEnded:
+                break
             }
         }
         .onChange(of: engine.phase) { _, newPhase in
@@ -94,6 +97,7 @@ struct AwayFromPressureDisplaySessionView: View {
         }
         .onAppear {
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
+            hasSentSessionEnded = false
             if mode == .partner { connectionManager.startHosting() }
             let pid = playerStore.selectedPlayerId ?? profileManager.currentProfile?.id
             wedgeStyle = WedgeDifficultyEngine.currentStyle(playerId: pid)
@@ -110,7 +114,10 @@ struct AwayFromPressureDisplaySessionView: View {
             }
         }
         .onDisappear {
-            if mode == .partner { connectionManager.stopHosting() }
+            if mode == .partner {
+                sendSessionEndedIfNeeded()
+                connectionManager.stopHosting()
+            }
             unsubscribeFromAudioInterruption()
         }
         .onChange(of: scenePhase) { _, newPhase in
@@ -378,5 +385,11 @@ struct AwayFromPressureDisplaySessionView: View {
             self.activateAudioSession()
             PBABeepSoundManager.shared.play(soundEnabled: settingsViewModel.soundEnabled)
         }
+    }
+
+    private func sendSessionEndedIfNeeded() {
+        guard !hasSentSessionEnded else { return }
+        hasSentSessionEnded = true
+        connectionManager.sendTwoMinuteMessage(.sessionEnded(timestamp: Date()))
     }
 }

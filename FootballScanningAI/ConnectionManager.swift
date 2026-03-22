@@ -37,6 +37,7 @@ private let pba2Prefix = "pba2:".data(using: .utf8)!
 private let displayPrefix = "display:".data(using: .utf8)!
 private let heartbeatInterval: TimeInterval = 3
 private let heartbeatTimeout: TimeInterval = 9
+private let inviteTimeoutSeconds: TimeInterval = 20
 
 /// Single persistent ConnectionManager. Views must NOT create MCSession, advertiser, or browser.
 final class ConnectionManager: NSObject, ObservableObject {
@@ -186,7 +187,7 @@ final class ConnectionManager: NSObject, ObservableObject {
             guard let self = self, let browser = self.browser, let session = self.session else { return }
             guard self.availablePeers.contains(where: { $0.displayName == peerID.displayName }) else { return }
             DispatchQueue.main.async { self.connectionState = .connecting }
-            browser.invitePeer(peerID, to: session, withContext: nil, timeout: 10)
+            browser.invitePeer(peerID, to: session, withContext: nil, timeout: inviteTimeoutSeconds)
         }
     }
 

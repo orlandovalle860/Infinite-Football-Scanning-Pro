@@ -2514,6 +2514,9 @@ struct IntroView: View {
             otherActivityRow(title: "Achievements", subtitle: "See earned and locked badges") {
                 router.push(.achievements)
             }
+            otherActivityRow(title: "Run 2-Minute Test", subtitle: "Re-test baseline and benchmark progress") {
+                router.push(.twoMinuteRoleSelection)
+            }
             otherActivityRow(title: "Coach Remote", subtitle: "Open partner training remote") {
                 router.push(.coachRemote)
             }

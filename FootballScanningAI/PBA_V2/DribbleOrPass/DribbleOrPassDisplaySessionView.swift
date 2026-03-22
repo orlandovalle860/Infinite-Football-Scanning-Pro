@@ -27,6 +27,7 @@ struct DribbleOrPassDisplaySessionView: View {
     @State private var showLeaveAlert = false
     @State private var nextRepIndex = 0
     @State private var audioInterruptionObserver: NSObjectProtocol?
+    @State private var hasSentSessionEnded = false
 
     init(config: DribbleOrPassConfig, mode: TrainingMode, settingsViewModel: SettingsViewModel, profileManager: UserProfileManager) {
         self.config = config
@@ -82,6 +83,8 @@ struct DribbleOrPassDisplaySessionView: View {
                 }
             case .coachPaired:
                 break
+            case .sessionEnded:
+                break
             }
         }
         .onChange(of: engine.phase) { _, newPhase in
@@ -92,6 +95,7 @@ struct DribbleOrPassDisplaySessionView: View {
         }
         .onAppear {
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
+            hasSentSessionEnded = false
             if mode == .partner { connectionManager.startHosting() }
             activateAudioSession()
             subscribeToAudioInterruption()
@@ -106,7 +110,10 @@ struct DribbleOrPassDisplaySessionView: View {
             }
         }
         .onDisappear {
-            if mode == .partner { connectionManager.stopHosting() }
+            if mode == .partner {
+                sendSessionEndedIfNeeded()
+                connectionManager.stopHosting()
+            }
             unsubscribeFromAudioInterruption()
         }
         .onChange(of: scenePhase) { _, newPhase in
@@ -359,5 +366,11 @@ struct DribbleOrPassDisplaySessionView: View {
             self.activateAudioSession()
             PBABeepSoundManager.shared.play(soundEnabled: settingsViewModel.soundEnabled)
         }
+    }
+
+    private func sendSessionEndedIfNeeded() {
+        guard !hasSentSessionEnded else { return }
+        hasSentSessionEnded = true
+        connectionManager.sendTwoMinuteMessage(.sessionEnded(timestamp: Date()))
     }
 }

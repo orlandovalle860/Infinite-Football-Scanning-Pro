@@ -7,7 +7,6 @@
 
 import SwiftUI
 import AVFoundation
-import MediaPlayer
 import MultipeerConnectivity
 
 enum DribbleOrPassCoachState {
@@ -27,10 +26,12 @@ struct DribbleOrPassCoachRemoteView: View {
     @EnvironmentObject private var multipeerManager: MultipeerManager
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
+    @StateObject private var remoteService = RemoteService()
     @State private var state: DribbleOrPassCoachState = .ready
     @State private var currentRepIndex = 0
     @State private var volumeTriggerEnabled = true
     @State private var loggingStep: DOPLoggingStep = .trigger
+    @State private var showVolumeEdgeWarning = false
 
     private let totalReps = 12
 
@@ -57,8 +58,26 @@ struct DribbleOrPassCoachRemoteView: View {
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(volumeTriggerOverlay)
+        .onReceive(NotificationCenter.default.publisher(for: .twoMinuteMessageReceived)) { notification in
+            guard let msg = notification.object as? TwoMinuteMessage else { return }
+            if case .sessionEnded = msg {
+                state = .ready
+                loggingStep = .trigger
+                volumeTriggerEnabled = true
+            }
+        }
         .onAppear { connectionManager.startBrowsing() }
         .onDisappear { connectionManager.stopBrowsing() }
+        .onChange(of: connectionManager.connectedPeerName) { _, newName in
+            if newName == nil {
+                resetLocalUIForDisconnect(source: "connectedPeerName=nil")
+            }
+        }
+        .onChange(of: connectionManager.connectionState) { _, newState in
+            if newState == .disconnected {
+                resetLocalUIForDisconnect(source: "connectionState=disconnected")
+            }
+        }
         .preferredColorScheme(.dark)
         .navigationTitle("Coach — Dribble or Pass (12 reps)")
         .navigationBarTitleDisplayMode(.inline)
@@ -80,7 +99,7 @@ struct DribbleOrPassCoachRemoteView: View {
                     .padding(.horizontal)
                 Button {
                     connectionManager.lastError = nil
-                    connectionManager.sendTwoMinuteMessage(.nextRep(repIndex: currentRepIndex))
+                    remoteService.sendNextRep(repIndex: currentRepIndex)
                     loggingStep = .trigger
                     state = .logging(repIndex: currentRepIndex)
                 } label: {
@@ -112,8 +131,15 @@ struct DribbleOrPassCoachRemoteView: View {
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.9))
                     .multilineTextAlignment(.center)
+                if showVolumeEdgeWarning {
+                    Text(CoachRemoteVolumeTriggerConfig.edgeWarningMessage)
+                        .font(.caption)
+                        .foregroundColor(.orange.opacity(0.95))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 4)
+                }
                 Button {
-                    connectionManager.sendTwoMinuteMessage(.passTriggered(repIndex: repIndex, timestamp: Date()))
+                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
                     loggingStep = .decision
                 } label: {
                     Text("PASS")
@@ -126,16 +152,17 @@ struct DribbleOrPassCoachRemoteView: View {
                 }
                 .buttonStyle(PlainButtonStyle())
                 .padding(.horizontal, 24)
-                Text("Volume button also triggers pass.")
+                Text("Volume buttons also trigger PASS (use PASS if volume is stuck at the top or bottom).")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.5))
+                    .multilineTextAlignment(.center)
             }
             if loggingStep == .decision {
                 Text("Tap the direction the player chose, or ✕ if incorrect.")
                     .font(.footnote)
                     .foregroundColor(.white.opacity(0.7))
                 Button {
-                    connectionManager.sendTwoMinuteMessage(.passTriggered(repIndex: repIndex, timestamp: Date()))
+                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
                 } label: {
                     Text("Re-send PASS")
                         .font(.caption.weight(.semibold))
@@ -229,16 +256,17 @@ struct DribbleOrPassCoachRemoteView: View {
     }
 
     private var volumeTriggerOverlay: some View {
-        DribbleOrPassVolumeTriggerView(
+        CoachRemoteVolumeTriggerView(
             connected: connectionManager.connectedPeerName != nil,
             enabled: volumeTriggerEnabled && loggingStep == .trigger,
             repIndex: { if case .logging(let r) = state { return r }; return nil },
             onTrigger: {
                 if case .logging(let repIndex) = state, loggingStep == .trigger {
-                    connectionManager.sendTwoMinuteMessage(.passTriggered(repIndex: repIndex, timestamp: Date()))
+                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
                     loggingStep = .decision
                 }
-            }
+            },
+            onVolumeEdgeWarningChange: { showVolumeEdgeWarning = $0 }
         )
         .id("vol-\(currentRepIndex)-\(loggingStep)")
         .allowsHitTesting(false)
@@ -281,13 +309,13 @@ struct DribbleOrPassCoachRemoteView: View {
 
     private func logDecision(repIndex: Int, gate: Gate) {
         guard case .logging(let ri) = state, ri == repIndex, loggingStep == .decision else { return }
-        connectionManager.sendTwoMinuteMessage(.exitLogged(repIndex: repIndex, gate: gate, timestamp: Date()))
+        remoteService.sendExitLogged(repIndex: repIndex, gate: gate, timestamp: Date())
         advanceToNextRep(after: repIndex)
     }
 
     private func logIncorrect(repIndex: Int) {
         guard case .logging(let ri) = state, ri == repIndex, loggingStep == .decision else { return }
-        connectionManager.sendTwoMinuteMessage(.incorrectDecision(repIndex: repIndex, timestamp: Date()))
+        remoteService.sendIncorrectDecision(repIndex: repIndex, timestamp: Date())
         advanceToNextRep(after: repIndex)
     }
 
@@ -296,51 +324,14 @@ struct DribbleOrPassCoachRemoteView: View {
         currentRepIndex = repIndex + 1
         state = currentRepIndex >= totalReps ? .blockComplete : .ready
     }
-}
 
-private struct DribbleOrPassVolumeTriggerView: UIViewRepresentable {
-    let connected: Bool
-    let enabled: Bool
-    let repIndex: () -> Int?
-    let onTrigger: () -> Void
-    func makeUIView(context: Context) -> UIView { UIView(frame: .zero) }
-    func updateUIView(_ uiView: UIView, context: Context) {
-        guard connected, enabled else { context.coordinator.stopPolling(); return }
-        context.coordinator.onTrigger = onTrigger
-        context.coordinator.repIndex = repIndex
-        context.coordinator.startPolling()
-    }
-    func makeCoordinator() -> Coordinator { Coordinator() }
-    class Coordinator {
-        var timer: Timer?
-        var lastVolume: Float = 0
-        var savedVolume: Float = 0
-        var onTrigger: (() -> Void) = {}
-        var repIndex: (() -> Int?) = { nil }
-        var startGeneration: Int = 0
-        func startPolling() {
-            guard timer == nil else { return }
-            do { try AVAudioSession.sharedInstance().setActive(true) } catch {}
-            lastVolume = AVAudioSession.sharedInstance().outputVolume
-            savedVolume = lastVolume
-            startGeneration += 1
-            let gen = startGeneration
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-                guard let self = self, self.timer == nil, self.startGeneration == gen else { return }
-                self.lastVolume = AVAudioSession.sharedInstance().outputVolume
-                self.savedVolume = self.lastVolume
-                self.timer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: true) { [weak self] _ in self?.checkVolume() }
-                RunLoop.main.add(self.timer!, forMode: .common)
-            }
-        }
-        func stopPolling() { startGeneration += 1; timer?.invalidate(); timer = nil }
-        private func checkVolume() {
-            let current = AVAudioSession.sharedInstance().outputVolume
-            if abs(current - lastVolume) > 0.01 {
-                lastVolume = current
-                onTrigger()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in MPVolumeView.setVolume(self?.savedVolume ?? 0.5) }
-            }
-        }
+    private func resetLocalUIForDisconnect(source: String) {
+        guard case .logging = state else { return }
+#if DEBUG
+        print("[DOP Coach] disconnect reset -> state=.ready [\(source)]")
+#endif
+        state = .ready
+        loggingStep = .trigger
+        volumeTriggerEnabled = true
     }
 }

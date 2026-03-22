@@ -27,6 +27,7 @@ struct OneTouchPassingDisplaySessionView: View {
     @State private var showLeaveAlert = false
     @State private var nextRepIndex = 0
     @State private var audioInterruptionObserver: NSObjectProtocol?
+    @State private var hasSentSessionEnded = false
 
     init(config: OneTouchPassingConfig, mode: TrainingMode, settingsViewModel: SettingsViewModel, profileManager: UserProfileManager) {
         self.config = config
@@ -81,6 +82,8 @@ struct OneTouchPassingDisplaySessionView: View {
                 }
             case .coachPaired:
                 break
+            case .sessionEnded:
+                break
             }
         }
         .onChange(of: engine.phase) { _, newPhase in
@@ -91,6 +94,7 @@ struct OneTouchPassingDisplaySessionView: View {
         }
         .onAppear {
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
+            hasSentSessionEnded = false
             if mode == .partner { connectionManager.startHosting() }
             activateAudioSession()
             subscribeToAudioInterruption()
@@ -105,7 +109,10 @@ struct OneTouchPassingDisplaySessionView: View {
             }
         }
         .onDisappear {
-            if mode == .partner { connectionManager.stopHosting() }
+            if mode == .partner {
+                sendSessionEndedIfNeeded()
+                connectionManager.stopHosting()
+            }
             unsubscribeFromAudioInterruption()
         }
         .onChange(of: scenePhase) { _, newPhase in
@@ -358,5 +365,11 @@ struct OneTouchPassingDisplaySessionView: View {
             self.activateAudioSession()
             PBABeepSoundManager.shared.play(soundEnabled: settingsViewModel.soundEnabled)
         }
+    }
+
+    private func sendSessionEndedIfNeeded() {
+        guard !hasSentSessionEnded else { return }
+        hasSentSessionEnded = true
+        connectionManager.sendTwoMinuteMessage(.sessionEnded(timestamp: Date()))
     }
 }

@@ -6,6 +6,8 @@
 	<array>
 		<string>_pba-training._tcp</string>
 	</array>
+	<key>RELAY_HTTP_BASE_URL</key>
+	<string>$(RELAY_HTTP_BASE_URL)</string>
 	<key>SUPABASE_ANON_KEY</key>
 	<string>sb_publishable_mL3-wen-A-wzwysS80OJBw_RIJB-W65</string>
 	<key>SUPABASE_URL</key>

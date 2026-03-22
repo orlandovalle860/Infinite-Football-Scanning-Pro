@@ -1,0 +1,3 @@
+// InfiniteFootballScanningPro — Release. Includes optional local secrets, then relay URL for production builds.
+#include? "../Secrets.xcconfig"
+#include "RelayRelease.xcconfig"

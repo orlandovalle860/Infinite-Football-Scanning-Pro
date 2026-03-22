@@ -7,7 +7,6 @@
 
 import SwiftUI
 import AVFoundation
-import MediaPlayer
 import MultipeerConnectivity
 
 enum OneTouchPassingCoachState {
@@ -21,9 +20,11 @@ struct OneTouchPassingCoachRemoteView: View {
     @EnvironmentObject private var multipeerManager: MultipeerManager
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
+    @StateObject private var remoteService = RemoteService()
     @State private var state: OneTouchPassingCoachState = .ready
     @State private var currentRepIndex = 0
     @State private var volumeTriggerEnabled = true
+    @State private var showVolumeEdgeWarning = false
 
     private let totalReps = 12
 
@@ -50,8 +51,35 @@ struct OneTouchPassingCoachRemoteView: View {
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(volumeTriggerOverlay)
-        .onAppear { connectionManager.startBrowsing() }
-        .onDisappear { connectionManager.stopBrowsing() }
+        .onReceive(NotificationCenter.default.publisher(for: .twoMinuteMessageReceived)) { notification in
+            guard let msg = notification.object as? TwoMinuteMessage else { return }
+            if case .sessionEnded = msg {
+                state = .ready
+                volumeTriggerEnabled = true
+            }
+        }
+        .onAppear {
+#if DEBUG
+            print("[RemoteService] OTP Coach onAppear -> connect()")
+#endif
+            remoteService.connect()
+        }
+        .onDisappear {
+#if DEBUG
+            print("[RemoteService] OTP Coach onDisappear -> disconnect()")
+#endif
+            remoteService.disconnect()
+        }
+        .onChange(of: connectionManager.connectedPeerName) { _, newName in
+            if newName == nil {
+                resetLocalUIForDisconnect(source: "connectedPeerName=nil")
+            }
+        }
+        .onChange(of: connectionManager.connectionState) { _, newState in
+            if newState == .disconnected {
+                resetLocalUIForDisconnect(source: "connectionState=disconnected")
+            }
+        }
         .preferredColorScheme(.dark)
         .navigationTitle("Coach — One-Touch Passing (12 reps)")
         .navigationBarTitleDisplayMode(.inline)
@@ -73,7 +101,7 @@ struct OneTouchPassingCoachRemoteView: View {
                     .padding(.horizontal)
                 Button {
                     connectionManager.lastError = nil
-                    connectionManager.sendTwoMinuteMessage(.nextRep(repIndex: currentRepIndex))
+                    remoteService.sendNextRep(repIndex: currentRepIndex)
                     state = .logging(repIndex: currentRepIndex)
                 } label: {
                     Text("NEXT REP")
@@ -103,8 +131,15 @@ struct OneTouchPassingCoachRemoteView: View {
                 .font(.subheadline)
                 .foregroundColor(.white.opacity(0.9))
                 .multilineTextAlignment(.center)
+            if showVolumeEdgeWarning {
+                Text(CoachRemoteVolumeTriggerConfig.edgeWarningMessage)
+                    .font(.caption)
+                    .foregroundColor(.orange.opacity(0.95))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 4)
+            }
             Button {
-                connectionManager.sendTwoMinuteMessage(.passTriggered(repIndex: repIndex, timestamp: Date()))
+                remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
             } label: {
                 Text("PASS")
                     .font(.system(size: 28, weight: .bold, design: .rounded))
@@ -120,9 +155,10 @@ struct OneTouchPassingCoachRemoteView: View {
                 .font(.footnote)
                 .foregroundColor(.white.opacity(0.7))
             directionPad
-            Text("Volume button also triggers pass.")
+            Text("Volume buttons also trigger PASS (use PASS if volume is stuck at the top or bottom).")
                 .font(.caption)
                 .foregroundColor(.white.opacity(0.5))
+                .multilineTextAlignment(.center)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 20)
@@ -163,7 +199,10 @@ struct OneTouchPassingCoachRemoteView: View {
             if !connectionManager.isBrowsing {
                 Button("Connect to Display") {
                     connectionManager.lastError = nil
-                    connectionManager.startBrowsing()
+                    #if DEBUG
+                    print("[RemoteService] OTP Coach Connect button -> connect()")
+                    #endif
+                    remoteService.connect()
                 }
                 .font(.headline)
                 .foregroundColor(.black)
@@ -191,7 +230,13 @@ struct OneTouchPassingCoachRemoteView: View {
                     .scrollContentBackground(.hidden)
                     .listStyle(.plain)
                 }
-                Button("Cancel") { connectionManager.stopBrowsing() }.foregroundColor(.white.opacity(0.9))
+                Button("Cancel") {
+                    #if DEBUG
+                    print("[RemoteService] OTP Coach Cancel button -> disconnect()")
+                    #endif
+                    remoteService.disconnect()
+                }
+                .foregroundColor(.white.opacity(0.9))
             }
             if let error = connectionManager.lastError {
                 Text(error).font(.subheadline).foregroundColor(.orange).multilineTextAlignment(.center).padding(.horizontal)
@@ -202,15 +247,16 @@ struct OneTouchPassingCoachRemoteView: View {
     }
 
     private var volumeTriggerOverlay: some View {
-        OneTouchPassingVolumeTriggerView(
+        CoachRemoteVolumeTriggerView(
             connected: connectionManager.connectedPeerName != nil,
             enabled: volumeTriggerEnabled,
             repIndex: { if case .logging(let r) = state { return r }; return nil },
             onTrigger: {
                 if case .logging(let repIndex) = state {
-                    connectionManager.sendTwoMinuteMessage(.passTriggered(repIndex: repIndex, timestamp: Date()))
+                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
                 }
-            }
+            },
+            onVolumeEdgeWarningChange: { showVolumeEdgeWarning = $0 }
         )
         .id("vol-\(currentRepIndex)-\(state)")
         .allowsHitTesting(false)
@@ -253,62 +299,24 @@ struct OneTouchPassingCoachRemoteView: View {
 
     private func logExit(_ gate: Gate) {
         guard case .logging(let repIndex) = state else { return }
-        connectionManager.sendTwoMinuteMessage(.exitLogged(repIndex: repIndex, gate: gate, timestamp: Date()))
+        remoteService.sendExitLogged(repIndex: repIndex, gate: gate, timestamp: Date())
         currentRepIndex = repIndex + 1
         state = currentRepIndex >= totalReps ? .blockComplete : .ready
     }
 
     private func logIncorrect() {
         guard case .logging(let repIndex) = state else { return }
-        connectionManager.sendTwoMinuteMessage(.incorrectDecision(repIndex: repIndex, timestamp: Date()))
+        remoteService.sendIncorrectDecision(repIndex: repIndex, timestamp: Date())
         currentRepIndex = repIndex + 1
         state = currentRepIndex >= totalReps ? .blockComplete : .ready
     }
-}
 
-private struct OneTouchPassingVolumeTriggerView: UIViewRepresentable {
-    let connected: Bool
-    let enabled: Bool
-    let repIndex: () -> Int?
-    let onTrigger: () -> Void
-    func makeUIView(context: Context) -> UIView { UIView(frame: .zero) }
-    func updateUIView(_ uiView: UIView, context: Context) {
-        guard connected, enabled else { context.coordinator.stopPolling(); return }
-        context.coordinator.onTrigger = onTrigger
-        context.coordinator.repIndex = repIndex
-        context.coordinator.startPolling()
-    }
-    func makeCoordinator() -> Coordinator { Coordinator() }
-    class Coordinator {
-        var timer: Timer?
-        var lastVolume: Float = 0
-        var savedVolume: Float = 0
-        var onTrigger: (() -> Void) = {}
-        var repIndex: (() -> Int?) = { nil }
-        var startGeneration: Int = 0
-        func startPolling() {
-            guard timer == nil else { return }
-            do { try AVAudioSession.sharedInstance().setActive(true) } catch {}
-            lastVolume = AVAudioSession.sharedInstance().outputVolume
-            savedVolume = lastVolume
-            startGeneration += 1
-            let gen = startGeneration
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-                guard let self = self, self.timer == nil, self.startGeneration == gen else { return }
-                self.lastVolume = AVAudioSession.sharedInstance().outputVolume
-                self.savedVolume = self.lastVolume
-                self.timer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: true) { [weak self] _ in self?.checkVolume() }
-                RunLoop.main.add(self.timer!, forMode: .common)
-            }
-        }
-        func stopPolling() { startGeneration += 1; timer?.invalidate(); timer = nil }
-        private func checkVolume() {
-            let current = AVAudioSession.sharedInstance().outputVolume
-            if abs(current - lastVolume) > 0.01 {
-                lastVolume = current
-                onTrigger()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in MPVolumeView.setVolume(self?.savedVolume ?? 0.5) }
-            }
-        }
+    private func resetLocalUIForDisconnect(source: String) {
+        guard case .logging = state else { return }
+#if DEBUG
+        print("[OTP Coach] disconnect reset -> state=.ready [\(source)]")
+#endif
+        state = .ready
+        volumeTriggerEnabled = true
     }
 }

@@ -54,6 +54,8 @@ enum TwoMinuteMessage: Codable {
     case incorrectDecision(repIndex: Int, timestamp: Date)
     /// Coach device: notifies display that this session is paired so the pairing code can be hidden.
     case coachPaired(sessionId: UUID)
+    /// Display device: notifies coach that session ended so UI can reset immediately.
+    case sessionEnded(timestamp: Date)
 
     enum CodingKeys: String, CodingKey {
         case kind
@@ -79,6 +81,8 @@ enum TwoMinuteMessage: Codable {
             self = .incorrectDecision(repIndex: try c.decode(Int.self, forKey: .repIndex), timestamp: try c.decode(Date.self, forKey: .timestamp))
         case "coachPaired":
             self = .coachPaired(sessionId: try c.decode(UUID.self, forKey: .sessionId))
+        case "sessionEnded":
+            self = .sessionEnded(timestamp: try c.decode(Date.self, forKey: .timestamp))
         default:
             throw DecodingError.dataCorruptedError(forKey: .kind, in: c, debugDescription: "Unknown kind: \(kind)")
         }
@@ -111,6 +115,9 @@ enum TwoMinuteMessage: Codable {
         case .coachPaired(let sessionId):
             try c.encode("coachPaired", forKey: .kind)
             try c.encode(sessionId, forKey: .sessionId)
+        case .sessionEnded(let timestamp):
+            try c.encode("sessionEnded", forKey: .kind)
+            try c.encode(timestamp, forKey: .timestamp)
         }
     }
 }

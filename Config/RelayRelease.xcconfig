@@ -1,0 +1,3 @@
+// Production / App Store — deployed relay (TLS). Replace relay.yourdomain.com with your real host.
+SLASH = /
+RELAY_HTTP_BASE_URL = https:$(SLASH)$(SLASH)relay.infinite-football.com

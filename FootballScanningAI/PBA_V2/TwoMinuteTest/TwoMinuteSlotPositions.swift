@@ -6,46 +6,60 @@
 //
 
 import CoreGraphics
+import SwiftUI
 import UIKit
 
 enum TwoMinuteSlotPositions {
-    /// Returns the four gate positions matching Dribble or Pass getPlayerPosition logic (same safe area + responsive size).
-    static func positionsForCurrentScreen() -> [Gate: CGPoint] {
-        let screenWidth = UIScreen.main.bounds.width
-        let screenHeight = UIScreen.main.bounds.height
+    /// Positions for the 2-minute layout **in the same coordinate space** as `GeometryReader` content (size + safeAreaInsets).
+    /// Use this from `GeometryReader { geo in … }` so the ball and center X align; do not mix with `UIScreen` alone.
+    static func positions(in size: CGSize, safeAreaInsets: EdgeInsets) -> [Gate: CGPoint] {
+        let w = size.width
+        let h = size.height
+        let safeTop = safeAreaInsets.top
+        let safeBottom = safeAreaInsets.bottom
+        let safeLeading = safeAreaInsets.leading
+        let safeTrailing = safeAreaInsets.trailing
 
-        var safeAreaTop: CGFloat = 0, safeAreaBottom: CGFloat = 0, safeAreaLeft: CGFloat = 0, safeAreaRight: CGFloat = 0
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let window = windowScene.windows.first {
-            safeAreaTop = window.safeAreaInsets.top
-            safeAreaBottom = window.safeAreaInsets.bottom
-            safeAreaLeft = window.safeAreaInsets.left
-            safeAreaRight = window.safeAreaInsets.right
-        }
-
-        let imageSize = responsiveImageSize(screenWidth: screenWidth, screenHeight: screenHeight)
+        let imageSize = responsiveImageSize(screenWidth: w, screenHeight: h)
         let halfImageSize = imageSize / 2
-        let isLandscape = screenWidth > screenHeight
+        let isLandscape = w > h
 
-        let top = CGPoint(x: screenWidth / 2, y: safeAreaTop + halfImageSize + 20)
-        let bottom = CGPoint(x: screenWidth / 2, y: screenHeight - safeAreaBottom - halfImageSize - 20)
+        // Horizontal center of the layout rect; vertical center for left/right slots.
+        let midX = w / 2
+        let midY = h / 2
+
+        let top = CGPoint(x: midX, y: safeTop + halfImageSize + 20)
+        let bottom = CGPoint(x: midX, y: h - safeBottom - halfImageSize - 20)
         let left: CGPoint
         let right: CGPoint
         if isLandscape {
-            left = CGPoint(x: max(safeAreaLeft + halfImageSize + 20, halfImageSize + 40), y: screenHeight / 2)
-            right = CGPoint(x: min(screenWidth - safeAreaRight - halfImageSize - 20, screenWidth - halfImageSize - 20), y: screenHeight / 2)
+            left = CGPoint(x: max(safeLeading + halfImageSize + 20, halfImageSize + 40), y: midY)
+            right = CGPoint(x: min(w - safeTrailing - halfImageSize - 20, w - halfImageSize - 20), y: midY)
         } else {
-            left = CGPoint(x: halfImageSize + 20, y: screenHeight / 2)
-            right = CGPoint(x: screenWidth - halfImageSize - 20, y: screenHeight / 2)
+            left = CGPoint(x: safeLeading + halfImageSize + 20, y: midY)
+            right = CGPoint(x: w - safeTrailing - halfImageSize - 20, y: midY)
         }
 
         return [.up: top, .down: bottom, .left: left, .right: right]
     }
 
-    static func centerPosition() -> CGPoint {
-        let w = UIScreen.main.bounds.width
-        let h = UIScreen.main.bounds.height
-        return CGPoint(x: w / 2, y: h / 2)
+    /// Legacy: full-screen coordinates (can disagree with a `GeometryReader` inside navigation). Prefer `positions(in:safeAreaInsets:)`.
+    static func positionsForCurrentScreen() -> [Gate: CGPoint] {
+        let b = UIScreen.main.bounds
+        var top: CGFloat = 0, bottom: CGFloat = 0, leading: CGFloat = 0, trailing: CGFloat = 0
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let window = windowScene.windows.first {
+            top = window.safeAreaInsets.top
+            bottom = window.safeAreaInsets.bottom
+            leading = window.safeAreaInsets.left
+            trailing = window.safeAreaInsets.right
+        }
+        let insets = EdgeInsets(top: top, leading: leading, bottom: bottom, trailing: trailing)
+        return positions(in: b.size, safeAreaInsets: insets)
+    }
+
+    static func centerPosition(in size: CGSize) -> CGPoint {
+        CGPoint(x: size.width / 2, y: size.height / 2)
     }
 
     private static func responsiveImageSize(screenWidth: CGFloat, screenHeight: CGFloat) -> CGFloat {

@@ -34,6 +34,10 @@
 		9F592D7C2DFF0B7E00525BF9 /* FootballScanningAITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FootballScanningAITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9F592D862DFF0B7E00525BF9 /* FootballScanningAIUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FootballScanningAIUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9F592DB02DFF0B7D00525BF9 /* Secrets.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Secrets.xcconfig; sourceTree = "<group>"; };
+		9FD2E4602F5E500D005AED0A /* Config/App-Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "Config/App-Debug.xcconfig"; sourceTree = "<group>"; };
+		9FD2E4612F5E500D005AED0B /* Config/App-Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "Config/App-Release.xcconfig"; sourceTree = "<group>"; };
+		9FD2E4622F5E500D005AED0C /* Config/RelayDebug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/RelayDebug.xcconfig; sourceTree = "<group>"; };
+		9FD2E4632F5E500D005AED0D /* Config/RelayRelease.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/RelayRelease.xcconfig; sourceTree = "<group>"; };
 		9FDCE9C32E089EAD00F39677 /* critical scan beep.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "critical scan beep.wav"; sourceTree = "<group>"; };
 		9FE4B7D62E02687B006EF4A6 /* short-beep-351721.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = "short-beep-351721.mp3"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -105,6 +109,10 @@
 				9F592D892DFF0B7E00525BF9 /* FootballScanningAIUITests */,
 				9F592D702DFF0B7D00525BF9 /* Products */,
 				9F592DB02DFF0B7D00525BF9 /* Secrets.xcconfig */,
+				9FD2E4602F5E500D005AED0A /* Config/App-Debug.xcconfig */,
+				9FD2E4612F5E500D005AED0B /* Config/App-Release.xcconfig */,
+				9FD2E4622F5E500D005AED0C /* Config/RelayDebug.xcconfig */,
+				9FD2E4632F5E500D005AED0D /* Config/RelayRelease.xcconfig */,
 			);
 			sourceTree = "<group>";
 		};
@@ -426,7 +434,7 @@
 		};
 		9F592D912DFF0B7E00525BF9 /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 9F592DB02DFF0B7D00525BF9 /* Secrets.xcconfig */;
+			baseConfigurationReference = 9FD2E4602F5E500D005AED0A /* Config/App-Debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -469,7 +477,7 @@
 		};
 		9F592D922DFF0B7E00525BF9 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 9F592DB02DFF0B7D00525BF9 /* Secrets.xcconfig */;
+			baseConfigurationReference = 9FD2E4612F5E500D005AED0B /* Config/App-Release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;

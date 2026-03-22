@@ -1,0 +1,3 @@
+// InfiniteFootballScanningPro — Debug. Includes optional local secrets, then relay URL for DEBUG builds.
+#include? "../Secrets.xcconfig"
+#include "RelayDebug.xcconfig"

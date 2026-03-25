@@ -89,13 +89,6 @@ struct TwoMinuteResultsView: View {
             totalExits: totalExits
         )
     }
-    private var decisionSpeed: String {
-        let counts = twoMinuteSpeedCounts
-        if counts.fast >= counts.medium && counts.fast >= counts.slow { return "Fast" }
-        if counts.slow >= counts.fast && counts.slow >= counts.medium { return "Slow" }
-        return "Medium"
-    }
-
     private var twoMinuteSpeedCounts: SessionSpeedCounts {
         var fast = 0, medium = 0, slow = 0
         for log in logs {
@@ -133,29 +126,29 @@ struct TwoMinuteResultsView: View {
             forwardOpportunityCount: forwardTotal
         )
     }
-    private var profileHeadline: String {
-        switch evaluatedProfile {
-        case .latePlanner: return "You're a step behind the game."
-        case .predictable: return "You're becoming readable."
-        case .safePlayer: return "You choose safe over sharp."
-        case .gameReady: return "Good. Now raise the standard."
-        }
+    /// Aggregated metrics for narrative + coach copy (same model as `TwoMinuteTestResultsView`).
+    private var aggregatedTwoMinuteResult: TwoMinuteTestResult {
+        TwoMinuteTestResult.from(logs: logs, difficulty: difficulty)
     }
-    private var profileSubline: String {
-        switch evaluatedProfile {
-        case .latePlanner: return "The window closes before your first touch."
-        case .predictable: return "Pressure sees your body shape early."
-        case .safePlayer: return "The forward option is there — take it."
-        case .gameReady: return "Do it under pressure — not just in space."
-        }
+
+    private var narrativePlayerType: PlayerType {
+        TwoMinutePlayerType.determinePlayerType(
+            correct: aggregatedTwoMinuteResult.correctCount,
+            total: aggregatedTwoMinuteResult.totalReps,
+            fast: aggregatedTwoMinuteResult.fastCount,
+            medium: aggregatedTwoMinuteResult.mediumCount,
+            slow: aggregatedTwoMinuteResult.slowCount
+        )
     }
-    private var profileCTALine: String {
-        switch evaluatedProfile {
-        case .latePlanner: return "Train turning away from pressure at match speed."
-        case .predictable: return "Train escaping pressure from both sides."
-        case .safePlayer: return "Train turning forward under pressure."
-        case .gameReady: return "Train at higher speed."
-        }
+
+    private var postSessionNarrative: PBAPostSessionNarrative {
+        PBAPostSessionNarrativeBuilder.fromTwoMinuteTestResult(
+            aggregatedTwoMinuteResult,
+            playerType: narrativePlayerType,
+            previousTwoMinute: progressStore.previous(.twoMinuteTest, playerId: profileManager.currentProfile?.id ?? playerStore.selectedPlayerId),
+            progressStore: progressStore,
+            playerId: profileManager.currentProfile?.id ?? playerStore.selectedPlayerId
+        )
     }
 
     private func activityTitle(_ activity: ActivityKind) -> String {
@@ -321,7 +314,7 @@ struct TwoMinuteResultsView: View {
                 Text("Baseline Summary")
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(.yellow)
-                Text("Decision Speed: \(baseline.avgDecisionTime.map { String(format: "%.2fs", $0) } ?? "—")")
+                Text("Decision window: \(baseline.avgDecisionWindowSeconds.map { DecisionTimingModel.summaryText(windowSeconds: $0) } ?? "—")")
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.9))
                 let accuracyPct = baseline.totalReps > 0 ? Int(round(Double(baseline.correctCount) / Double(baseline.totalReps) * 100.0)) : 0
@@ -386,34 +379,21 @@ struct TwoMinuteResultsView: View {
     private var resultsContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                Text("Your current profile:")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.8))
+                PBAPostSessionNarrativeStack(narrative: postSessionNarrative)
 
-                Text(evaluatedProfile.rawValue)
-                    .font(.title.bold())
-                    .foregroundColor(.white)
+                Text("Your numbers")
+                    .font(.title3.weight(.bold))
+                    .foregroundColor(.white.opacity(0.95))
+                Text("Reference only — your coach debrief is above.")
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.55))
 
-                Text(profileHeadline)
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.9))
-                Text(profileSubline)
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.9))
-                Text(profileCTALine)
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.85))
-                    .padding(.top, 2)
-
-                Text("Your Receiving Profile")
-                    .font(.title3.bold())
-                    .foregroundColor(.white)
-                    .padding(.top, 16)
-
+                resultRow("Receiving profile", narrativePlayerType.title)
                 resultRow("Early decisions", "\(earlyDecisions) / 10")
                 resultRow("Forward decisions", "\(forwardCorrect) / \(forwardTotal)")
+                resultRow("Decision window", sessionResult?.avgDecisionWindowSeconds.map { DecisionTimingModel.summaryText(windowSeconds: $0) } ?? "—")
                 resultRow("Strong side tendency", strongSideTendency)
-                resultRow("Decision speed", decisionSpeed)
+                resultRow("Tempo mix", "Fast \(twoMinuteSpeedCounts.fast) · Med \(twoMinuteSpeedCounts.medium) · Slow \(twoMinuteSpeedCounts.slow)")
 
                 HStack {
                     Text("Saving progress for: \(playerStore.selectedPlayer?.name ?? "Player 1")")
@@ -506,7 +486,16 @@ struct TwoMinuteResultsView: View {
             .padding(24)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(red: 0.08, green: 0.08, blue: 0.12))
+        .background(
+            LinearGradient(
+                gradient: Gradient(colors: [
+                    Color(red: 0.05, green: 0.05, blue: 0.1),
+                    Color(red: 0.1, green: 0.1, blue: 0.15)
+                ]),
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
         .navigationTitle("Results")
         .navigationBarTitleDisplayMode(.inline)
     }

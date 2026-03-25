@@ -86,11 +86,12 @@ struct DribbleOrPassSetupView: View {
         .preferredColorScheme(.dark)
         .navigationTitle("Dribble or Pass")
         .navigationBarTitleDisplayMode(.inline)
+        .pbaHomeToolbar(router: router)
         .onAppear {
             print("[SetupScreen DOP] onAppear, router path count = \(router.pathCount)")
         }
         .navigationDestination(isPresented: $showInstructions) {
-            ActivityInstructionView(activity: .dribbleOrPass) {
+            ActivityInstructionView(activity: .dribbleOrPass, trainingMode: mode) {
                 showInstructions = false
                 navigateToSession = true
             }

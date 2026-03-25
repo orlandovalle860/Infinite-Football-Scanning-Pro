@@ -300,7 +300,7 @@ final class SupabaseSessionService {
         }
     }
 
-    /// Fetches Decision Speed Scores from the sessions table for percentile.
+    /// Fetches Decision Speed Scores from the sessions table (e.g. optional internal analytics).
     /// Returns nil when not host or the request fails (e.g. column missing).
     func fetchDecisionSpeedScores(activityName: String) async -> [Int]? {
         guard ConnectionManager.shared.isHost else { return nil }

@@ -75,15 +75,15 @@ struct PlayerProgressView: View {
         }
     }
 
-    /// Average decision time (seconds) per session — only sessions that have the metric.
+    /// Average decision window (seconds before arrival) per session — only sessions that have timing data.
     private var decisionSpeedPoints: [ChartDataPoint] {
         chartSessions.enumerated().compactMap { index, s in
-            guard let t = s.avgDecisionTime else { return nil }
+            guard let t = s.avgDecisionWindowSeconds else { return nil }
             return ChartDataPoint(sessionIndex: index + 1, value: t)
         }
     }
 
-    /// First touch accuracy % per session — only sessions that track first touch.
+    /// Decision–action alignment % per session (legacy `firstTouchMatchCount` in model).
     private var firstTouchAccuracyPoints: [ChartDataPoint] {
         chartSessions.enumerated().compactMap { index, s in
             guard let match = s.firstTouchMatchCount, s.totalReps > 0 else { return nil }
@@ -97,6 +97,62 @@ struct PlayerProgressView: View {
         chartSessions.enumerated().map { index, s in
             let value = s.totalReps > 0 ? Double(s.correctCount) / Double(s.totalReps) * 100.0 : 0
             return ChartDataPoint(sessionIndex: index + 1, value: value)
+        }
+    }
+    private var latestActivity: ActivityKind? { chartSessions.last?.activityType }
+    private var primaryTrendTitle: String {
+        switch latestActivity {
+        case .awayFromPressure: return "Correct Escape Trend"
+        case .dribbleOrPass: return "Correct Decision Trend"
+        case .oneTouchPassing: return "Decision Window Trend"
+        case .twoMinuteTest: return "2-Minute Balanced Trend"
+        case .none: return "Primary Trend"
+        }
+    }
+    private var primaryTrendPoints: [ChartDataPoint] {
+        switch latestActivity {
+        case .oneTouchPassing:
+            return decisionSpeedPoints
+        default:
+            return correctPercentPoints
+        }
+    }
+    private var primaryTrendLabel: String {
+        switch latestActivity {
+        case .oneTouchPassing: return "s"
+        default: return "%"
+        }
+    }
+    private var primaryTrendAxis: (Double, Double)? {
+        switch latestActivity {
+        case .oneTouchPassing: return nil
+        default: return (0, 100)
+        }
+    }
+    private var secondaryTrendTitle: String {
+        switch latestActivity {
+        case .oneTouchPassing: return "Correct Decisions (Secondary)"
+        default: return "Decision Window (Secondary)"
+        }
+    }
+    private var secondaryTrendPoints: [ChartDataPoint] {
+        switch latestActivity {
+        case .oneTouchPassing:
+            return correctPercentPoints
+        default:
+            return decisionSpeedPoints
+        }
+    }
+    private var secondaryTrendLabel: String {
+        switch latestActivity {
+        case .oneTouchPassing: return "%"
+        default: return "s"
+        }
+    }
+    private var secondaryTrendAxis: (Double, Double)? {
+        switch latestActivity {
+        case .oneTouchPassing: return (0, 100)
+        default: return nil
         }
     }
 
@@ -321,9 +377,9 @@ struct PlayerProgressView: View {
                     .foregroundColor(.white.opacity(0.7))
                     .padding(.vertical, 12)
             } else {
+                ProgressLineChartView(title: primaryTrendTitle, points: primaryTrendPoints, valueLabel: primaryTrendLabel, yAxisRange: primaryTrendAxis)
+                ProgressLineChartView(title: secondaryTrendTitle, points: secondaryTrendPoints, valueLabel: secondaryTrendLabel, yAxisRange: secondaryTrendAxis, emptyStateMessage: "Complete at least 2 sessions to see your trend.")
                 ProgressLineChartView(title: "Decision Score", points: decisionScorePoints, valueLabel: "%", yAxisRange: (0, 100))
-                ProgressLineChartView(title: "Avg Decision Time", points: decisionSpeedPoints, valueLabel: "s", yAxisRange: nil, emptyStateMessage: "Complete at least 2 Dribble or Pass sessions to see your trend.")
-                ProgressLineChartView(title: "Correct Decisions", points: correctPercentPoints, valueLabel: "%", yAxisRange: (0, 100))
             }
         }
         .padding(18)

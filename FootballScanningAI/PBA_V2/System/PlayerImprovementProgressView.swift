@@ -38,17 +38,17 @@ struct PlayerImprovementProgressView: View {
         profileManager.sessionResultsForCharts()
     }
 
-    /// Average decision time (seconds) per session — for line chart.
+    /// Average decision window (seconds before arrival) per session — for line chart.
     private var decisionSpeedPoints: [ChartDataPoint] {
         chartSessions.enumerated().compactMap { index, s in
-            guard let t = s.avgDecisionTime else { return nil }
+            guard let t = s.avgDecisionWindowSeconds else { return nil }
             return ChartDataPoint(sessionIndex: index + 1, value: t)
         }
     }
 
-    /// Average decision speed across all sessions that have the metric (seconds).
-    private var averageDecisionSpeedSeconds: Double? {
-        let times = chartSessions.compactMap(\.avgDecisionTime)
+    /// Average decision window across all sessions that have the metric (seconds).
+    private var averageDecisionWindowSeconds: Double? {
+        let times = chartSessions.compactMap(\.avgDecisionWindowSeconds)
         guard !times.isEmpty else { return nil }
         return times.reduce(0, +) / Double(times.count)
     }
@@ -63,9 +63,9 @@ struct PlayerImprovementProgressView: View {
         profileManager.sessionsCompletedThisWeek()
     }
 
-    /// Personal best (fastest) average decision time in seconds.
-    private var personalBestDecisionSpeedSeconds: Double? {
-        profileManager.fastestDecisionSpeedSeconds()
+    /// Personal best (largest positive) average decision window in seconds.
+    private var personalBestDecisionWindowSeconds: Double? {
+        chartSessions.compactMap(\.avgDecisionWindowSeconds).max()
     }
 
     var body: some View {
@@ -143,12 +143,12 @@ struct PlayerImprovementProgressView: View {
                     .foregroundColor(.white.opacity(0.9))
                     .fixedSize(horizontal: false, vertical: true)
                 if let trendingIdentity {
-                    Text("Trending toward \(trendingIdentity.title)")
+                    Text("Emerging strength: \(trendingIdentity.title)")
                         .font(.caption)
                         .foregroundColor(.white.opacity(0.62))
                 }
             }
-            Text("See how your decision speed improves over time.")
+            Text("See how your decision window improves over time.")
                 .font(.subheadline)
                 .foregroundColor(.white.opacity(0.8))
         }
@@ -162,8 +162,8 @@ struct PlayerImprovementProgressView: View {
                 .font(.headline)
                 .foregroundColor(.white)
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                metricCard(title: "Average Decision Speed", value: averageDecisionSpeedSeconds.map { String(format: "%.2fs", $0) } ?? "—")
-                metricCard(title: "Personal Best", value: personalBestDecisionSpeedSeconds.map { String(format: "%.2fs", $0) } ?? "—")
+                metricCard(title: "Average Decision Window", value: averageDecisionWindowSeconds.map { DecisionTimingModel.summaryText(windowSeconds: $0) } ?? "—")
+                metricCard(title: "Personal Best", value: personalBestDecisionWindowSeconds.map { DecisionTimingModel.summaryText(windowSeconds: $0) } ?? "—")
                 metricCard(title: "Total Decisions Completed", value: "\(totalDecisionsCompleted)")
                 metricCard(title: "Sessions This Week", value: "\(sessionsThisWeek)")
             }
@@ -195,18 +195,18 @@ struct PlayerImprovementProgressView: View {
 
     private var decisionSpeedChartSection: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Decision speed over time")
+            Text("Decision window over time")
                 .font(.headline)
                 .foregroundColor(.white)
             if decisionSpeedPoints.count < 2 {
-                Text("Complete at least 2 sessions with decision speed data to see your trend.")
+                Text("Complete at least 2 sessions with timing data to see your trend.")
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.7))
                     .padding(.vertical, 24)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 ProgressLineChartView(
-                    title: "Average Decision Speed",
+                    title: "Decision Window",
                     points: decisionSpeedPoints,
                     valueLabel: "s",
                     yAxisRange: nil,

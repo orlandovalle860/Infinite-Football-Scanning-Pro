@@ -60,14 +60,15 @@ struct AwayFromPressureRoleSelectionView: View {
                 .buttonStyle(PlainButtonStyle())
                 .padding(.horizontal, 28)
 
-                NavigationLink(destination: AwayFromPressureCoachRemoteView(settingsViewModel: settingsViewModel, profileManager: profileManager)) {
+                NavigationLink(destination: AwayFromPressureCoachRemoteView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+                    .environmentObject(router)) {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             Image(systemName: "hand.raised")
                             Text("Coach remote")
                                 .font(.system(size: 20, weight: .bold, design: .rounded))
                         }
-                        Text("This device starts each rep and logs exit direction. Tap Connect to Display first.")
+                        Text("Starts each rep and logs which way the player turned — opposite the red pressure is correct. Connect to Display first.")
                             .font(.footnote)
                             .foregroundColor(.white.opacity(0.9))
                             .multilineTextAlignment(.leading)
@@ -101,5 +102,6 @@ struct AwayFromPressureRoleSelectionView: View {
         .preferredColorScheme(.dark)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .pbaHomeToolbar(router: router)
     }
 }

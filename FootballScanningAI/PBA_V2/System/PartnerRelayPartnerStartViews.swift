@@ -1,0 +1,356 @@
+//
+//  PartnerRelayPartnerStartViews.swift
+//  FootballScanningAI
+//
+//  Shared display + coach UI for relay partner start (join code, minimal taps, auto-focus).
+//
+
+import SwiftUI
+
+// MARK: - Join code length (server may vary; auto-submit uses this)
+
+enum PartnerRelayJoinCodeConfig {
+    /// Expected join code length for auto-submit after typing (HTTP API uses short alphanumeric codes).
+    static let expectedCharacterCount: Int = 6
+    /// Matches coach remote `start*CoachRelayJoin` banner while HTTP/WebSocket join is in progress.
+    static let joiningStatusBannerText: String = "Joining relay…"
+}
+
+// MARK: - Display: prominent waiting overlay
+
+/// Full-screen dimmed overlay: join code as soon as available, compact “getting code” state when `joinCode` is nil.
+/// Use when `partnerTransportMode == .relayWebSocket` and waiting for coach pairing.
+struct PartnerRelayDisplayWaitingOverlay: View {
+    let joinCode: String?
+    /// Optional: show a subtle second line while the display’s DB session is still being created (e.g. Two Minute).
+    var isDatabaseSessionCreating: Bool = false
+    var scrimOpacity: CGFloat = 0.58
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(scrimOpacity)
+                .ignoresSafeArea()
+
+            VStack(spacing: 20) {
+                Spacer(minLength: 0)
+
+                if let code = joinCode, !code.isEmpty {
+                    VStack(spacing: 10) {
+                        Text("Join code")
+                            .font(.title3.weight(.bold))
+                            .foregroundColor(.white.opacity(0.95))
+
+                        Text(code)
+                            .font(.system(size: 44, weight: .bold, design: .monospaced))
+                            .foregroundColor(.white)
+                            .minimumScaleFactor(0.5)
+                            .lineLimit(1)
+                            .padding(.horizontal, 28)
+                            .padding(.vertical, 18)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .fill(Color.cyan.opacity(0.22))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                            .stroke(Color.cyan.opacity(0.55), lineWidth: 2)
+                                    )
+                            )
+                    }
+                    .multilineTextAlignment(.center)
+                } else {
+                    VStack(spacing: 14) {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(1.15)
+                        Text("Getting join code…")
+                            .font(.title3.weight(.semibold))
+                            .foregroundColor(.white.opacity(0.92))
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+
+                VStack(spacing: 8) {
+                    Text("Waiting for coach")
+                        .font(.headline.weight(.semibold))
+                        .foregroundColor(.white.opacity(0.88))
+                    Text("Enter this code on the coach iPhone to connect.")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.65))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 28)
+                    if isDatabaseSessionCreating && joinCode != nil {
+                        Text("Saving session…")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.45))
+                    }
+                }
+
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.vertical, 32)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .allowsHitTesting(false)
+    }
+}
+
+/// Two Minute (and similar): relay waiting + optional Supabase session error with retry.
+struct PartnerRelayDisplayWaitingWithSessionErrorOverlay: View {
+    let joinCode: String?
+    var isDatabaseSessionCreating: Bool
+    var databaseSessionError: String?
+    var onRetryDatabaseSession: () -> Void
+
+    var body: some View {
+        ZStack {
+            if let err = databaseSessionError, !err.isEmpty {
+                Color.black.opacity(0.58)
+                    .ignoresSafeArea()
+                VStack(spacing: 18) {
+                    Spacer(minLength: 0)
+                    if let code = joinCode, !code.isEmpty {
+                        Text(code)
+                            .font(.system(size: 40, weight: .bold, design: .monospaced))
+                            .foregroundColor(.white)
+                            .minimumScaleFactor(0.5)
+                            .lineLimit(1)
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 16)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .fill(Color.cyan.opacity(0.22))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                            .stroke(Color.orange.opacity(0.5), lineWidth: 2)
+                                    )
+                            )
+                    }
+                    Text(err)
+                        .font(.subheadline)
+                        .foregroundColor(.orange)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                    Button("Retry", action: onRetryDatabaseSession)
+                        .buttonStyle(.borderedProminent)
+                        .tint(.orange)
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .allowsHitTesting(true)
+            } else {
+                PartnerRelayDisplayWaitingOverlay(
+                    joinCode: joinCode,
+                    isDatabaseSessionCreating: isDatabaseSessionCreating,
+                    scrimOpacity: 0.58
+                )
+            }
+        }
+    }
+}
+
+// MARK: - Coach: join code field + primary action
+
+/// Relay path on coach iPhone: auto-focus, optional auto-submit at ``PartnerRelayJoinCodeConfig/expectedCharacterCount``.
+struct PartnerRelayCoachJoinSection: View {
+    @Binding var joinCodeInput: String
+    @FocusState.Binding var joinFieldFocused: Bool
+    var joinBusy: Bool
+    var joinBanner: String?
+    var relayTransportConnected: Bool
+    var displayPeerJoined: Bool
+    /// Called when user taps Join or submits; also after auto-enter when code length matches.
+    var onJoin: () -> Void
+
+    @State private var lastAutoSubmittedCode: String?
+
+    private var joinErrorText: String? {
+        guard !joinBusy, let b = joinBanner?.trimmingCharacters(in: .whitespacesAndNewlines), !b.isEmpty else {
+            return nil
+        }
+        if Self.isJoiningBannerText(b) { return nil }
+        return b
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Partner (relay)")
+                .font(.caption.weight(.semibold))
+                .foregroundColor(.cyan.opacity(0.95))
+
+            Text("Enter the code shown on the display")
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.75))
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            TextField("Code", text: $joinCodeInput)
+                .textFieldStyle(.roundedBorder)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.characters)
+                .keyboardType(.asciiCapable)
+                .focused($joinFieldFocused)
+                .submitLabel(.join)
+                .onSubmit { onJoin() }
+                .overlay(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .stroke(joinErrorText != nil ? Color.orange.opacity(0.95) : Color.clear, lineWidth: 2)
+                )
+                .onAppear {
+                    DispatchQueue.main.async {
+                        joinFieldFocused = true
+                    }
+                }
+
+            Button(action: onJoin) {
+                Group {
+                    if joinBusy {
+                        ProgressView()
+                            .tint(.black)
+                    } else {
+                        Text("Join session")
+                            .font(.headline.weight(.semibold))
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(Color.yellow.opacity(joinBusy ? 0.75 : 1))
+                .foregroundColor(.black)
+                .cornerRadius(12)
+            }
+            .buttonStyle(.plain)
+            .disabled(joinBusy || normalizedCode(from: joinCodeInput).isEmpty)
+            .accessibilityHint(joinBusy ? "Join in progress" : "Joins the display session using this code")
+
+            if joinBusy {
+                HStack(alignment: .center, spacing: 10) {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(0.95)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Joining…")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.white.opacity(0.95))
+                        Text("Connecting to the display. This may take a few seconds.")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.65))
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .background(Color.white.opacity(0.12))
+                .cornerRadius(10)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Joining. Connecting to the display.")
+            }
+
+            if let err = joinErrorText {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Couldn't join")
+                        .font(.caption.weight(.bold))
+                        .foregroundColor(.orange.opacity(0.98))
+                    Text(err)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundColor(.white.opacity(0.92))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .background(Color.orange.opacity(0.14))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Color.orange.opacity(0.45), lineWidth: 1)
+                )
+                .cornerRadius(10)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Join failed. \(err)")
+            }
+
+            if relayTransportConnected {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green.opacity(0.95))
+                    Text("Relay connected")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.green.opacity(0.95))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if displayPeerJoined {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "link.circle.fill")
+                        .foregroundColor(.green.opacity(0.9))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Joined display successfully")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.green.opacity(0.95))
+                        Text("control.peer_joined received")
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.55))
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+                .background(Color.green.opacity(0.12))
+                .cornerRadius(10)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 8)
+        .onChange(of: joinCodeInput) { _, newValue in
+            normalizeJoinCodeInput(newValue)
+            if normalizedCode(from: joinCodeInput).count < PartnerRelayJoinCodeConfig.expectedCharacterCount {
+                lastAutoSubmittedCode = nil
+            }
+            tryAutoSubmitIfNeeded()
+        }
+        .onChange(of: joinBusy) { wasBusy, nowBusy in
+            if wasBusy && !nowBusy {
+                // Defer one run loop so `joinBanner` matches the finished attempt (error vs cleared).
+                DispatchQueue.main.async {
+                    handleJoinFinishedTransition()
+                }
+            }
+        }
+    }
+
+    /// When join attempt ends: on failure, clear auto-submit guard and refocus for quick correction (no transport changes).
+    private func handleJoinFinishedTransition() {
+        guard let b = joinBanner?.trimmingCharacters(in: .whitespacesAndNewlines), !b.isEmpty else { return }
+        guard !Self.isJoiningBannerText(b) else { return }
+        lastAutoSubmittedCode = nil
+        DispatchQueue.main.async {
+            joinFieldFocused = true
+        }
+    }
+
+    private static func isJoiningBannerText(_ s: String) -> Bool {
+        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t == PartnerRelayJoinCodeConfig.joiningStatusBannerText { return true }
+        if t.localizedCaseInsensitiveContains("joining relay") { return true }
+        return false
+    }
+
+    private func normalizeJoinCodeInput(_ newValue: String) {
+        let normalized = normalizedCode(from: newValue)
+        if normalized != joinCodeInput {
+            joinCodeInput = normalized
+        }
+    }
+
+    private func normalizedCode(from s: String) -> String {
+        let upper = s.uppercased()
+        let filtered = upper.filter { $0.isLetter || $0.isNumber }
+        return String(filtered.prefix(PartnerRelayJoinCodeConfig.expectedCharacterCount))
+    }
+
+    private func tryAutoSubmitIfNeeded() {
+        let code = normalizedCode(from: joinCodeInput)
+        guard code.count == PartnerRelayJoinCodeConfig.expectedCharacterCount else { return }
+        guard !joinBusy else { return }
+        guard code != lastAutoSubmittedCode else { return }
+        lastAutoSubmittedCode = code
+        onJoin()
+    }
+
+}

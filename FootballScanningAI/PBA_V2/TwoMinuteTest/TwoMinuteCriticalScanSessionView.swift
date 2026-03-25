@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 import AVFoundation
 import Combine
 
@@ -49,12 +50,9 @@ struct TwoMinuteCriticalScanSessionView: View {
     @ObservedObject private var currentSessionStore = CurrentSessionStore.shared
     @State private var pendingTrainingRoute: AppRoute?
     @State private var hasSentSessionEnded = false
-    /// Partner relay path (DEBUG): WebSocket transport for display; same message path as Multipeer via NotificationCenter.
-    @State private var relayWebSocketTransport: WebSocketRemoteTransport?
-    /// Relay join code from POST /v1/sessions (shown when using relay).
-    @State private var relayDisplayJoinCode: String?
-    /// Mirror relay socket state for status UI when partner uses relay transport.
-    @State private var relayWebSocketConnectionState: ConnectionState = .disconnected
+    /// Display-side relay (join code, WebSocket, coach paired). Used when `partnerTransportMode == .relayWebSocket` (DEBUG).
+    /// Conforms to ``PartnerRelayDisplayControlling``; concrete type is ``PartnerRelayDisplaySession``.
+    @StateObject private var partnerRelaySession = PartnerRelayDisplaySession()
 
     init(config: TwoMinuteTestConfig, mode: TrainingMode, settingsViewModel: SettingsViewModel, profileManager: UserProfileManager) {
         self.config = config
@@ -66,14 +64,7 @@ struct TwoMinuteCriticalScanSessionView: View {
 
     private static let totalReps = 10
 
-    /// Two Minute partner transport: DEBUG uses relay WebSocket; Release uses Multipeer. Evaluated once (not per view body).
-    private static let partnerTransportMode: SessionTransportMode = {
-        #if DEBUG
-        return .relayWebSocket
-        #else
-        return .multipeer
-        #endif
-    }()
+    private static let partnerTransportMode = PartnerTransportPolicy.transportMode(for: .twoMinute)
 
     private var isBallVisible: Bool {
         if case .ballVisible = engine.phase { return true }
@@ -154,8 +145,13 @@ struct TwoMinuteCriticalScanSessionView: View {
             .onAppear(perform: handleOnAppear)
             .onDisappear(perform: handleOnDisappear)
             .onChange(of: scenePhase, handleScenePhaseChange)
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+                scheduleTwoMinutePartnerTeardownFromBackgroundNotification()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIScene.didEnterBackgroundNotification)) { _ in
+                scheduleTwoMinutePartnerTeardownFromBackgroundNotification()
+            }
             .onChange(of: connectionManager.connectedPeerName, handleConnectedPeerChange)
-            .onChange(of: relayWebSocketConnectionState, handleRelayConnectionStateChange)
             .preferredColorScheme(.dark)
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
@@ -166,7 +162,7 @@ struct TwoMinuteCriticalScanSessionView: View {
             } message: {
                 Text("Your current block will not be saved.")
             }
-            .sessionCountdown()
+            .sessionCountdown(waitForPartnerReady: mode == .partner, partnerReady: partnerReadyForCountdown)
     }
 
     private func handleTwoMinuteMessage(_ notification: Notification) {
@@ -235,6 +231,16 @@ struct TwoMinuteCriticalScanSessionView: View {
         activateAudioSession()
         subscribeToAudioInterruption()
         AnalyticsManager.shared.track(.twoMinuteTestStarted, playerId: playerStore.selectedPlayerId)
+        // Relay: start join-code + WebSocket immediately (parallel with Supabase); no intentional delay before code.
+        #if DEBUG
+        if mode == .partner, Self.partnerTransportMode == .relayWebSocket {
+            print("[RelayWS-DEBUG] about to start relay partner session")
+            partnerRelaySession.onCoachPairingChanged = { connected in
+                sessionManager.setConnected(connected)
+            }
+            Task { await partnerRelaySession.startDisplaySession() }
+        }
+        #endif
         Task {
             await sessionManager.startSession(
                 activity: .twoMinuteTest,
@@ -242,20 +248,11 @@ struct TwoMinuteCriticalScanSessionView: View {
                 playerId: playerStore.selectedPlayerId ?? profileManager.currentProfile?.id
             )
         }
-        #if DEBUG
-        if mode == .partner, Self.partnerTransportMode == .relayWebSocket {
-            print("[RelayWS-DEBUG] about to start relay partner session")
-            Task { await startRelayWebSocketPartnerSession() }
-        }
-        #endif
     }
 
     private func handleOnDisappear() {
         #if DEBUG
-        relayWebSocketTransport?.disconnect()
-        relayWebSocketTransport = nil
-        relayDisplayJoinCode = nil
-        relayWebSocketConnectionState = .disconnected
+        partnerRelaySession.tearDown()
         #endif
         if mode == .partner {
             sendSessionEndedIfNeeded()
@@ -269,7 +266,36 @@ struct TwoMinuteCriticalScanSessionView: View {
     }
 
     private func handleScenePhaseChange(old: ScenePhase, new: ScenePhase) {
-        if new == .background { engine.applicationDidEnterBackground() }
+        if new == .background {
+            engine.applicationDidEnterBackground()
+        }
+    }
+
+    /// Home / app switcher: `onDisappear` and `scenePhase` may not run before suspend; system background notifications do.
+    private func handleTeardownPartnerOnAppBackground() {
+        guard mode == .partner else { return }
+        sendSessionEndedIfNeeded()
+        #if DEBUG
+        partnerRelaySession.tearDown()
+        #endif
+        if Self.partnerTransportMode == .multipeer {
+            connectionManager.stopHosting()
+        }
+    }
+
+    private func scheduleTwoMinutePartnerTeardownFromBackgroundNotification() {
+        guard mode == .partner else { return }
+        var backgroundTaskId: UIBackgroundTaskIdentifier = .invalid
+        backgroundTaskId = UIApplication.shared.beginBackgroundTask(withName: "PartnerRelayTeardown") {
+            if backgroundTaskId != .invalid {
+                UIApplication.shared.endBackgroundTask(backgroundTaskId)
+                backgroundTaskId = .invalid
+            }
+        }
+        handleTeardownPartnerOnAppBackground()
+        if backgroundTaskId != .invalid {
+            UIApplication.shared.endBackgroundTask(backgroundTaskId)
+        }
     }
 
     private func handleConnectedPeerChange(old: String?, name: String?) {
@@ -277,15 +303,6 @@ struct TwoMinuteCriticalScanSessionView: View {
         sessionManager.setConnected(true)
         let flag = UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey)
         connectionManager.sendDisplaySessionInfo(hasCompletedInitialTest: flag)
-    }
-
-    private func handleRelayConnectionStateChange(old: ConnectionState, new: ConnectionState) {
-        #if DEBUG
-        guard mode == .partner, Self.partnerTransportMode == .relayWebSocket else { return }
-        if new == .disconnected {
-            sessionManager.setConnected(false)
-        }
-        #endif
     }
 
     @ViewBuilder
@@ -504,13 +521,10 @@ struct TwoMinuteCriticalScanSessionView: View {
         #if DEBUG
         if Self.partnerTransportMode == .relayWebSocket {
             // Do not treat “relay WebSocket open” as coach paired — only `peer_joined` sets sessionManager connected.
-            if relayWebSocketConnectionState == .disconnected {
-                return .disconnected
-            }
-            if sessionManager.isConnected {
-                return .connected
-            }
-            return .connecting
+            return PartnerRelayDisplayUI.statusConnectionState(
+                socketState: partnerRelaySession.socketConnectionState,
+                isCoachPairedWithRelay: sessionManager.isConnected
+            )
         }
         #endif
         return connectionManager.connectionState
@@ -534,14 +548,32 @@ struct TwoMinuteCriticalScanSessionView: View {
         return !sessionManager.isConnected
     }
 
+    /// Partner: 3–2–1–Go only after coach is connected (same signal as waiting overlay). Solo: always ready.
+    private var partnerReadyForCountdown: Bool {
+        guard mode == .partner else { return true }
+        return sessionManager.isConnected
+    }
+
     private var waitingForCoachOverlay: some View {
         Group {
             if shouldShowWaitingForCoachOverlay {
-                if sessionManager.isCreating {
+                if mode == .partner, Self.partnerTransportMode == .relayWebSocket {
+                    PartnerRelayDisplayWaitingWithSessionErrorOverlay(
+                        joinCode: partnerRelaySession.joinCode,
+                        isDatabaseSessionCreating: sessionManager.isCreating,
+                        databaseSessionError: sessionManager.creationError,
+                        onRetryDatabaseSession: {
+                            Task {
+                                await sessionManager.startSession(
+                                    activity: .twoMinuteTest,
+                                    blockSize: Self.totalReps,
+                                    playerId: playerStore.selectedPlayerId ?? profileManager.currentProfile?.id
+                                )
+                            }
+                        }
+                    )
+                } else if sessionManager.isCreating {
                     VStack(spacing: 12) {
-                        #if DEBUG
-                        relayJoinCodeOnScreenBanner
-                        #endif
                         ProgressView()
                             .progressViewStyle(CircularProgressViewStyle(tint: .white))
                             .scaleEffect(1.2)
@@ -554,9 +586,6 @@ struct TwoMinuteCriticalScanSessionView: View {
                     Spacer()
                 } else if let error = sessionManager.creationError {
                     VStack(spacing: 16) {
-                        #if DEBUG
-                        relayJoinCodeOnScreenBanner
-                        #endif
                         Text(error)
                             .font(.subheadline)
                             .foregroundColor(.orange)
@@ -578,29 +607,15 @@ struct TwoMinuteCriticalScanSessionView: View {
                     Spacer()
                 } else {
                     VStack(spacing: 16) {
-                        #if DEBUG
-                        relayJoinCodeOnScreenBanner
-                        #endif
                         VStack(spacing: 8) {
-                            if Self.partnerTransportMode == .relayWebSocket {
-                                Text("Waiting for Coach (Relay)…")
-                                    .font(.title3.weight(.medium))
-                                    .foregroundColor(.white.opacity(0.9))
-                                Text("Enter the join code on the coach device")
-                                    .font(.subheadline)
-                                    .foregroundColor(.white.opacity(0.6))
-                                    .multilineTextAlignment(.center)
-                                    .padding(.horizontal, 32)
-                            } else {
-                                Text("Waiting for Coach Remote…")
-                                    .font(.title3.weight(.medium))
-                                    .foregroundColor(.white.opacity(0.9))
-                                Text("Tap Connect to Display on the coach device, then select this device.")
-                                    .font(.subheadline)
-                                    .foregroundColor(.white.opacity(0.6))
-                                    .multilineTextAlignment(.center)
-                                    .padding(.horizontal, 32)
-                            }
+                            Text("Waiting for Coach Remote…")
+                                .font(.title3.weight(.medium))
+                                .foregroundColor(.white.opacity(0.9))
+                            Text("Tap Connect to Display on the coach device, then select this device.")
+                                .font(.subheadline)
+                                .foregroundColor(.white.opacity(0.6))
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 32)
                         }
                     }
                     .padding(.top, 200)
@@ -610,33 +625,18 @@ struct TwoMinuteCriticalScanSessionView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .allowsHitTesting(false)
+        .allowsHitTesting(waitingCoachOverlayAllowsHitTesting)
     }
 
-    #if DEBUG
-    @ViewBuilder
-    private var relayJoinCodeOnScreenBanner: some View {
-        if let code = relayDisplayJoinCode {
-            VStack(spacing: 6) {
-                Text("Relay join code")
-                    .font(.caption.weight(.semibold))
-                    .foregroundColor(.cyan.opacity(0.9))
-                Text(code)
-                    .font(.system(size: 32, weight: .bold, design: .monospaced))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 12)
-                    .background(Color.cyan.opacity(0.2))
-                    .cornerRadius(12)
-                Text("Enter on coach iPhone: Relay DEBUG")
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.55))
-            }
-            .multilineTextAlignment(.center)
-            .padding(.bottom, 4)
+    /// Relay error overlay needs Retry taps; other waiting states pass touches through.
+    private var waitingCoachOverlayAllowsHitTesting: Bool {
+        guard shouldShowWaitingForCoachOverlay else { return false }
+        if mode == .partner, Self.partnerTransportMode == .relayWebSocket,
+           let err = sessionManager.creationError, !err.isEmpty {
+            return true
         }
+        return false
     }
-    #endif
 
     private var statusOverlay: some View {
         VStack {
@@ -785,64 +785,11 @@ struct TwoMinuteCriticalScanSessionView: View {
         hasSentSessionEnded = true
         #if DEBUG
         if mode == .partner, Self.partnerTransportMode == .relayWebSocket {
-            relayWebSocketTransport?.send(.sessionEnded(timestamp: Date()))
+            partnerRelaySession.sendTwoMinuteMessage(.sessionEnded(timestamp: Date()))
             return
         }
         #endif
         connectionManager.sendTwoMinuteMessage(.sessionEnded(timestamp: Date()))
     }
 
-    #if DEBUG
-    /// Partner relay: HTTP create session + WebSocket display role. `TwoMinuteMessage` delivery matches Multipeer via `NotificationCenter`.
-    private func startRelayWebSocketPartnerSession() async {
-        print("[RelayWS-DEBUG] startRelayWebSocketPartnerSession entered")
-        guard mode == .partner else { return }
-        do {
-            let created = try await WebSocketSessionAPI.createSession()
-            await MainActor.run {
-                relayDisplayJoinCode = created.joinCode
-            }
-            print("[RelayWS-DEBUG] session creation OK sessionId=\(created.sessionId)")
-            print("[RelayWS-DEBUG] joinCode=\(created.joinCode) (share with coach for relay join)")
-            print("[RelayWS-DEBUG] wsUrl(base)=\(created.wsUrl) expiresAt=\(created.expiresAt ?? "nil")")
-
-            let wsURL = try created.webSocketURLForDisplay()
-            print("[RelayWS-DEBUG] WebSocket URL (with query)=\(wsURL.absoluteString)")
-
-            let config = WebSocketSessionConfig(url: wsURL, sessionId: created.sessionId, authToken: created.displayToken)
-            let transport = WebSocketRemoteTransport(config: config)
-            transport.onConnectionStateChanged = { state in
-                Task { @MainActor in
-                    relayWebSocketConnectionState = state
-                }
-                switch state {
-                case .searching:
-                    print("[RelayWS-DEBUG] connection state: searching")
-                case .connecting:
-                    print("[RelayWS-DEBUG] connection state: connecting")
-                case .connected:
-                    print("[RelayWS-DEBUG] connection state: connected")
-                case .disconnected:
-                    print("[RelayWS-DEBUG] connection state: disconnected")
-                }
-            }
-            transport.onRawTextReceived = { text in
-                print("[RelayWS-DEBUG] received raw: \(text)")
-                if text.contains("peer_joined") {
-                    Task { @MainActor in
-                        sessionManager.setConnected(true)
-                    }
-                }
-            }
-
-            await MainActor.run {
-                relayWebSocketTransport = transport
-                print("[RelayWS-DEBUG] calling connect()")
-                transport.connect()
-            }
-        } catch {
-            print("[RelayWS-DEBUG] relay session/WebSocket setup failed: \(error)")
-        }
-    }
-    #endif
 }

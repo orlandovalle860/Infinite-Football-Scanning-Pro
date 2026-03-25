@@ -10,8 +10,8 @@ import SwiftUI
 struct DribbleOrPassGateOverlay: View {
     let gate: Gate
     let content: DribbleOrPassGateContent
-    var laneSpan: CGFloat = 0.62
-    var insetFraction: CGFloat = 0.18
+    var laneSpan: CGFloat = 0.70
+    var insetFraction: CGFloat = 0.22
 
     var body: some View {
         Group {

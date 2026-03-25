@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 
+/// Sends `TwoMinuteMessage` over the active transport. Payload `kind` strings are protocol-stable — see `CoachRemoteDecisionModelMIGRATION.md`.
 final class RemoteService: ObservableObject {
     @Published private(set) var connectionState: ConnectionState
 
@@ -51,6 +52,7 @@ final class RemoteService: ObservableObject {
         send(.exitLogged(repIndex: repIndex, gate: gate, timestamp: timestamp))
     }
 
+    /// Still required when coach must mark wrong without logging a misleading direction (all partner activities).
     func sendIncorrectDecision(repIndex: Int, timestamp: Date) {
         send(.incorrectDecision(repIndex: repIndex, timestamp: timestamp))
     }

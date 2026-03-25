@@ -28,7 +28,7 @@ final class AwayFromPressureEngine: ObservableObject {
     private var currentRepIndex: Int = 0
     private var passTriggeredAt: Date?
     private var startedAtForCurrentRep: Date?
-    /// First-touch can be logged before exit; keyed by repIndex.
+    /// Optional early direction (wire: `firstTouchLogged`) before exit; keyed by repIndex. See `CoachRemoteDecisionModelMIGRATION.md`.
     private var pendingFirstTouchByRep: [Int: (gate: Gate, timestamp: Date)] = [:]
     private var markerShownAtForCurrentRep: Date?
     private var markerHiddenAtForCurrentRep: Date?
@@ -47,17 +47,17 @@ final class AwayFromPressureEngine: ObservableObject {
             instructionTitle = "Waiting for coach…"
             instructionSubtitle = "Keep moving. Check both shoulders."
         case .armedScanning:
-            instructionTitle = "Scan freely"
-            instructionSubtitle = "Beep is coming."
+            instructionTitle = "Scan"
+            instructionSubtitle = "Be ready to turn away from pressure."
         case .beepedAwaitingPass:
             instructionTitle = "Ball is coming"
             instructionSubtitle = "Coach: press PASS at the strike."
         case .markerVisible:
-            instructionTitle = "Decide now"
-            instructionSubtitle = "First touch away from pressure."
+            instructionTitle = "Turn away from pressure"
+            instructionSubtitle = "Move opposite the red — into space."
         case .awaitingExitLog:
-            instructionTitle = "Play the rep"
-            instructionSubtitle = "Waiting for coach log…"
+            instructionTitle = "Waiting for coach"
+            instructionSubtitle = "They log your turn (opposite the red = correct)."
         case .blockComplete:
             instructionTitle = "Block complete."
             instructionSubtitle = ""
@@ -180,7 +180,7 @@ final class AwayFromPressureEngine: ObservableObject {
         return reactionTimeSeconds
     }
 
-    /// Called when coach taps ✕ (incorrect decision). Stops timer and records rep as incorrect. Returns reaction time in seconds when saved; nil when discarded.
+    /// Coach ✕ — `exitedGate` nil; required when marking wrong without a direction. See `CoachRemoteDecisionModelMIGRATION.md`.
     func onIncorrectDecision(repIndex: Int, timestamp: Date) -> Double? {
         guard repIndex == currentRepIndex else { return nil }
         var rIdx: Int?
@@ -235,7 +235,7 @@ final class AwayFromPressureEngine: ObservableObject {
         return reactionTimeSeconds
     }
 
-    /// Called when coach logs first touch (before or after exit). If before exit, cached and applied when exit is logged.
+    /// Wire: `firstTouchLogged` — optional early action before exit. Cached until `onExitLogged` merges into the rep log.
     func onFirstTouchLogged(repIndex: Int, gate: Gate, timestamp: Date) {
         guard repIndex >= 0, repIndex < plan.count else { return }
         pendingFirstTouchByRep[repIndex] = (gate, timestamp)

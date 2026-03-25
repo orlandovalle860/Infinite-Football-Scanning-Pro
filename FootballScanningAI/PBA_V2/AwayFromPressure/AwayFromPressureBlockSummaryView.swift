@@ -29,7 +29,6 @@ struct AwayFromPressureBlockSummaryView: View {
     @State private var newPersonalBestsFromBlock: [NewPersonalBest] = []
     @State private var xpEarnedFromBlock: Int = 0
     @State private var newlyUnlockedBadgesFromBlock: [PlayerBadge] = []
-    @State private var decisionSpeedPercentile: Int?
     @State private var previousSessionForComparison: SessionRecord?
     @State private var personalBestScore: Int?
     @State private var isNewPersonalBestForDecisionSpeed = false
@@ -218,7 +217,7 @@ struct AwayFromPressureBlockSummaryView: View {
 
     private var sessionFeedbackCoachSentence: String {
         if let s = sessionResult {
-            return CoachInsightGenerator.coachInsight(for: s)
+            return CoachInsightGenerator.coachInsight(for: s, previous: previousSessionForComparison)
         }
         return coachMessage
     }
@@ -228,13 +227,13 @@ struct AwayFromPressureBlockSummaryView: View {
             if showSessionFeedback {
                 TrainingCompleteFeedbackView(
                     activityName: "Playing Away From Pressure",
+                    activityKind: .awayFromPressure,
                     correct: correctCount,
                     total: 12,
                     firstTouchAccuracy: nil,
                     decisionSpeedLabel: decisionSpeedComparisonLabel(current: speedBucket, previous: previousBlockSpeedBucket),
                     avgDecisionTimeSeconds: avgLatency,
                     decisionSpeedScore: decisionSpeedScoreValue,
-                    decisionSpeedPercentile: decisionSpeedPercentile,
                     previousDecisionSpeedScore: previousSessionForComparison?.decisionSpeedScore,
                     previousAvgReactionTimeSeconds: previousSessionForComparison?.avgLatency,
                     previousCorrect: previousSessionForComparison?.correct,
@@ -242,6 +241,8 @@ struct AwayFromPressureBlockSummaryView: View {
                     personalBest: personalBestScore,
                     isNewPersonalBest: isNewPersonalBestForDecisionSpeed,
                     coachFeedback: sessionFeedbackCoachSentence,
+                    sessionResultForDebrief: sessionResult,
+                    previousSessionRecordForDebrief: previousSessionForComparison,
                     onContinue: { showSessionFeedback = false }
                 )
             } else if let s = sessionResultForSummary {
@@ -369,12 +370,6 @@ struct AwayFromPressureBlockSummaryView: View {
                 xpEarnedFromBlock = rewards.xpEarned
                 newlyUnlockedBadgesFromBlock = rewards.newlyUnlockedBadges
                 sessionResultForSummary = result
-            }
-            if let score = decisionSpeedScoreValue {
-                Task {
-                    let p = await SupabaseSessionService.shared.decisionSpeedPercentile(activityName: ActivityKind.awayFromPressure.rawValue, currentScore: score)
-                    await MainActor.run { decisionSpeedPercentile = p }
-                }
             }
             didSave = true
         }

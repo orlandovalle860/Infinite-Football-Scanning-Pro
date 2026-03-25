@@ -52,10 +52,18 @@ struct PlayerDashboardView: View {
         return Int(round(ScanEfficiency.score(from: s)))
     }
 
-    /// Decision speed in seconds for headline display (latest session or personal best).
-    private var decisionSpeedSeconds: Double? {
-        chartSessions.last(where: { $0.avgDecisionTime != nil })?.avgDecisionTime
-            ?? profileManager.fastestDecisionSpeedSeconds()
+    /// Decision window in seconds for headline display (latest session, else best historical window).
+    private var decisionWindowSeconds: Double? {
+        chartSessions.last(where: { $0.avgDecisionWindowSeconds != nil })?.avgDecisionWindowSeconds
+            ?? chartSessions.compactMap(\.avgDecisionWindowSeconds).max()
+    }
+
+    /// Band remains score-based so scoring logic is unchanged.
+    private var decisionSpeedBandForHeadline: DecisionSpeedBand? {
+        if let last = chartSessions.last(where: { $0.avgDecisionWindowSeconds != nil }) {
+            return DecisionSpeedBand.band(forSession: last)
+        }
+        return nil
     }
 
     private var decisionSpeedLabel: String {
@@ -77,7 +85,7 @@ struct PlayerDashboardView: View {
         return Int(round(Double(choice) / Double(opp) * 100.0))
     }
 
-    /// Decision Before Contact: % of reps where decisionTime < threshold and firstTouch == correct (from most recent session with data).
+    /// Decision Before Contact: % of reps where decisionTime < threshold and early action matched correct direction (from most recent session with data).
     private var decisionBeforeContactCurrent: Int? {
         guard let s = chartSessions.last, let count = s.preReceiveDecisionCount, s.totalReps > 0 else { return nil }
         return Int(round(Double(count) / Double(s.totalReps) * 100.0))
@@ -117,7 +125,7 @@ struct PlayerDashboardView: View {
 
     private var decisionSpeedPoints: [ChartDataPoint] {
         chartSessions.enumerated().compactMap { index, s in
-            guard let t = s.avgDecisionTime else { return nil }
+            guard let t = s.avgDecisionWindowSeconds else { return nil }
             return ChartDataPoint(sessionIndex: index + 1, value: t)
         }
     }
@@ -135,6 +143,67 @@ struct PlayerDashboardView: View {
             guard let opp = s.forwardOpportunityCount, opp > 0, let choice = s.forwardChoiceCount else { return nil }
             let pct = Double(choice) / Double(opp) * 100.0
             return ChartDataPoint(sessionIndex: index + 1, value: pct)
+        }
+    }
+    private var latestActivity: ActivityKind? { chartSessions.last?.activityType }
+    private var primaryTrendPoints: [ChartDataPoint] {
+        switch latestActivity {
+        case .awayFromPressure, .dribbleOrPass:
+            return decisionScorePoints
+        case .oneTouchPassing:
+            return decisionSpeedPoints
+        case .twoMinuteTest:
+            return decisionScorePoints
+        case .none:
+            return []
+        }
+    }
+    private var primaryTrendTitle: String {
+        switch latestActivity {
+        case .awayFromPressure: return "Correct Escape Trend"
+        case .dribbleOrPass: return "Correct Decision Trend"
+        case .oneTouchPassing: return "Decision Window Trend"
+        case .twoMinuteTest: return "2-Minute Balanced Trend"
+        case .none: return "Primary Trend"
+        }
+    }
+    private var primaryTrendValueLabel: String {
+        switch latestActivity {
+        case .oneTouchPassing: return "s"
+        default: return "%"
+        }
+    }
+    private var primaryTrendAxis: (Double, Double)? {
+        switch latestActivity {
+        case .oneTouchPassing: return nil
+        default: return (0, 100)
+        }
+    }
+    private var secondaryTrendTitle: String {
+        switch latestActivity {
+        case .awayFromPressure, .dribbleOrPass, .twoMinuteTest: return "Decision Window (Secondary)"
+        case .oneTouchPassing: return "Correct Decisions (Secondary)"
+        case .none: return "Secondary Trend"
+        }
+    }
+    private var secondaryTrendPoints: [ChartDataPoint] {
+        switch latestActivity {
+        case .oneTouchPassing:
+            return decisionScorePoints
+        default:
+            return decisionSpeedPoints
+        }
+    }
+    private var secondaryTrendValueLabel: String {
+        switch latestActivity {
+        case .oneTouchPassing: return "%"
+        default: return "s"
+        }
+    }
+    private var secondaryTrendAxis: (Double, Double)? {
+        switch latestActivity {
+        case .oneTouchPassing: return (0, 100)
+        default: return nil
         }
     }
 
@@ -252,14 +321,14 @@ struct PlayerDashboardView: View {
 
     private var decisionSpeedHeadline: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Decision Speed")
+            Text("Decision Window")
                 .font(.subheadline.weight(.medium))
                 .foregroundColor(.white.opacity(0.9))
-            if let sec = decisionSpeedSeconds {
-                Text(String(format: "%.2fs", sec))
+            if let sec = decisionWindowSeconds {
+                Text(DecisionTimingModel.summaryText(windowSeconds: sec))
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(.white)
-                if let band = DecisionSpeedBand.band(forSeconds: sec) {
+                if let band = decisionSpeedBandForHeadline {
                     Text(band.label)
                         .font(.caption.weight(.medium))
                         .foregroundColor(band.color)
@@ -336,8 +405,8 @@ struct PlayerDashboardView: View {
                     .foregroundColor(.white.opacity(0.7))
                     .padding(.vertical, 12)
             } else {
-                ProgressLineChartView(title: "Decision Score", points: decisionScorePoints, valueLabel: "%", yAxisRange: (0, 100))
-                ProgressLineChartView(title: "Decision Speed", points: decisionSpeedPoints, valueLabel: "s", yAxisRange: nil, emptyStateMessage: "Complete at least 2 Dribble or Pass sessions to see your trend.")
+                ProgressLineChartView(title: primaryTrendTitle, points: primaryTrendPoints, valueLabel: primaryTrendValueLabel, yAxisRange: primaryTrendAxis)
+                ProgressLineChartView(title: secondaryTrendTitle, points: secondaryTrendPoints, valueLabel: secondaryTrendValueLabel, yAxisRange: secondaryTrendAxis, emptyStateMessage: "Complete at least 2 sessions to see your trend.")
                 ProgressLineChartView(title: "Forward Thinking", points: forwardIntentPoints, valueLabel: "%", yAxisRange: (0, 100), emptyStateMessage: "Complete at least 2 Dribble or Pass or One-Touch Passing sessions (with forward opportunities) to see your trend.")
             }
         }

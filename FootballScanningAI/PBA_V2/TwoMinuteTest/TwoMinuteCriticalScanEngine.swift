@@ -155,7 +155,7 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
         return reactionTimeSeconds
     }
 
-    /// Called when coach taps ✕ (incorrect decision). Records rep as incorrect (exitedGate = wrong direction). Returns reaction time in seconds when saved; nil when discarded.
+    /// Coach ✕ — records intentional wrong exit; still required for explicit wrong without misleading direction log.
     func onIncorrectDecision(repIndex: Int, timestamp: Date) -> Double? {
         guard repIndex == currentRepIndex else { return nil }
         var ballGate: Gate?

@@ -107,33 +107,31 @@ struct PlayerDevelopmentSnapshotView: View {
 
     // MARK: - Metric values
 
-    /// Decision speed: lower is better. Current = personal best or latest; progress 0–1 (0.3s = 1, 2.0s = 0). Includes band for display.
+    /// Decision window: higher is better. Current = best window or latest; progress maps -0.30...+0.30 to 0...1.
     private var decisionSpeedMetric: (current: String, improvement: String?, progress: Double, improved: Bool?, bandLabel: String?, bandColor: Color?, explanationText: String?) {
-        let current: Double?
-        if let best = profileManager.fastestDecisionSpeedSeconds() {
-            current = best
-        } else {
-            current = chartSessions.last(where: { $0.avgDecisionTime != nil })?.avgDecisionTime
-        }
+        let sessionForBand: SessionResult? = chartSessions
+            .filter { $0.avgDecisionWindowSeconds != nil }
+            .max(by: { ($0.avgDecisionWindowSeconds ?? -.greatestFiniteMagnitude) < ($1.avgDecisionWindowSeconds ?? -.greatestFiniteMagnitude) })
+        let current = sessionForBand?.avgDecisionWindowSeconds
         guard let cur = current else {
             return ("—", nil, 0, nil, nil, nil, nil)
         }
-        let baselineValues = baselineSessions.compactMap { $0.avgDecisionTime }
+        let baselineValues = baselineSessions.compactMap { $0.avgDecisionWindowSeconds }
         let previous = baselineValues.isEmpty ? nil : baselineValues.reduce(0, +) / Double(baselineValues.count)
         let improvement: String?
         let improved: Bool?
         if let prev = previous {
-            let diff = prev - cur
+            let diff = cur - prev
             improved = diff != 0 ? (diff > 0) : nil
-            improvement = String(format: "%.2fs → %.2fs", prev, cur) + (diff > 0 ? " (faster)" : (diff < 0 ? " (slower)" : ""))
+            improvement = "\(DecisionTimingModel.summaryText(windowSeconds: prev)) → \(DecisionTimingModel.summaryText(windowSeconds: cur))"
         } else {
             improved = nil
             improvement = nil
         }
-        let progress = (2.0 - cur) / 1.7
-        let band = DecisionSpeedBand.band(forSeconds: cur)
+        let progress = (cur + 0.30) / 0.60
+        let band = sessionForBand.flatMap { DecisionSpeedBand.band(forSession: $0) }
         return (
-            String(format: "%.2fs", cur),
+            DecisionTimingModel.summaryText(windowSeconds: cur),
             improvement,
             min(1, max(0, progress)),
             improved,
@@ -172,7 +170,7 @@ struct PlayerDevelopmentSnapshotView: View {
         return (String(format: "%.0f%%", cur), improvement, min(1, cur / 100), improved)
     }
 
-    /// First touch commitment: % where first touch matched correct direction (AFP). Higher is better.
+    /// Decision–action alignment % (stored as `firstTouchMatchCount` / AFP). Higher is better.
     private var firstTouchCommitmentMetric: (current: String, improvement: String?, progress: Double, improved: Bool?) {
         let withFirstTouch = chartSessions.filter { $0.firstTouchMatchCount != nil && $0.totalReps > 0 }
         let current: Double?

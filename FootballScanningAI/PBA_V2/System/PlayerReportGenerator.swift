@@ -153,7 +153,7 @@ enum PlayerReportGenerator {
             return "You choose the correct option under pressure."
         case .developing:
             if !hasFirstTouchIssues, let match = lastAFPSessionResult?.firstTouchMatchCount, match >= 8 {
-                return "Your first touch often matches your decision."
+                return "Your first action often matches your decision."
             }
             return "You're finding the right option more often."
         case .beginner:
@@ -177,7 +177,7 @@ enum PlayerReportGenerator {
             if (lastAFPSessionResult?.firstTouchHesitantCount ?? 0) >= 3 {
                 return "You're hesitating between options—commit to your decision."
             }
-            return "Your first touch is often late or wrong—decide earlier before the ball arrives."
+            return "Your first action is often late or off—decide earlier before the ball arrives."
         }
         if speed == .slow {
             return "Your decisions arrive slightly late."

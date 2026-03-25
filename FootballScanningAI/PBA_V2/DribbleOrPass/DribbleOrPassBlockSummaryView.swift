@@ -28,7 +28,6 @@ struct DribbleOrPassBlockSummaryView: View {
     @State private var newPersonalBestsFromBlock: [NewPersonalBest] = []
     @State private var xpEarnedFromBlock: Int = 0
     @State private var newlyUnlockedBadgesFromBlock: [PlayerBadge] = []
-    @State private var decisionSpeedPercentile: Int?
     @State private var previousSessionForComparison: SessionRecord?
     @State private var personalBestScore: Int?
     @State private var isNewPersonalBestForDecisionSpeed = false
@@ -161,7 +160,7 @@ struct DribbleOrPassBlockSummaryView: View {
 
     private var sessionFeedbackCoachSentence: String {
         if let s = sessionResult {
-            return CoachInsightGenerator.coachInsight(for: s)
+            return CoachInsightGenerator.coachInsight(for: s, previous: previousSessionForComparison)
         }
         return coachMessage
     }
@@ -171,13 +170,13 @@ struct DribbleOrPassBlockSummaryView: View {
             if showSessionFeedback {
                 TrainingCompleteFeedbackView(
                     activityName: "Dribble or Pass",
+                    activityKind: .dribbleOrPass,
                     correct: blockResult.correctCount,
                     total: 12,
                     firstTouchAccuracy: firstTouchMatchCountFromResults != nil ? "\(firstTouchMatchCountFromResults!)/12" : nil,
                     decisionSpeedLabel: decisionSpeedComparisonLabel(current: speedBucket, previous: previousBlockSpeedBucket),
                     avgDecisionTimeSeconds: blockResult.averageDecisionTime,
                     decisionSpeedScore: decisionSpeedScoreValue,
-                    decisionSpeedPercentile: decisionSpeedPercentile,
                     previousDecisionSpeedScore: previousSessionForComparison?.decisionSpeedScore,
                     previousAvgReactionTimeSeconds: previousSessionForComparison?.avgLatency,
                     previousCorrect: previousSessionForComparison?.correct,
@@ -185,6 +184,8 @@ struct DribbleOrPassBlockSummaryView: View {
                     personalBest: personalBestScore,
                     isNewPersonalBest: isNewPersonalBestForDecisionSpeed,
                     coachFeedback: sessionFeedbackCoachSentence,
+                    sessionResultForDebrief: sessionResult,
+                    previousSessionRecordForDebrief: previousSessionForComparison,
                     onContinue: { showSessionFeedback = false }
                 )
             } else if let s = sessionResultForSummary {
@@ -306,12 +307,6 @@ struct DribbleOrPassBlockSummaryView: View {
                 xpEarnedFromBlock = rewards.xpEarned
                 newlyUnlockedBadgesFromBlock = rewards.newlyUnlockedBadges
                 sessionResultForSummary = result
-            }
-            if let score = decisionSpeedScoreValue {
-                Task {
-                    let p = await SupabaseSessionService.shared.decisionSpeedPercentile(activityName: ActivityKind.dribbleOrPass.rawValue, currentScore: score)
-                    await MainActor.run { decisionSpeedPercentile = p }
-                }
             }
             didSave = true
         }

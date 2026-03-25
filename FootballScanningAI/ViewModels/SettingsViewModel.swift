@@ -10,6 +10,8 @@ class SettingsViewModel: ObservableObject {
     @AppStorage("trainingPerspective") var trainingPerspective: String = "back"
     @AppStorage("screenProtectionEnabled") var screenProtectionEnabled: Bool = true
     @AppStorage("soundEnabled") var soundEnabled: Bool = true
+    /// Coach-style training nudges (max one scheduled window per day when enabled).
+    @AppStorage("coachingNudgesEnabled") var coachingNudgesEnabled: Bool = false
     @AppStorage("selectedActionSet") var selectedActionSetRaw: String = "basic"
     @AppStorage("selectedColorSet") var selectedColorSetRaw: String = "standard"
     

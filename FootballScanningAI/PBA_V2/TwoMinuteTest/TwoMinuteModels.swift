@@ -2,7 +2,10 @@
 //  TwoMinuteModels.swift
 //  FootballScanningAI
 //
-//  PBA V2 — RepLog and Multipeer message types.
+//  PBA V2 — RepLog and relay message types.
+//
+//  **Compatibility:** `TwoMinuteMessage` `kind` strings (`firstTouchLogged`, `incorrectDecision`, …) are
+//  part of the on-wire protocol — see `CoachRemoteDecisionModelMIGRATION.md` before renaming.
 //
 
 import Foundation
@@ -43,14 +46,16 @@ struct RepLog: Codable {
     }
 }
 
-// MARK: - Multipeer messages (payload prefix pba2:)
+// MARK: - Multipeer / relay messages (payload prefix pba2:)
 
+/// Partner session messages. **Do not rename cases** without a protocol migration — JSON `kind` must stay backward compatible.
 enum TwoMinuteMessage: Codable {
     case nextRep(repIndex: Int)
     case passTriggered(repIndex: Int, timestamp: Date)
     case exitLogged(repIndex: Int, gate: Gate, timestamp: Date)
+    /// Legacy wire name: optional early action before exit (DOP/AFP). TODO: rename to `firstDecisionLogged` with dual-decode.
     case firstTouchLogged(repIndex: Int, gate: Gate, timestamp: Date)
-    /// Coach tapped ✕: decision incorrect; stop timer and record.
+    /// Coach ✕ when the rep was wrong and logging a direction would misrepresent the player. Still required — see migration doc.
     case incorrectDecision(repIndex: Int, timestamp: Date)
     /// Coach device: notifies display that this session is paired so the pairing code can be hidden.
     case coachPaired(sessionId: UUID)

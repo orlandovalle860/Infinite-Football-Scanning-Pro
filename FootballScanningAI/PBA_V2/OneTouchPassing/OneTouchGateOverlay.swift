@@ -10,8 +10,8 @@ import SwiftUI
 struct OneTouchGateOverlay: View {
     let gate: Gate
     let isGreen: Bool  // true = available (safe pass), false = covered (pressure — use same style as Playing Away From Pressure)
-    var laneSpan: CGFloat = 0.62
-    var insetFraction: CGFloat = 0.18
+    var laneSpan: CGFloat = 0.70
+    var insetFraction: CGFloat = 0.22
 
     private var gradientColors: [Color] {
         if isGreen {

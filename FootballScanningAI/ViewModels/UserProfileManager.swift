@@ -203,6 +203,9 @@ class UserProfileManager: ObservableObject {
             currentProfile = profiles[index]
         }
         saveProfiles()
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .coachingTrainingNudgesShouldRefresh, object: nil)
+        }
         return SessionRewards(
             newPersonalBests: newBests,
             xpEarned: xpEarned,

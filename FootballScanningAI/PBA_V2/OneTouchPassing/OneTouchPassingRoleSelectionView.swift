@@ -60,7 +60,8 @@ struct OneTouchPassingRoleSelectionView: View {
                 .buttonStyle(PlainButtonStyle())
                 .padding(.horizontal, 28)
 
-                NavigationLink(destination: OneTouchPassingCoachRemoteView(settingsViewModel: settingsViewModel, profileManager: profileManager)) {
+                NavigationLink(destination: OneTouchPassingCoachRemoteView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+                    .environmentObject(router)) {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             Image(systemName: "hand.raised")
@@ -101,5 +102,6 @@ struct OneTouchPassingRoleSelectionView: View {
         .preferredColorScheme(.dark)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .pbaHomeToolbar(router: router)
     }
 }

@@ -103,11 +103,12 @@ struct AwayFromPressureSetupView: View {
         .preferredColorScheme(.dark)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .pbaHomeToolbar(router: router)
         .onAppear {
             print("[SetupScreen AFP] onAppear, router path count = \(router.pathCount)")
         }
         .navigationDestination(isPresented: $showInstructions) {
-            ActivityInstructionView(activity: .awayFromPressure) {
+            ActivityInstructionView(activity: .awayFromPressure, trainingMode: mode) {
                 showInstructions = false
                 navigateToSession = true
             }

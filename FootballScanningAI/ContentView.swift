@@ -487,6 +487,15 @@ struct MainAppView: View {
         .environmentObject(router)
     }
 
+    private func refreshCoachingTrainingNudgesIfNeeded() {
+        CoachingTrainingNotificationScheduler.refresh(
+            enabled: settingsViewModel.coachingNudgesEnabled,
+            playerId: playerStore.selectedPlayerId ?? profileManager.currentProfile?.id,
+            profile: profileManager.currentProfile,
+            progressStore: progressStore
+        )
+    }
+
     var body: some View {
         Group {
             NavigationStack(path: router.pathBinding) {
@@ -555,6 +564,13 @@ struct MainAppView: View {
             SupabaseDecisionService.shared.retryPendingDecisions()
             SupabasePlayerService.shared.retryPendingPlayers(profileManager: profileManager)
             SupabasePlayerService.shared.retryPendingDeletes()
+            refreshCoachingTrainingNudgesIfNeeded()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            refreshCoachingTrainingNudgesIfNeeded()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .coachingTrainingNudgesShouldRefresh)) { _ in
+            refreshCoachingTrainingNudgesIfNeeded()
         }
         .onChange(of: authManager.currentSession != nil) { _, hasSession in
             if !hasSession { hasHydratedPlayersForSession = false }
@@ -1122,6 +1138,176 @@ struct IntroView: View {
         }
     }
 
+    /// Home trend always follows the current guided training focus.
+    private var snapshotTrendActivity: ActivityKind { continueTrainingCardActivity }
+
+    private enum HomeTrendMetric {
+        case escapeRate
+        case decisionRate
+        case decisionWindow
+        case balanced
+    }
+
+    private var snapshotTrendMetric: HomeTrendMetric {
+        switch snapshotTrendActivity {
+        case .awayFromPressure: return .escapeRate
+        case .dribbleOrPass: return .decisionRate
+        case .oneTouchPassing: return .decisionWindow
+        case .twoMinuteTest: return .balanced
+        }
+    }
+
+    /// Activity-specific sessions for the quick trend graph (oldest → newest).
+    private var snapshotTrendActivitySessions: [SessionResult] {
+        profileManager.sessionResultsForCharts()
+            .filter { $0.activityType == snapshotTrendActivity }
+    }
+
+    private func sessionAccuracyPercent(_ session: SessionResult) -> Double? {
+        guard session.totalReps > 0 else { return nil }
+        return Double(session.correctCount) / Double(session.totalReps) * 100.0
+    }
+
+    private func sessionBalancedScore(_ session: SessionResult) -> Double? {
+        guard let accuracy = sessionAccuracyPercent(session),
+              let window = session.avgDecisionWindowSeconds else { return nil }
+        let normalizedWindow = min(max((window + 0.15) / 0.45, 0.0), 1.0) * 100.0
+        return (accuracy * 0.55) + (normalizedWindow * 0.45)
+    }
+
+    private var snapshotTrendTitle: String {
+        switch snapshotTrendMetric {
+        case .escapeRate:
+            return "\(RecommendationEngine.activityTitle(snapshotTrendActivity)) — Correct Escape Trend"
+        case .decisionRate:
+            return "\(RecommendationEngine.activityTitle(snapshotTrendActivity)) — Correct Decision Trend"
+        case .decisionWindow:
+            return "\(RecommendationEngine.activityTitle(snapshotTrendActivity)) — Decision Window Trend"
+        case .balanced:
+            return "\(RecommendationEngine.activityTitle(snapshotTrendActivity)) — Balanced Scan Trend"
+        }
+    }
+
+    private var snapshotTrendValueLabel: String {
+        switch snapshotTrendMetric {
+        case .decisionWindow: return "s"
+        case .escapeRate, .decisionRate, .balanced: return "%"
+        }
+    }
+
+    /// Up to 7 points for current focus activity, based on its primary metric emphasis.
+    private var snapshotTrendPoints: [ChartDataPoint] {
+        let lastSeven = Array(snapshotTrendActivitySessions.suffix(7))
+        return lastSeven.enumerated().compactMap { index, session in
+            let value: Double?
+            switch snapshotTrendMetric {
+            case .escapeRate, .decisionRate:
+                value = sessionAccuracyPercent(session)
+            case .decisionWindow:
+                value = session.avgDecisionWindowSeconds
+            case .balanced:
+                value = sessionBalancedScore(session)
+            }
+            guard let value else { return nil }
+            return ChartDataPoint(sessionIndex: index + 1, value: value)
+        }
+    }
+
+    private var snapshotTrendPrimaryLabel: String {
+        guard let latest = snapshotTrendActivitySessions.last else { return "—" }
+        switch snapshotTrendMetric {
+        case .escapeRate:
+            return sessionAccuracyPercent(latest).map { "\(Int(round($0)))%" } ?? "—"
+        case .decisionRate:
+            return sessionAccuracyPercent(latest).map { "\(Int(round($0)))%" } ?? "—"
+        case .decisionWindow:
+            return latest.avgDecisionWindowSeconds.map { DecisionTimingModel.summaryText(windowSeconds: $0) } ?? "—"
+        case .balanced:
+            return sessionBalancedScore(latest).map { "\(Int(round($0)))%" } ?? "—"
+        }
+    }
+
+    private var snapshotTrendPrimaryMetricName: String {
+        switch snapshotTrendMetric {
+        case .escapeRate: return "Correct escapes"
+        case .decisionRate: return "Correct decisions"
+        case .decisionWindow: return "Decision window"
+        case .balanced: return "Balanced score"
+        }
+    }
+
+    /// Human-readable trend insight for the current focus activity.
+    private var snapshotTrendInsightLine: String {
+        let title = RecommendationEngine.activityTitle(snapshotTrendActivity)
+        let latestValues = Array(snapshotTrendPoints.suffix(3)).map(\.value)
+        guard latestValues.count >= 2 else { return "Complete more \(title) sessions to unlock trend insights." }
+        let olderAvg = latestValues.dropLast().reduce(0, +) / Double(max(1, latestValues.count - 1))
+        let newer = latestValues.last ?? olderAvg
+        let delta = newer - olderAvg
+        switch snapshotTrendMetric {
+        case .escapeRate:
+            if delta >= 3 { return "Escape direction is getting cleaner in recent \(title) sessions." }
+            if delta <= -3 { return "Escape execution dipped in your last \(title) block — lock the opposite gate earlier." }
+            return "Escape execution is stable across recent \(title) sessions."
+        case .decisionRate:
+            if delta >= 3 { return "Decision quality is improving in your recent \(title) blocks." }
+            if delta <= -3 { return "Decision quality slipped in your last \(title) block — confirm the cue before committing." }
+            return "Decision quality is stable across recent \(title) sessions."
+        case .decisionWindow:
+            if delta > 0.04 { return "You're deciding earlier relative to arrival in recent \(title) sessions." }
+            if delta < -0.04 { return "You were later relative to arrival last \(title) session — reset early scans next block." }
+            return "Your decision window is stable in recent \(title) sessions."
+        case .balanced:
+            if delta >= 3 { return "Your timing and selection are improving together in recent test blocks." }
+            if delta <= -3 { return "Your balance of timing and selection dipped in the latest test — reset and re-center next block." }
+            return "Your timing-selection balance is stable across recent test sessions."
+        }
+    }
+
+    private var currentFocusActivitySessionsNewestFirst: [SessionResult] {
+        profileManager.recentTrainSessions(limit: 20).filter { $0.activityType == continueTrainingCardActivity }
+    }
+
+    private var latestFocusSession: SessionResult? { currentFocusActivitySessionsNewestFirst.first }
+
+    private var previousFocusSessionRecord: SessionRecord? {
+        guard currentFocusActivitySessionsNewestFirst.count >= 2 else { return nil }
+        return sessionRecord(from: currentFocusActivitySessionsNewestFirst[1])
+    }
+
+    private var coachInsightBody: String {
+        guard let latest = latestFocusSession else {
+            return "Complete your next block to unlock a personalized coaching insight."
+        }
+        return CoachInsightGenerator.coachInsight(for: latest, previous: previousFocusSessionRecord)
+    }
+
+    private func sessionRecord(from session: SessionResult) -> SessionRecord {
+        let speedBucket: SpeedBucket = {
+            let counts = session.speedCounts
+            if counts.fast >= counts.medium && counts.fast >= counts.slow { return .fast }
+            if counts.slow >= counts.fast && counts.slow >= counts.medium { return .slow }
+            return .medium
+        }()
+        return SessionRecord(
+            id: session.id,
+            date: session.date,
+            activity: session.activityType,
+            gridSize: .fiveByFive,
+            difficulty: session.difficulty ?? .standard,
+            reps: session.totalReps,
+            decisionsCompleted: session.totalReps,
+            correct: session.correctCount,
+            forwardCorrect: session.forwardChoiceCount,
+            speedBucket: speedBucket,
+            bias: session.biasDirection?.userFacingName,
+            avgLatency: session.avgDecisionTime,
+            profile: nil,
+            playerId: session.playerID,
+            decisionSpeedScore: session.estimatedDecisionSpeedScore
+        )
+    }
+
     /// Static benchmark: Elite Academy average decision speed (seconds). Lower is better.
     private static let eliteAcademyAverageDecisionSpeed: Double = 0.60
 
@@ -1192,7 +1378,7 @@ struct IntroView: View {
         SkillProgressionEngine.recommendedNextActivity(progressStore: progressStore, playerId: playerId)
     }
 
-    /// Stage position for Next Training card (perception path order: AFP=1, DOP=2, OTP=3).
+    /// Guided mastery stage for the current recommended focus (perception path order: AFP=1, DOP=2, OTP=3).
     private var nextTrainingStageLabel: String {
         switch continueTrainingCardActivity {
         case .awayFromPressure: return "Stage 1 of 3"
@@ -1246,6 +1432,9 @@ struct IntroView: View {
                         .modifier(StartPageCardStyle())
 
                     quickPerformanceSnapshotSection
+                        .modifier(StartPageCardStyle())
+
+                    coachInsightSection
                         .modifier(StartPageCardStyle())
 
                     stageProgressSection
@@ -1776,7 +1965,7 @@ struct IntroView: View {
         refreshGuidedProgress()
     }
 
-    /// 1. Next Training card (top): single dominant guided CTA with stage + path context.
+    /// 1. Current Focus card (top): single dominant guided CTA with stage + path context.
     private var dailyGoalCard: some View {
         Group {
             if needsBaselineAssessment {
@@ -1820,7 +2009,7 @@ struct IntroView: View {
             } else {
                 VStack(alignment: .leading, spacing: 16) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Next Training")
+                        Text("Current Focus")
                             .font(.headline.weight(.semibold))
                             .foregroundColor(.white)
                         Text(RecommendationEngine.activityTitle(continueTrainingCardActivity))
@@ -1836,10 +2025,6 @@ struct IntroView: View {
                             .font(.caption)
                             .foregroundColor(.white.opacity(0.7))
                     }
-                    trainingPathIndicator
-                    Text("Playing Away From Pressure → Dribble or Pass → One-Touch Passing")
-                        .font(.caption2)
-                        .foregroundColor(.white.opacity(0.7))
                     Text("Focus: \(focusText)")
                         .font(.caption)
                         .foregroundColor(.white.opacity(0.85))
@@ -2344,23 +2529,26 @@ struct IntroView: View {
             Text("🏆 Personal Bests")
                 .font(.subheadline.weight(.semibold))
                 .foregroundColor(.white)
-            personalBestDecisionSpeedRow(seconds: profileManager.fastestDecisionSpeedSeconds())
+            personalBestDecisionSpeedRow(session: profileManager.sessionResultsForCharts().max {
+                ($0.avgDecisionWindowSeconds ?? -.greatestFiniteMagnitude) < ($1.avgDecisionWindowSeconds ?? -.greatestFiniteMagnitude)
+            })
             personalBestRow(label: "Best Pressure Escape Rate", value: profileManager.bestPressureEscapePercent().map { String(format: "%.0f%%", $0) })
             personalBestRow(label: "Best Forward Thinking", value: profileManager.bestForwardIntentPercent().map { String(format: "%.0f%%", $0) })
         }
     }
 
-    private func personalBestDecisionSpeedRow(seconds: Double?) -> some View {
-        HStack(alignment: .top) {
-            Text("Fastest Decision Speed")
+    private func personalBestDecisionSpeedRow(session: SessionResult?) -> some View {
+        let window = session?.avgDecisionWindowSeconds
+        return HStack(alignment: .top) {
+            Text("Best Decision Window")
                 .font(.subheadline)
                 .foregroundColor(.white.opacity(0.9))
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 2) {
-                Text(seconds.map { String(format: "%.2fs", $0) } ?? "—")
+                Text(window.map { DecisionTimingModel.summaryText(windowSeconds: $0) } ?? "—")
                     .font(.subheadline.monospacedDigit())
                     .foregroundColor(.white.opacity(0.95))
-                if let sec = seconds, let band = DecisionSpeedBand.band(forSeconds: sec) {
+                if let s = session, let band = DecisionSpeedBand.band(forSession: s) {
                     Text(band.label)
                         .font(.caption.weight(.medium))
                         .foregroundColor(band.color)
@@ -2411,14 +2599,14 @@ struct IntroView: View {
             }
             if let identity = currentPlayerIdentity {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(identity.emojiTitle)
+                    Text("Current training profile: \(identity.profileLabel)")
                         .font(.subheadline.weight(.semibold))
                         .foregroundColor(.yellow)
                     Text(identity.shortDescription)
                         .font(.caption)
                         .foregroundColor(.white.opacity(0.78))
                     if let trendingIdentity {
-                        Text("Trending toward \(trendingIdentity.title)")
+                        Text("Emerging strength: \(trendingIdentity.title)")
                             .font(.caption2)
                             .foregroundColor(.white.opacity(0.6))
                     }
@@ -2430,44 +2618,37 @@ struct IntroView: View {
     }
 
     private var quickPerformanceSnapshotSection: some View {
-        let sec = snapshotDecisionSpeedSeconds
-        let tier: String = {
-            guard let s = sec else { return "—" }
-            if s < 0.85 { return "Elite" }
-            if s < 1.10 { return "Fast" }
-            if s <= 1.35 { return "Average" }
-            return "Slow"
-        }()
-        let trend = (dashboardData?.trendScores).flatMap { $0.isEmpty ? nil : $0 } ?? localTrendScores
+        let activityTitle = RecommendationEngine.activityTitle(snapshotTrendActivity)
         return VStack(alignment: .leading, spacing: 10) {
-            Text("Quick Performance Snapshot")
+            Text(snapshotTrendTitle)
                 .font(.subheadline.weight(.semibold))
                 .foregroundColor(.white)
             HStack(spacing: 10) {
-                Text("Decision Speed:")
+                Text("\(snapshotTrendPrimaryMetricName):")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.75))
-                Text(sec.map { String(format: "%.2fs", $0) } ?? "—")
+                Text(snapshotTrendPrimaryLabel)
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(.white)
-                Text("•")
-                    .foregroundColor(.white.opacity(0.5))
-                Text(tier)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.yellow)
             }
-            if !trend.isEmpty {
+            if snapshotTrendPoints.count >= 2 {
                 ProgressLineChartView(
                     title: "",
-                    points: trend.enumerated().map { ChartDataPoint(sessionIndex: $0.offset + 1, value: Double($0.element)) },
-                    valueLabel: "",
+                    points: snapshotTrendPoints,
+                    valueLabel: snapshotTrendValueLabel,
                     yAxisRange: nil,
                     emptyStateMessage: nil
                 )
                 .padding(.horizontal, -16)
                 .padding(.vertical, -8)
+                Text("Showing last \(snapshotTrendPoints.count) \(snapshotTrendPoints.count == 1 ? "session" : "sessions") for \(activityTitle).")
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.65))
+                Text(snapshotTrendInsightLine)
+                    .font(.caption)
+                    .foregroundColor(.yellow.opacity(0.9))
             } else {
-                Text("Complete sessions to see trend.")
+                Text("Complete at least 2 \(activityTitle) sessions to see trends.")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.6))
             }
@@ -2475,13 +2656,26 @@ struct IntroView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private var coachInsightSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Coach Insight")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.white)
+            Text(coachInsightBody)
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.92))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private var stageProgressSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Stage Progress")
+            Text("Your Path")
                 .font(.subheadline.weight(.semibold))
                 .foregroundColor(.white)
             if needsBaselineAssessment {
-                Text("Stage not set")
+                Text("Path not set")
                     .font(.subheadline.weight(.medium))
                     .foregroundColor(.white.opacity(0.9))
                 Text("Complete your 2-minute assessment to begin.")
@@ -2491,13 +2685,34 @@ struct IntroView: View {
                 Text(nextTrainingStageLabel)
                     .font(.subheadline.weight(.medium))
                     .foregroundColor(.yellow)
-                trainingPathIndicator
-                Text(currentStageIndex == 3 ? "Stage 3 → Loop next" : "Stage \(currentStageIndex) → Stage \(currentStageIndex + 1)")
+                HStack(spacing: 14) {
+                    pathStatusItem(label: "AFP", isActive: currentStageIndex == 1, isCompleted: currentStageIndex > 1)
+                    pathStatusItem(label: "DOP", isActive: currentStageIndex == 2, isCompleted: currentStageIndex > 2)
+                    pathStatusItem(label: "OTP", isActive: currentStageIndex == 3, isCompleted: false)
+                }
+                Text(currentStageIndex == 3 ? "Mastery path: Stage 3 → Loop next" : "Mastery path: Stage \(currentStageIndex) → Stage \(currentStageIndex + 1)")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.75))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func pathStatusItem(label: String, isActive: Bool, isCompleted: Bool) -> some View {
+        let stateText = isCompleted ? "Completed" : (isActive ? "Current" : "Upcoming")
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text(isCompleted ? "✔" : (isActive ? "●" : "○"))
+                    .font(.caption.weight(.bold))
+                    .foregroundColor(isActive ? .yellow : (isCompleted ? .green : .white.opacity(0.6)))
+                Text(label)
+                    .font(.caption.weight(isActive ? .semibold : .regular))
+                    .foregroundColor(isActive ? .yellow : .white.opacity(0.82))
+            }
+            Text(stateText)
+                .font(.caption2)
+                .foregroundColor(.white.opacity(0.65))
+        }
     }
 
     private var secondaryActionsSection: some View {
@@ -3134,6 +3349,7 @@ struct TwoMinuteTestSetupView: View {
         .preferredColorScheme(.dark)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .pbaHomeToolbar(router: router)
         .navigationDestination(isPresented: $navigateToGetReady) {
             TwoMinuteGetReadyView(mode: mode, config: TwoMinuteTestConfig.baseline, settingsViewModel: settingsViewModel, profileManager: profileManager)
                 .environmentObject(progressStore)
@@ -3181,7 +3397,7 @@ struct TwoMinuteGetReadyView: View {
                     .environmentObject(popToRootTrigger)
                     .environmentObject(router)
             } else {
-                ActivityInstructionView(activity: .twoMinuteTest) {
+                ActivityInstructionView(activity: .twoMinuteTest, trainingMode: mode) {
                     phase = .session
                 }
             }
@@ -3200,6 +3416,7 @@ struct TwoMinuteGetReadyView: View {
         .preferredColorScheme(.dark)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .pbaHomeToolbar(router: router)
     }
 }
 
@@ -3211,7 +3428,7 @@ private struct HowItWorksView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("It's about when you decide, not how you touch. Know your first touch before the ball reaches you.")
+                    Text("It's about when you decide, not how you touch. Know your first decision before the ball reaches you.")
                         .foregroundColor(.primary)
 
                     Text("Use the training activities to practice scanning and deciding early.")
@@ -3646,6 +3863,42 @@ struct MainView: View {
                                 .opacity(0.7)
                         }
                         .padding(.horizontal)
+
+                        // Coach-style training reminders (local notifications; throttled in scheduler).
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                Text("Training nudges")
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                                Spacer()
+                                Toggle("", isOn: $settingsViewModel.coachingNudgesEnabled)
+                                    .labelsHidden()
+                            }
+                            Text("Short, soccer-focused prompts — at most one reminder window scheduled per day.")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.65))
+                        }
+                        .padding()
+                        .background {
+                            RoundedRectangle(cornerRadius: 15)
+                                .fill(.ultraThinMaterial)
+                                .opacity(0.7)
+                        }
+                        .padding(.horizontal)
+                        .onChange(of: settingsViewModel.coachingNudgesEnabled) { _, new in
+                            if new {
+                                CoachingTrainingNotificationScheduler.requestAuthorizationIfNeeded { granted in
+                                    DispatchQueue.main.async {
+                                        if !granted {
+                                            settingsViewModel.coachingNudgesEnabled = false
+                                        }
+                                        NotificationCenter.default.post(name: .coachingTrainingNudgesShouldRefresh, object: nil)
+                                    }
+                                }
+                            } else {
+                                NotificationCenter.default.post(name: .coachingTrainingNudgesShouldRefresh, object: nil)
+                            }
+                        }
                         
                         // Mode selection is shown only in the full warmup browser.
                         if showModeSelection {

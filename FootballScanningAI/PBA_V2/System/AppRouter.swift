@@ -96,4 +96,21 @@ final class AppRouter: ObservableObject {
             }
         }
     }
+
+    /// Pops one level (e.g. activity coach remote → Coach Remote hub). No-op if the stack is empty.
+    func popLast() {
+        guard !path.isEmpty else { return }
+        if Thread.isMainThread {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                _ = path.popLast()
+            }
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    _ = self.path.popLast()
+                }
+            }
+        }
+    }
 }

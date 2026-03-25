@@ -73,6 +73,7 @@ struct TrainingModeSelectionView<Next: View>: View {
         .preferredColorScheme(.dark)
         .navigationTitle(activityTitle)
         .navigationBarTitleDisplayMode(.inline)
+        .pbaHomeToolbar(router: router)
     }
 
     private func modeRowLabel(mode: TrainingMode) -> some View {

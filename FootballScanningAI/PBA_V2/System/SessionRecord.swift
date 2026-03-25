@@ -63,7 +63,7 @@ struct SessionRecord: Identifiable, Codable {
     let playerId: UUID?
     /// True after this session has been successfully uploaded to Supabase; false when saved only locally (e.g. offline).
     let synced: Bool
-    /// Decision Speed Score (0–100) for this session; stored in sessions table for percentile ranking.
+    /// Decision Speed Score (0–100) for this session; stored in sessions table for analytics / progress.
     let decisionSpeedScore: Int?
 
     enum CodingKeys: String, CodingKey {

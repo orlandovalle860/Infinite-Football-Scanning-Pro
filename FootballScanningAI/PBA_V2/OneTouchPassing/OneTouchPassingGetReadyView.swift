@@ -25,6 +25,15 @@ struct OneTouchPassingGetReadyView: View {
 
     private var activity: ActivityKind { .oneTouchPassing }
 
+    private var getReadySubtitle: String {
+        switch mode {
+        case .partner:
+            return "Tap Begin for directions, then Start Block. On Display, partner setup runs first; the block countdown starts after the coach connects."
+        case .solo, .wall:
+            return "Tap Begin for directions, then Start Block. You’ll get a short countdown, then your block begins."
+        }
+    }
+
     var body: some View {
         VStack(spacing: 24) {
             if let n = countdown, n > 0 {
@@ -41,7 +50,7 @@ struct OneTouchPassingGetReadyView: View {
                 Text("Get ready")
                     .font(.system(size: 32, weight: .bold, design: .rounded))
                     .foregroundColor(.white)
-                Text("Tap Begin for directions, then Start Block to start the countdown.")
+                Text(getReadySubtitle)
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.8))
                     .multilineTextAlignment(.center)
@@ -82,6 +91,7 @@ struct OneTouchPassingGetReadyView: View {
         .preferredColorScheme(.dark)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .pbaHomeToolbar(router: router)
         .alert("Leave training?", isPresented: $showLeaveAlert) {
             Button("Stay", role: .cancel) {}
             Button("Leave", role: .destructive) {
@@ -94,7 +104,7 @@ struct OneTouchPassingGetReadyView: View {
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
         }
         .navigationDestination(isPresented: $showInstruction) {
-            ActivityInstructionView(activity: activity) {
+            ActivityInstructionView(activity: activity, trainingMode: mode) {
                 showInstruction = false
                 startCountdown()
             }

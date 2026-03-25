@@ -56,13 +56,13 @@ struct PBACurriculumView: View {
         progressStore.last(activity, playerId: playerStore.selectedPlayerId) != nil
     }
 
-    /// Number of completed sessions (blocks) for this activity and player. Used to decide whether to show progress % or prompt.
+    /// Number of completed sessions (blocks) for this activity and player.
     private func sessionCount(for activity: ActivityKind) -> Int {
         progressStore.sessions(for: activity, playerId: playerStore.selectedPlayerId).count
     }
 
-    /// Training progress 0–100 based only on completed blocks (not performance). 2 blocks = 67%, 3+ = 100%. Only meaningful when sessionCount >= 2.
-    private func trainingProgressPercent(for activity: ActivityKind) -> Int {
+    /// Visual fill 0–100 based only on completed blocks (not mastery/performance). 3+ sessions fills the bar.
+    private func sessionExposurePercent(for activity: ActivityKind) -> Int {
         let count = sessionCount(for: activity)
         guard count > 0 else { return 0 }
         return min(100, Int(Double(min(3, count)) / 3.0 * 100))
@@ -183,12 +183,12 @@ struct PBACurriculumView: View {
             .foregroundColor(color)
     }
 
-    /// Card: dark rounded rect, stage label, title, subtitle, training progress (or prompt), large yellow Train button. Padding 22, corner radius 18.
+    /// Card: dark rounded rect, stage label, title, subtitle, session exposure (or prompt), large yellow Train button. Padding 22, corner radius 18.
     private func activityCard(index: Int, title: String, subtitle: String, route: AppRoute) -> some View {
         let activity = Self.activities[index].activity
         let count = sessionCount(for: activity)
         let showProgress = count >= 2
-        let progressPercent = trainingProgressPercent(for: activity)
+        let exposurePercent = sessionExposurePercent(for: activity)
 
         return VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 6) {
@@ -204,10 +204,10 @@ struct PBACurriculumView: View {
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.85))
 
-                Text("Training Progress")
+                Text("Session Exposure")
                     .font(.caption)
                     .foregroundColor(.gray)
-                Text("Based on completed blocks, not performance.")
+                Text("Shows how many blocks you've logged here, not mastery.")
                     .font(.caption2)
                     .foregroundColor(.gray.opacity(0.85))
                     .padding(.top, 1)
@@ -222,17 +222,17 @@ struct PBACurriculumView: View {
                                     .frame(height: 8)
                                 RoundedRectangle(cornerRadius: 4)
                                     .fill(Color.yellow)
-                                    .frame(width: max(0, geo.size.width * CGFloat(progressPercent) / 100), height: 8)
+                                    .frame(width: max(0, geo.size.width * CGFloat(exposurePercent) / 100), height: 8)
                             }
                         }
                         .frame(height: 8)
-                        Text("\(progressPercent)%")
+                        Text("\(min(count, 3))/3 sessions")
                             .font(.caption)
                             .foregroundColor(.white.opacity(0.9))
                             .lineLimit(1)
                     }
                 } else {
-                    Text("Complete 2 sessions to track performance")
+                    Text("Complete 2 sessions to unlock exposure tracking")
                         .font(.caption)
                         .foregroundColor(.white.opacity(0.7))
                         .padding(.top, 2)

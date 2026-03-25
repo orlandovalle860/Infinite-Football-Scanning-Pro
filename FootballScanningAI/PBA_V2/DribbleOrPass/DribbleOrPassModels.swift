@@ -62,11 +62,11 @@ struct DribbleOrPassRepResult {
     let decisionPoints: Int
     /// Timing bonus: fast +1, medium/slow +0.
     let timingBonus: Double
-    /// First touch direction when coach logged it; nil if skipped.
+    /// Optional early direction (wire: `firstTouchLogged`); nil if coach skipped. Base `correct` comes from `chosenGate` vs scenario.
     let firstTouchGate: Gate?
     /// decisionPoints + timingBonus. Max 5 per rep.
     var repScore: Double { Double(decisionPoints) + timingBonus }
-    /// true when first touch matched intended direction; nil when first touch not logged.
+    /// True when optional early direction matched intended gate; nil when not logged.
     var firstTouchAccurate: Bool? {
         guard let ft = firstTouchGate else { return nil }
         return ft == expectedGate

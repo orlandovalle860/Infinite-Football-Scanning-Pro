@@ -2,7 +2,7 @@
 //  DangerZoneOverlay.swift
 //  FootballScanningAI
 //
-//  PBA V2 — Red shaded lane at one edge (pressure). GateOutlineOverlay = outline only (open space).
+//  PBA V2 — Red wedge = where pressure comes from; correct play is the opposite gate (turn away into space).
 //
 
 import SwiftUI
@@ -10,7 +10,7 @@ import SwiftUI
 private let gateOutlineColor = Color.white.opacity(0.45)
 private let gateOutlineLineWidth: CGFloat = 1.5
 
-/// Draws a single gate as outline only (transparent interior). Use so players see where options exist.
+/// Draws a single gate as outline only (transparent interior). Shows all four possible exits; only one is correct per rep (opposite the red wedge).
 struct GateOutlineOverlay: View {
     let gate: Gate
     var laneSpan: CGFloat = 0.62
@@ -105,8 +105,8 @@ struct DangerZoneOverlay: View {
     }
 
     private func wedgePath(w: CGFloat, h: CGFloat) -> Path {
-        let laneW = w * style.laneSpan
-        let depth = min(w, h) * style.depthFraction
+        let laneW = wedgeLaneWidth(w: w, h: h)
+        let depth = wedgeDepth(w: w, h: h)
         let centerGap = min(w, h) * style.centerGapFraction
 
         switch gate {
@@ -156,5 +156,25 @@ struct DangerZoneOverlay: View {
                 p.closeSubpath()
             }
         }
+    }
+
+    /// In landscape, top/bottom wedges can dominate the field because width is much larger than height.
+    /// Reduce their span/depth adaptively so pressure is clear without drowning side-space options.
+    private func wedgeLaneWidth(w: CGFloat, h: CGFloat) -> CGFloat {
+        let base = w * style.laneSpan
+        guard gate == .up || gate == .down else { return base }
+        let safeW = max(w, 1)
+        let aspect = h / safeW // < 1 in landscape
+        let reduction = max(0.62, min(1.0, aspect * 0.95))
+        return base * reduction
+    }
+
+    private func wedgeDepth(w: CGFloat, h: CGFloat) -> CGFloat {
+        let base = min(w, h) * style.depthFraction
+        guard gate == .up || gate == .down else { return base }
+        let safeW = max(w, 1)
+        let aspect = h / safeW // < 1 in landscape
+        let reduction = max(0.70, min(1.0, aspect * 1.10))
+        return base * reduction
     }
 }

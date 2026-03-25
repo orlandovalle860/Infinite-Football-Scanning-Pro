@@ -3,24 +3,26 @@
 //  FootballScanningAI
 //
 //  PBA V2 — Block log for Playing Away From Pressure.
-//  Decision timing = trigger → coach directional input (when coach taps direction or ✕). No separate first-touch logging required.
+//  Decision timing = trigger → coach directional input (when coach taps direction or ✕).
+//  Optional `firstTouchGate` / `firstTouchLoggedAt` use legacy field names (wire: `firstTouchLogged`) — see `CoachRemoteDecisionModelMIGRATION.md`.
 //
 
 import Foundation
 
 struct AwayFromPressureRepLog: Codable {
     let repIndex: Int
+    /// Side where pressure appears (red wedge). The **only** correct exit for scoring is `pressureGate.opposite`.
     let pressureGate: Gate
-    /// Direction coach logged (player's decision). Nil when coach tapped ✕ (incorrect).
+    /// Direction coach logged (player's turn into space). Nil when coach tapped ✕ (incorrect).
     let exitedGate: Gate?
     let startedAt: Date
     let markerShownAt: Date
     let markerHiddenAt: Date
     let passTriggeredAt: Date?
     let exitLoggedAt: Date
-    /// Optional: set when coach logs first touch direction (for correction-rate etc.). Not used for decision timing.
+    /// Optional early direction (wire name `firstTouchLogged`); optional correction / late-adjustment stats — not used for base `correct`.
     let firstTouchGate: Gate?
-    /// Optional: when first touch was logged. Not used for decision timing (timing = trigger → coach direction).
+    /// Optional timestamp for `firstTouchGate` (same wire event).
     let firstTouchLoggedAt: Date?
 
     init(repIndex: Int, pressureGate: Gate, exitedGate: Gate?, startedAt: Date, markerShownAt: Date, markerHiddenAt: Date, passTriggeredAt: Date?, exitLoggedAt: Date, firstTouchGate: Gate? = nil, firstTouchLoggedAt: Date? = nil) {
@@ -74,10 +76,10 @@ struct AwayFromPressureRepLog: Codable {
         return exitLoggedAt.timeIntervalSince(pt)
     }
 
-    /// Correct if logged direction matched the correct escape (opposite of pressure).
+    /// True iff the logged direction is the single correct escape: **opposite** the pressure side (not lateral “open” options).
     var correct: Bool { exitedGate == pressureGate.opposite }
 
-    /// Late correction: first touch was wrong but exit was correct. Optional metric; requires first touch logged.
+    /// Late correction: early direction ≠ escape, but logged exit was correct. Optional metric; requires optional early log.
     var lateCorrection: Bool {
         guard let ft = firstTouchGate, let ex = exitedGate else { return false }
         let correctGate = pressureGate.opposite

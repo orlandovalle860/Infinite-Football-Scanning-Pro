@@ -42,13 +42,13 @@ enum ReportCardGrade: String {
         }
     }
 
-    /// Convert average decision time (seconds) to Decision Speed grade. Thresholds: A < 0.75, B 0.75–0.95, C 0.95–1.15, D 1.15–1.35, F > 1.35.
-    static func from(averageDecisionTimeSeconds: Double) -> ReportCardGrade {
-        switch averageDecisionTimeSeconds {
-        case ..<0.75: return .a
-        case 0.75..<0.95: return .b
-        case 0.95..<1.15: return .c
-        case 1.15..<1.35: return .d
+    /// Convert average decision window (seconds before arrival) to Decision Timing grade.
+    static func from(decisionWindowSeconds: Double) -> ReportCardGrade {
+        switch decisionWindowSeconds {
+        case 0.25...: return .a
+        case 0.10..<0.25: return .b
+        case 0.00..<0.10: return .c
+        case -0.10..<0.00: return .d
         default: return .f
         }
     }
@@ -176,22 +176,22 @@ enum ReportCardGenerator {
         switch currentTier {
         case "Needs Work", "Emerging":
             return [
-                "Avg decision time < 1.10s",
+                "Decision window >= 0.00s",
                 "Accuracy >= 80%"
             ]
         case "Developing":
             return [
-                "Avg decision time < 0.95s",
+                "Decision window >= +0.10s",
                 "Accuracy >= 85%"
             ]
         case "Strong":
             return [
-                "Avg decision time < 0.90s",
+                "Decision window >= +0.25s",
                 "Accuracy >= 90%"
             ]
         default:
             var requirements: [String] = []
-            if let speedAvg { requirements.append(String(format: "Maintain speed around %.2fs", speedAvg)) }
+            if let speedAvg { requirements.append("Maintain decision window around \(DecisionTimingModel.summaryText(windowSeconds: speedAvg))") }
             if let accuracyPercent { requirements.append("Maintain accuracy around \(accuracyPercent)%") }
             return requirements.isEmpty ? ["Maintain elite consistency"] : requirements
         }
@@ -199,13 +199,13 @@ enum ReportCardGenerator {
 
     private static func strengthInsight(speedZone: String, accuracyPercent: Int?, forwardPercent: Int?) -> String {
         if let accuracyPercent, accuracyPercent >= 90 { return "Decision Accuracy (\(accuracyPercent)%)" }
-        if speedZone == "Early" || speedZone == "On Time" { return "Decision Speed (\(speedZone))" }
+        if speedZone == "Elite" || speedZone == "Advanced" || speedZone == "Competent" { return "Decision Window (\(speedZone))" }
         if let forwardPercent, forwardPercent >= 60 { return "Forward Thinking (\(forwardPercent)%)" }
         return "Consistency in training sessions"
     }
 
     private static func limiterInsight(speedZone: String, accuracyPercent: Int?, forwardPercent: Int?) -> String {
-        if speedZone == "Too Late" || speedZone == "Late" { return "Decision Speed timing is late" }
+        if speedZone == "Too Late" || speedZone == "Late" { return "Decision window timing is late" }
         if let accuracyPercent, accuracyPercent < 75 { return "Decision Accuracy consistency" }
         if let forwardPercent, forwardPercent < 50 { return "Forward Thinking choices" }
         return "Maintaining consistency under pressure"
@@ -238,7 +238,7 @@ enum ReportCardGenerator {
 
     private static func overallSupportMessage(chartSessions: [SessionResult]) -> String {
         let recent = Array(chartSessions.prefix(5))
-        let withTime = recent.compactMap(\.avgDecisionTime)
+        let withTime = recent.compactMap(\.avgDecisionWindowSeconds)
         let avgTime = withTime.isEmpty ? nil : withTime.reduce(0, +) / Double(withTime.count)
         let accuracyPct: Double? = {
             guard !recent.isEmpty else { return nil }
@@ -249,13 +249,13 @@ enum ReportCardGenerator {
         }()
 
         if let accuracyPct, let avgTime, accuracyPct >= 0.80, avgTime > 1.10 {
-            return "You're making the right decisions, but slightly late."
+            return "You're making good choices, but often too close to arrival."
         }
         if let accuracyPct, accuracyPct >= 0.80 {
             return "You're making strong decisions with good consistency."
         }
         if let avgTime, avgTime > 1.20 {
-            return "Your timing is lagging under pressure—commit to decisions earlier."
+            return "Your decision window is late under pressure—commit earlier."
         }
         return "You're building your timing and decision quality."
     }
@@ -266,7 +266,7 @@ enum ReportCardGenerator {
         case .aPlus, .a, .aMinus:
             return "You're performing at an Elite level—maintain this standard."
         case .bPlus, .b, .bMinus:
-            return "You're close to Elite (Early Decisions)."
+            return "You're close to Elite (early decisions before arrival)."
         case .cPlus, .c, .cMinus:
             return "You're close to Strong (On-Time Decisions)."
         case .dPlus, .d, .dMinus:
@@ -288,43 +288,46 @@ enum ReportCardGenerator {
 
     private static func overallNextTarget(chartSessions: [SessionResult]) -> String {
         let recent = Array(chartSessions.prefix(5))
-        let withTime = recent.compactMap(\.avgDecisionTime)
+        let withTime = recent.compactMap(\.avgDecisionWindowSeconds)
         guard !withTime.isEmpty else { return "Next Target: Complete 3 timed sessions" }
         let avgTime = withTime.reduce(0, +) / Double(withTime.count)
-        if avgTime > 1.20 { return "Next Target: < 1.20s" }
-        if avgTime > 1.10 { return "Next Target: < 1.10s" }
-        if avgTime > 0.90 { return "Next Target: < 0.90s" }
-        return "Next Target: Keep < 0.90s consistently"
+        if avgTime < -0.10 { return "Next Target: Decision window >= -0.10s" }
+        if avgTime < 0.00 { return "Next Target: Decision window >= 0.00s" }
+        if avgTime < 0.10 { return "Next Target: Decision window >= +0.10s" }
+        return "Next Target: Keep decision window positive consistently"
     }
 
     private static func rollingAverageDecisionTime(chartSessions: [SessionResult]) -> Double? {
-        let recent = Array(chartSessions.prefix(5)).compactMap(\.avgDecisionTime)
+        let recent = Array(chartSessions.prefix(5)).compactMap(\.avgDecisionWindowSeconds)
         guard !recent.isEmpty else { return nil }
         return recent.reduce(0, +) / Double(recent.count)
     }
 
     private static func decisionSpeedZone(from avg: Double?) -> String {
         guard let avg else { return "No timing data yet" }
-        if avg < 0.90 { return "Early" }
-        if avg <= 1.10 { return "On Time" }
-        if avg <= 1.20 { return "Late" }
+        if avg >= 0.25 { return "Elite" }
+        if avg >= 0.10 { return "Advanced" }
+        if avg >= 0.00 { return "Competent" }
+        if avg >= -0.10 { return "Late" }
         return "Too Late"
     }
 
     private static func decisionSpeedTier(from avg: Double?) -> String {
         guard let avg else { return "Emerging" }
-        if avg < 0.90 { return "Elite" }
-        if avg <= 1.10 { return "Strong" }
-        if avg <= 1.20 { return "Developing" }
-        return "Emerging"
+        if avg >= 0.25 { return "Elite" }
+        if avg >= 0.10 { return "Strong" }
+        if avg >= 0.00 { return "Developing" }
+        if avg >= -0.10 { return "Emerging" }
+        return "Too Late"
     }
 
     private static func decisionSpeedMessage(from zone: String) -> String {
         switch zone {
-        case "Early": return "Excellent — you're deciding before pressure."
-        case "On Time": return "Good timing — push toward earlier decisions."
-        case "Late": return "You're reading it well, but committing slightly late."
-        case "Too Late": return "You're waiting too long — decide earlier."
+        case "Elite": return "Excellent — consistently deciding well before arrival."
+        case "Advanced": return "Strong timing — usually before arrival."
+        case "Competent": return "Solid baseline — decisions land around arrival."
+        case "Late": return "You're often a beat late — decide earlier."
+        case "Too Late": return "Decision comes after arrival too often — build earlier pictures."
         default: return "Complete more sessions to unlock timing feedback."
         }
     }
@@ -347,7 +350,7 @@ enum ReportCardGenerator {
     private static func accuracyMessage(from percent: Int?, speedZone: String) -> String {
         guard let percent else { return "Complete more sessions to unlock accuracy coaching." }
         if percent >= 85 && (speedZone == "Late" || speedZone == "Too Late") {
-            return "Excellent accuracy — now focus on deciding faster."
+            return "Excellent accuracy — now increase time left before arrival."
         }
         if percent >= 85 { return "Great decision quality — keep consistency high." }
         if percent >= 70 { return "Good base — sharpen consistency under pressure." }
@@ -379,26 +382,26 @@ enum ReportCardGenerator {
     }
 
     private static func focusNext(speedZone: String, accuracyPercent: Int?, forwardPercent: Int?) -> String {
-        if speedZone == "Too Late" || speedZone == "Late" { return "Decision Speed" }
+        if speedZone == "Too Late" || speedZone == "Late" { return "Decision Window" }
         if let accuracyPercent, accuracyPercent < 75 { return "Decision Accuracy" }
         if let forwardPercent, forwardPercent < 50 { return "Forward Thinking" }
         return "Decision Speed"
     }
 
-    /// Decision Speed: grade from rolling average decision time (most recent 3–5 sessions). Requires at least 3 sessions with avgDecisionTime; otherwise nil (caller shows "Not enough data for grade" or "—").
+    /// Decision Timing: grade from rolling average decision window (most recent 3–5 sessions). Requires at least 3 sessions with timing data.
     private static func gradeDecisionSpeed(sessions: [SessionResult]) -> ReportCardGrade? {
         let withTime = sessions  // assume newest first
-            .filter { $0.avgDecisionTime != nil }
+            .filter { $0.avgDecisionWindowSeconds != nil }
             .prefix(DecisionSpeedGrading.maxSessionsForAverage)
         guard withTime.count >= DecisionSpeedGrading.minSessionsForGrade else { return nil }
-        let sum = withTime.reduce(0.0) { $0 + ($1.avgDecisionTime ?? 0) }
-        let avgSeconds = sum / Double(withTime.count)
-        return ReportCardGrade.from(averageDecisionTimeSeconds: avgSeconds)
+        let sum = withTime.reduce(0.0) { $0 + ($1.avgDecisionWindowSeconds ?? 0) }
+        let avgWindow = sum / Double(withTime.count)
+        return ReportCardGrade.from(decisionWindowSeconds: avgWindow)
     }
 
     /// Decision Speed display: letter grade when 3+ sessions; "Not enough data for grade" when 1–2; "—" when none.
     private static func decisionSpeedDisplayString(sessions: [SessionResult], grade: ReportCardGrade?) -> String {
-        let withTimeCount = sessions.filter { $0.avgDecisionTime != nil }.count
+        let withTimeCount = sessions.filter { $0.avgDecisionWindowSeconds != nil }.count
         if let g = grade { return g.display }
         if withTimeCount >= 1 { return "Not enough data for grade" }
         return "—"

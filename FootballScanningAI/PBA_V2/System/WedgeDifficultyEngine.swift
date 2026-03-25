@@ -10,12 +10,12 @@ struct WedgeCueStyle {
     static func style(for level: Int) -> WedgeCueStyle {
         switch max(1, min(3, level)) {
         case 1:
-            return WedgeCueStyle(laneSpan: 0.84, depthFraction: 0.28, centerGapFraction: 0.19, opacity: 0.90)
+            return WedgeCueStyle(laneSpan: 0.78, depthFraction: 0.24, centerGapFraction: 0.20, opacity: 0.86)
         case 2:
             // Subtle increase in challenge: slightly narrower + slightly farther from center.
-            return WedgeCueStyle(laneSpan: 0.76, depthFraction: 0.25, centerGapFraction: 0.22, opacity: 0.88)
+            return WedgeCueStyle(laneSpan: 0.70, depthFraction: 0.22, centerGapFraction: 0.23, opacity: 0.84)
         default:
-            return WedgeCueStyle(laneSpan: 0.68, depthFraction: 0.22, centerGapFraction: 0.25, opacity: 0.86)
+            return WedgeCueStyle(laneSpan: 0.64, depthFraction: 0.20, centerGapFraction: 0.26, opacity: 0.82)
         }
     }
 }

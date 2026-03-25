@@ -18,18 +18,15 @@ enum TwoMinuteCoachState: Equatable {
 struct TwoMinuteCoachRemoteView: View {
     @EnvironmentObject private var connectionManager: ConnectionManager
     @EnvironmentObject private var multipeerManager: MultipeerManager
+    @EnvironmentObject private var router: AppRouter
+    @Environment(\.dismiss) private var dismiss
+    /// Avoids duplicate navigation when `sessionEnded` and relay disconnect both fire.
+    @State private var didNavigateBackToCoachHubAfterDisplayDisconnect = false
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
-    /// DEBUG: relay WebSocket; Release: Multipeer — one mode per Two Minute partner session.
-    private static let initialTwoMinuteTransportMode: SessionTransportMode = {
-        #if DEBUG
-        return .relayWebSocket
-        #else
-        return .multipeer
-        #endif
-    }()
+    private static let partnerTransportMode = PartnerTransportPolicy.transportMode(for: .twoMinute)
 
-    @StateObject private var remoteService = RemoteService(transport: TwoMinuteSessionTransport.makeInitial(for: TwoMinuteCoachRemoteView.initialTwoMinuteTransportMode))
+    @StateObject private var remoteService = RemoteService(transport: TwoMinuteSessionTransport.makeInitial(for: TwoMinuteCoachRemoteView.partnerTransportMode))
     @State private var state: TwoMinuteCoachState = .ready
     @State private var currentRepIndex = 0
     @State private var volumeTriggerEnabled = true
@@ -47,7 +44,7 @@ struct TwoMinuteCoachRemoteView: View {
 
     /// Whether the active transport is connected (Multipeer peer name vs relay WebSocket).
     private var coachSessionConnected: Bool {
-        switch Self.initialTwoMinuteTransportMode {
+        switch Self.partnerTransportMode {
         case .multipeer:
             return connectionManager.connectedPeerName != nil
         case .relayWebSocket:
@@ -83,36 +80,38 @@ struct TwoMinuteCoachRemoteView: View {
         .onReceive(NotificationCenter.default.publisher(for: .twoMinuteMessageReceived)) { notification in
             guard let msg = notification.object as? TwoMinuteMessage else { return }
             if case .sessionEnded = msg {
+                if Self.partnerTransportMode == .relayWebSocket {
+                    clearCoachRelayJoinForm()
+                }
                 state = .ready
                 volumeTriggerEnabled = true
+                popToCoachRemoteHubAfterDisplayDisconnect()
             }
         }
+        .onAppear {
+            didNavigateBackToCoachHubAfterDisplayDisconnect = false
+        }
         .onDisappear {
-            if Self.initialTwoMinuteTransportMode == .multipeer {
+            if Self.partnerTransportMode == .multipeer {
                 connectionManager.stopBrowsing()
             }
             remoteService.disconnect()
-            #if DEBUG
-            coachRelayDisplayPeerJoined = false
-            #endif
-        }
-        .onChange(of: connectionManager.connectedPeerName) { _, newName in
-            guard Self.initialTwoMinuteTransportMode == .multipeer else { return }
-            if newName == nil {
-                resetLocalUIForDisconnect(source: "connectedPeerName=nil")
+            if Self.partnerTransportMode == .relayWebSocket {
+                clearCoachRelayJoinForm()
             }
         }
-        .onChange(of: connectionManager.connectionState) { _, newState in
-            guard Self.initialTwoMinuteTransportMode == .multipeer else { return }
-            if newState == .disconnected {
-                resetLocalUIForDisconnect(source: "connectionState=disconnected")
-            }
+        .onChange(of: connectionManager.connectedPeerName) { oldName, newName in
+            guard Self.partnerTransportMode == .multipeer else { return }
+            guard oldName != nil, newName == nil else { return }
+            resetLocalUIForDisconnect(source: "connectedPeerName=nil")
+            popToCoachRemoteHubAfterDisplayDisconnect()
         }
-        .onChange(of: remoteService.connectionState) { _, newState in
-            guard Self.initialTwoMinuteTransportMode == .relayWebSocket else { return }
-            if newState == .disconnected {
-                resetLocalUIForDisconnect(source: "relayRemoteService=disconnected")
-            }
+        .onChange(of: remoteService.connectionState) { oldState, newState in
+            guard Self.partnerTransportMode == .relayWebSocket else { return }
+            guard oldState == .connected, newState == .disconnected else { return }
+            clearCoachRelayJoinForm()
+            resetLocalUIForDisconnect(source: "relayRemoteService=disconnected")
+            popToCoachRemoteHubAfterDisplayDisconnect()
         }
         .onChange(of: state) { _, newState in
             if case .complete = newState {
@@ -125,123 +124,115 @@ struct TwoMinuteCoachRemoteView: View {
     }
 
     private var readyView: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 20) {
             if !coachSessionConnected {
                 connectionSection
             } else {
-                Spacer(minLength: 40)
-                if Self.initialTwoMinuteTransportMode == .multipeer, let name = connectionManager.connectedPeerName {
-                    Text("Connected to \(name)")
-                        .font(.subheadline)
-                        .foregroundColor(.green)
-                } else if Self.initialTwoMinuteTransportMode == .relayWebSocket {
-                    Text("Connected (relay)")
-                        .font(.subheadline)
-                        .foregroundColor(.green)
-                }
-                Text("Tap NEXT REP to start the next rep on the Display.")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.8))
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal)
-
+                CoachRemoteConnectionStatusBar(
+                    isRelay: Self.partnerTransportMode == .relayWebSocket,
+                    peerDisplayName: connectionManager.connectedPeerName
+                )
+                Text(CoachRemoteCopy.readyForNextRep)
+                    .font(.title3.weight(.semibold))
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text("Rep \(currentRepIndex + 1) of \(totalReps)")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.45))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Spacer(minLength: 16)
                 Button {
-                    if Self.initialTwoMinuteTransportMode == .multipeer {
+                    if Self.partnerTransportMode == .multipeer {
                         connectionManager.lastError = nil
                     }
                     remoteService.sendNextRep(repIndex: currentRepIndex)
                     state = .logging(repIndex: currentRepIndex)
                 } label: {
                     Text("NEXT REP")
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
+                        .font(.system(size: 26, weight: .bold, design: .rounded))
                         .foregroundColor(.black)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 28)
+                        .padding(.vertical, 26)
                         .background(Color.yellow)
                         .cornerRadius(18)
                 }
                 .buttonStyle(PlainButtonStyle())
-                .padding(.horizontal, 32)
-
-                Text("Rep \(currentRepIndex + 1) of \(totalReps)")
-                    .font(.footnote)
-                    .foregroundColor(.white.opacity(0.5))
-
-                Spacer()
+                Spacer(minLength: 0)
             }
         }
     }
 
     private func loggingView(repIndex: Int) -> some View {
-        VStack(spacing: 16) {
+        VStack(alignment: .leading, spacing: 20) {
             Text("Rep \(repIndex + 1) of \(totalReps)")
-                .font(.footnote)
-                .foregroundColor(.white.opacity(0.5))
-            Text("When the Display beeps, tap PASS or press volume at strike.")
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.9))
-                .multilineTextAlignment(.center)
-
-            if showVolumeEdgeWarning {
-                Text(CoachRemoteVolumeTriggerConfig.edgeWarningMessage)
-                    .font(.caption)
-                    .foregroundColor(.orange.opacity(0.95))
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 4)
-            }
-
-            Button {
-                remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
-            } label: {
-                Text("PASS")
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
-                    .foregroundColor(.black)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 24)
-                    .background(Color.yellow)
-                    .cornerRadius(16)
-            }
-            .buttonStyle(PlainButtonStyle())
-            .padding(.horizontal, 24)
-
-            Text("Tap the direction the player chose, or ✕ if incorrect.")
-                .font(.footnote)
-                .foregroundColor(.white.opacity(0.7))
-
-            directionPad
-
-            Text("Volume buttons also trigger PASS (use the PASS button if volume is stuck at the top or bottom).")
                 .font(.caption)
-                .foregroundColor(.white.opacity(0.5))
-                .multilineTextAlignment(.center)
+                .foregroundColor(.white.opacity(0.45))
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            // A. PASS — timing input (primary)
+            VStack(alignment: .leading, spacing: 12) {
+                Text(CoachRemoteCopy.passTimingInstruction)
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.92))
+                if showVolumeEdgeWarning {
+                    Text(CoachRemoteVolumeTriggerConfig.edgeWarningMessage)
+                        .font(.caption2)
+                        .foregroundColor(.orange.opacity(0.95))
+                }
+                CoachRemoteFeedbackTap(kind: .pass, clipCornerRadius: 16) {
+                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
+                } label: {
+                    Text("PASS")
+                        .font(.system(size: 30, weight: .bold, design: .rounded))
+                        .foregroundColor(.black)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 26)
+                        .background(Color.yellow)
+                        .cornerRadius(16)
+                }
+                Text(CoachRemoteCopy.volumePassHint)
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.38))
+            }
+
+            // B. Player decision — direction (secondary)
+            VStack(alignment: .leading, spacing: 12) {
+                Text(CoachRemoteCopy.playerDecisionQuestion)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.88))
+                directionPad
+            }
 
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 20)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var directionPad: some View {
         VStack(spacing: 10) {
-            Button { logExit(.up) } label: { arrowLabel("arrow.up") }
-                .buttonStyle(PlainButtonStyle())
-            HStack(spacing: 10) {
-                Button { logExit(.left) } label: { arrowLabel("arrow.left") }
-                    .buttonStyle(PlainButtonStyle())
-                Button { logIncorrect() } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 28, weight: .bold))
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(Color.red.opacity(0.7))
-                        .cornerRadius(12)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(PlainButtonStyle())
-                Button { logExit(.right) } label: { arrowLabel("arrow.right") }
-                    .buttonStyle(PlainButtonStyle())
+            CoachRemoteFeedbackTap(kind: .direction, clipCornerRadius: 12) {
+                logExit(.up)
+            } label: {
+                arrowLabel("arrow.up")
             }
-            Button { logExit(.down) } label: { arrowLabel("arrow.down") }
-                .buttonStyle(PlainButtonStyle())
+            HStack(spacing: 10) {
+                CoachRemoteFeedbackTap(kind: .direction, clipCornerRadius: 12) {
+                    logExit(.left)
+                } label: {
+                    arrowLabel("arrow.left")
+                }
+                CoachRemoteIncorrectPadButton(action: logIncorrect)
+                CoachRemoteFeedbackTap(kind: .direction, clipCornerRadius: 12) {
+                    logExit(.right)
+                } label: {
+                    arrowLabel("arrow.right")
+                }
+            }
+            CoachRemoteFeedbackTap(kind: .direction, clipCornerRadius: 12) {
+                logExit(.down)
+            } label: {
+                arrowLabel("arrow.down")
+            }
         }
         .frame(height: 200)
     }
@@ -257,83 +248,108 @@ struct TwoMinuteCoachRemoteView: View {
     }
 
     private var connectionSection: some View {
+        Group {
+            #if DEBUG
+            if Self.partnerTransportMode == .relayWebSocket {
+                VStack(spacing: 20) {
+                    Text("Rep \(currentRepIndex + 1) of \(totalReps)")
+                        .font(.footnote)
+                        .foregroundColor(.white.opacity(0.5))
+                    PartnerRelayCoachJoinSection(
+                        joinCodeInput: $coachRelayJoinCodeInput,
+                        joinFieldFocused: $relayJoinCodeFieldFocused,
+                        joinBusy: coachRelayJoinBusy,
+                        joinBanner: coachRelayJoinBanner,
+                        relayTransportConnected: remoteService.connectionState == .connected,
+                        displayPeerJoined: coachRelayDisplayPeerJoined,
+                        onJoin: {
+                            print("[RelayWS-DEBUG][Coach] Join session (button or auto-submit)")
+                            Task { await startCoachRelayJoin() }
+                        }
+                    )
+                    Color.clear.frame(height: 24)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, 60)
+            } else {
+                multipeerConnectionScrollContent
+            }
+            #else
+            multipeerConnectionScrollContent
+            #endif
+        }
+    }
+
+    private var multipeerConnectionScrollContent: some View {
         ScrollView {
             VStack(spacing: 20) {
                 Text("Rep \(currentRepIndex + 1) of \(totalReps)")
                     .font(.footnote)
                     .foregroundColor(.white.opacity(0.5))
 
-                if Self.initialTwoMinuteTransportMode == .multipeer {
-                    Text("Connect to the device showing the grid (Display). Keep both devices nearby and allow Local Network if prompted.")
-                        .font(.subheadline)
-                        .foregroundColor(.white.opacity(0.9))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
+                Text(CoachRemoteCopy.multipeerSetupHint)
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.85))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
 
-                    if !connectionManager.isBrowsing {
-                        Button("Connect to Display") {
-                            connectionManager.lastError = nil
-                            connectionManager.startBrowsing()
-                        }
-                        .font(.headline)
-                        .foregroundColor(.black)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.yellow)
-                        .cornerRadius(12)
-                        .padding(.horizontal, 40)
-                    } else if connectionManager.connectedPeerName == nil {
-                        if connectionManager.availablePeers.isEmpty {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                .scaleEffect(1.2)
-                            Text("Searching for Display…")
-                                .font(.subheadline)
-                                .foregroundColor(.white.opacity(0.8))
-                            Text("Make sure the other device chose \"Display\" and is on the grid screen.")
-                                .font(.caption)
-                                .foregroundColor(.white.opacity(0.6))
-                        } else {
-                            Text("Select a device to connect:")
-                                .font(.subheadline)
-                                .foregroundColor(.white.opacity(0.9))
-                            List {
-                                ForEach(Array(connectionManager.availablePeers.enumerated()), id: \.offset) { _, peer in
-                                    Button {
-                                        connectionManager.invite(peerID: peer)
-                                    } label: {
-                                        HStack {
-                                            Image(systemName: "tv")
-                                                .foregroundColor(.white.opacity(0.8))
-                                            Text(peer.displayName)
-                                                .foregroundColor(.white)
-                                        }
+                if !connectionManager.isBrowsing {
+                    Button("Connect to Display") {
+                        connectionManager.lastError = nil
+                        connectionManager.startBrowsing()
+                    }
+                    .font(.headline)
+                    .foregroundColor(.black)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.yellow)
+                    .cornerRadius(12)
+                    .padding(.horizontal, 40)
+                } else if connectionManager.connectedPeerName == nil {
+                    if connectionManager.availablePeers.isEmpty {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(1.2)
+                        Text("Searching for Display…")
+                            .font(.subheadline)
+                            .foregroundColor(.white.opacity(0.8))
+                        Text("Make sure the other device chose \"Display\" and is on the grid screen.")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.6))
+                    } else {
+                        Text("Select a device to connect:")
+                            .font(.subheadline)
+                            .foregroundColor(.white.opacity(0.9))
+                        List {
+                            ForEach(Array(connectionManager.availablePeers.enumerated()), id: \.offset) { _, peer in
+                                Button {
+                                    connectionManager.invite(peerID: peer)
+                                } label: {
+                                    HStack {
+                                        Image(systemName: "tv")
+                                            .foregroundColor(.white.opacity(0.8))
+                                        Text(peer.displayName)
+                                            .foregroundColor(.white)
                                     }
                                 }
                             }
-                            .scrollContentBackground(.hidden)
-                            .listStyle(.plain)
                         }
-                        Button("Cancel") {
-                            connectionManager.stopBrowsing()
-                        }
-                        .foregroundColor(.white.opacity(0.9))
+                        .scrollContentBackground(.hidden)
+                        .listStyle(.plain)
                     }
-
-                    if let error = connectionManager.lastError {
-                        Text(error)
-                            .font(.subheadline)
-                            .foregroundColor(.orange)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
+                    Button("Cancel") {
+                        connectionManager.stopBrowsing()
                     }
+                    .foregroundColor(.white.opacity(0.9))
                 }
 
-                #if DEBUG
-                if Self.initialTwoMinuteTransportMode == .relayWebSocket {
-                    coachRelayPartnerSection
+                if let error = connectionManager.lastError {
+                    Text(error)
+                        .font(.subheadline)
+                        .foregroundColor(.orange)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
                 }
-                #endif
 
                 Color.clear.frame(height: 24)
             }
@@ -342,106 +358,7 @@ struct TwoMinuteCoachRemoteView: View {
     }
 
     #if DEBUG
-    /// Relay partner path: join code → `RemoteService` with `WebSocketRemoteTransport` (production-facing DEBUG).
-    private var coachRelayPartnerSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Divider()
-                .background(Color.white.opacity(0.25))
-            Text("Relay WebSocket (DEBUG)")
-                .font(.caption.weight(.semibold))
-                .foregroundColor(.cyan.opacity(0.95))
-            Text("Enter join code from the iPad display session, then connect.")
-                .font(.caption2)
-                .foregroundColor(.white.opacity(0.55))
-            TextField("Join code", text: $coachRelayJoinCodeInput)
-                .textFieldStyle(.roundedBorder)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.characters)
-                .focused($relayJoinCodeFieldFocused)
-                .submitLabel(.go)
-                .onSubmit {
-                    Task { await startCoachRelayJoin() }
-                }
-            Button {
-                relayJoinCodeFieldFocused = false
-                print("[RelayWS-DEBUG][Coach] button tap: Join relay & connect WS")
-                Task { await startCoachRelayJoin() }
-            } label: {
-                Group {
-                    if coachRelayJoinBusy {
-                        ProgressView()
-                            .tint(.black)
-                    } else {
-                        Text("Join relay & connect WS")
-                            .font(.subheadline.weight(.semibold))
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(Color.cyan.opacity(0.85))
-                .foregroundColor(.black)
-                .cornerRadius(10)
-            }
-            .buttonStyle(PlainButtonStyle())
-            .disabled(
-                coachRelayJoinBusy
-                    || coachRelayJoinCodeInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            )
-            if let banner = coachRelayJoinBanner, !banner.isEmpty {
-                Text(banner)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundColor(coachRelayBannerTextColor(banner))
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(12)
-                    .background(Color.white.opacity(0.08))
-                    .cornerRadius(10)
-            }
-            if remoteService.connectionState == .connected {
-                HStack(spacing: 8) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.green.opacity(0.95))
-                    Text("Relay connected")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(.green.opacity(0.95))
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            if coachRelayDisplayPeerJoined {
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "link.circle.fill")
-                        .foregroundColor(.green.opacity(0.9))
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Joined display successfully")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundColor(.green.opacity(0.95))
-                        Text("control.peer_joined received")
-                            .font(.caption2)
-                            .foregroundColor(.white.opacity(0.55))
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(10)
-                .background(Color.green.opacity(0.12))
-                .cornerRadius(10)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.top, 8)
-    }
-
-    private func coachRelayBannerTextColor(_ banner: String) -> Color {
-        if banner.contains("connected") {
-            return Color.green.opacity(0.95)
-        }
-        if banner.contains("Joining") || banner.contains("Connecting") {
-            return Color.white.opacity(0.9)
-        }
-        return Color.orange
-    }
-
     private func startCoachRelayJoin() async {
-        relayJoinCodeFieldFocused = false
         let code = coachRelayJoinCodeInput.trimmingCharacters(in: .whitespacesAndNewlines)
         print("[RelayWS-DEBUG][Coach] startCoachRelayJoin() entered joinCode=\(code)")
         guard !code.isEmpty else {
@@ -451,7 +368,7 @@ struct TwoMinuteCoachRemoteView: View {
         await MainActor.run {
             coachRelayJoinBusy = true
             coachRelayJoinError = nil
-            coachRelayJoinBanner = "Joining relay…"
+            coachRelayJoinBanner = PartnerRelayJoinCodeConfig.joiningStatusBannerText
             coachRelayDisplayPeerJoined = false
         }
         do {
@@ -466,6 +383,7 @@ struct TwoMinuteCoachRemoteView: View {
             let config = WebSocketSessionConfig(url: wsURL, sessionId: joined.sessionId, authToken: joined.coachToken)
             let transport = WebSocketRemoteTransport(config: config)
             let displayPeerJoinedBinding = $coachRelayDisplayPeerJoined
+            let remote = remoteService
             transport.onRawTextReceived = { text in
                 #if DEBUG
                 print("[RelayWS-DEBUG][Coach] received raw: \(text)")
@@ -473,6 +391,13 @@ struct TwoMinuteCoachRemoteView: View {
                     print("[RelayWS-DEBUG][Coach] (control.peer_joined in raw frame)")
                     Task { @MainActor in
                         displayPeerJoinedBinding.wrappedValue = true
+                    }
+                }
+                if text.lowercased().contains("peer_left") {
+                    print("[RelayWS-DEBUG][Coach] peer_left — disconnecting coach relay (display gone)")
+                    Task { @MainActor in
+                        displayPeerJoinedBinding.wrappedValue = false
+                        remote.disconnect()
                     }
                 }
                 #endif
@@ -543,14 +468,9 @@ struct TwoMinuteCoachRemoteView: View {
             Text("Test complete")
                 .font(.title2.bold())
                 .foregroundColor(.white)
-            Text("Results are on the iPad.")
+            Text("Results are on the Display.")
                 .font(.subheadline)
-                .foregroundColor(.white.opacity(0.8))
-            Text("Choose the next activity (e.g. Playing Away From Pressure) below.")
-                .font(.footnote)
-                .foregroundColor(.white.opacity(0.6))
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 24)
+                .foregroundColor(.white.opacity(0.75))
             NavigationLink(destination: CoachRemoteHubView(settingsViewModel: settingsViewModel, profileManager: profileManager)) {
                 Text("Open Coach Remote")
                     .font(.subheadline.weight(.semibold))
@@ -590,5 +510,26 @@ struct TwoMinuteCoachRemoteView: View {
 #endif
         state = .ready
         volumeTriggerEnabled = true
+    }
+
+    /// Clears join code + relay banners when the relay drops or the session ends so a new display session gets a fresh field.
+    private func clearCoachRelayJoinForm() {
+        coachRelayJoinCodeInput = ""
+        coachRelayJoinError = nil
+        coachRelayJoinBanner = nil
+        coachRelayJoinBusy = false
+        relayJoinCodeFieldFocused = false
+        coachRelayDisplayPeerJoined = false
+    }
+
+    /// After the display disconnects or ends the session, return to the Coach Remote activity hub (or dismiss if nested under another stack).
+    private func popToCoachRemoteHubAfterDisplayDisconnect() {
+        guard !didNavigateBackToCoachHubAfterDisplayDisconnect else { return }
+        didNavigateBackToCoachHubAfterDisplayDisconnect = true
+        if router.path.last == .twoMinuteCoachRemote {
+            router.popLast()
+        } else {
+            dismiss()
+        }
     }
 }

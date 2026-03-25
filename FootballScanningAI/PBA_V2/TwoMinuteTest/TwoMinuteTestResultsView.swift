@@ -52,30 +52,6 @@ struct TwoMinuteTestResultsView: View {
         )
     }
     private var bias: Gate? { result.biasDirection }
-    private var insight: String {
-        TwoMinuteCoachInsight.coachInsight(
-            type: type,
-            correct: result.correctCount,
-            total: result.totalReps,
-            fast: result.fastCount,
-            medium: result.mediumCount,
-            slow: result.slowCount,
-            bias: bias
-        )
-    }
-    private var startingPointFocus: String {
-        switch type {
-        case .reactor:
-            return "Build clean first decisions away from pressure."
-        case .scanner:
-            return "Scan early and commit to the escape direction."
-        case .anticipator:
-            return "Keep early reads and execute cleaner escapes."
-        case .playmaker:
-            return "Set the standard with fast, accurate pressure escapes."
-        }
-    }
-
     private static func formatDecisionTime(_ seconds: Double?) -> String {
         guard let s = seconds else { return "—" }
         return String(format: "%.2f seconds", s)
@@ -86,6 +62,16 @@ struct TwoMinuteTestResultsView: View {
         profileManager.profiles.isEmpty || !UserDefaults.standard.bool(forKey: "hasCompletedInitialTest")
     }
 
+    private var postSessionNarrative: PBAPostSessionNarrative {
+        PBAPostSessionNarrativeBuilder.fromTwoMinuteTestResult(
+            result,
+            playerType: type,
+            previousTwoMinute: progressStore.previous(.twoMinuteTest, playerId: profileManager.currentProfile?.id ?? playerStore.selectedPlayerId),
+            progressStore: progressStore,
+            playerId: profileManager.currentProfile?.id ?? playerStore.selectedPlayerId
+        )
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -93,10 +79,14 @@ struct TwoMinuteTestResultsView: View {
                     onboardingResultSummary
                     onboardingAccountCTA
                 }
-                titleSection
+                PBAPostSessionNarrativeStack(narrative: postSessionNarrative)
+                Text("Your numbers")
+                    .font(.title3.weight(.bold))
+                    .foregroundColor(.white.opacity(0.95))
+                Text("Reference only — your coach debrief is above.")
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.55))
                 metricsCard
-                coachInsightCard
-                recommendedNextCard
                 buttonsSection
             }
             .padding(20)
@@ -203,7 +193,7 @@ struct TwoMinuteTestResultsView: View {
             Text("Completed reps: \(loggedReps) / \(plannedTestReps)")
                 .font(.title3.weight(.semibold))
                 .foregroundColor(.white)
-            Text("Average decision speed: \(Self.formatDecisionTime(result.avgDecisionTime))")
+            Text("Average decision window: \(result.avgDecisionWindowSeconds.map { DecisionTimingModel.summaryText(windowSeconds: $0) } ?? "—")")
                 .font(.body)
                 .foregroundColor(.white.opacity(0.9))
             Text("Elite academy players average about 0.60 seconds.")
@@ -270,61 +260,28 @@ struct TwoMinuteTestResultsView: View {
         )
     }
 
-    private var titleSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Your Result")
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.8))
-            Text(type.title)
-                .font(.system(size: 32, weight: .bold, design: .rounded))
-                .foregroundColor(.white)
-            Text(type.tagline)
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.85))
-        }
-    }
-
     private var metricsCard: some View {
-        sectionCard(title: "Metrics") {
-            VStack(alignment: .leading, spacing: 12) {
-                row("Completed Reps", "\(loggedReps) / \(plannedTestReps)")
-                row("Correct", "\(result.correctCount) / \(loggedReps)")
-                row("Decision Speed", "Fast \(result.fastCount) • Med \(result.mediumCount) • Slow \(result.slowCount)")
-                row("Bias", bias?.userFacingName ?? "None")
-                if loggedReps < plannedTestReps {
-                    Text("\(plannedTestReps - loggedReps) \(plannedTestReps - loggedReps == 1 ? "rep was" : "reps were") not completed or recorded.")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.7))
-                }
+        VStack(alignment: .leading, spacing: 12) {
+            row("Receiving profile", type.title)
+            row("Completed reps", "\(loggedReps) / \(plannedTestReps)")
+            row("Correct decisions", "\(result.correctCount) / \(loggedReps)")
+            row("Decision window", result.avgDecisionWindowSeconds.map { DecisionTimingModel.summaryText(windowSeconds: $0) } ?? "—")
+            row("Tempo mix", "Fast \(result.fastCount) • Med \(result.mediumCount) • Slow \(result.slowCount)")
+            row("Bias", bias?.userFacingName ?? "None")
+            if loggedReps < plannedTestReps {
+                Text("\(plannedTestReps - loggedReps) \(plannedTestReps - loggedReps == 1 ? "rep was" : "reps were") not completed or recorded.")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.7))
             }
         }
-    }
-
-    private var coachInsightCard: some View {
-        sectionCard(title: "Coach Insight") {
-            Text(insight)
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.9))
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    private var recommendedNextCard: some View {
-        sectionCard(title: "Your Starting Point") {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Stage 1 of 3")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.yellow)
-                Text(activityDisplayName(.awayFromPressure))
-                    .font(.headline)
-                    .foregroundColor(.white)
-                Text("Focus: \(startingPointFocus)")
-                    .font(.subheadline)
-                    .foregroundColor(.yellow.opacity(0.95))
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(18)
+        .overlay(
+            RoundedRectangle(cornerRadius: 18)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
     }
 
     private var buttonsSection: some View {
@@ -428,23 +385,6 @@ struct TwoMinuteTestResultsView: View {
                 .font(.subheadline.weight(.medium))
                 .foregroundColor(.white)
         }
-    }
-
-    private func sectionCard<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title)
-                .font(.headline)
-                .foregroundColor(.white)
-            content()
-        }
-        .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.05))
-        .cornerRadius(18)
-        .overlay(
-            RoundedRectangle(cornerRadius: 18)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        )
     }
 
     @ViewBuilder

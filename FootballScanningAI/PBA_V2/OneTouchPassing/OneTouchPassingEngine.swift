@@ -260,7 +260,7 @@ final class OneTouchPassingEngine: ObservableObject {
         return reactionTimeSeconds
     }
 
-    /// Called when coach taps ✕ (incorrect decision). Records rep as incorrect. Returns reaction time in seconds when saved; nil when discarded.
+    /// Coach ✕ — human override; base `correct` is usually from `onExitLogged` vs greens.
     func onIncorrectDecision(repIndex: Int, timestamp: Date) -> Double? {
         guard repIndex == currentRepIndex else { return nil }
         var rIdx: Int?

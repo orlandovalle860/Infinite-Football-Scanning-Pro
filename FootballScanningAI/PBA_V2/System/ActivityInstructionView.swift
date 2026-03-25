@@ -9,13 +9,22 @@ import SwiftUI
 
 struct ActivityInstructionView: View {
     let activity: ActivityKind
+    /// When `.partner`, shows how Display setup precedes the block countdown.
+    let trainingMode: TrainingMode?
     let onStartBlock: () -> Void
+
+    init(activity: ActivityKind, trainingMode: TrainingMode? = nil, onStartBlock: @escaping () -> Void) {
+        self.activity = activity
+        self.trainingMode = trainingMode
+        self.onStartBlock = onStartBlock
+    }
 
     private var data: ActivityInstructionData {
         ActivityInstructionContent.content(for: activity)
     }
 
     @State private var dontShowAgain = false
+    @EnvironmentObject private var router: AppRouter
 
     var body: some View {
         ScrollView {
@@ -47,6 +56,13 @@ struct ActivityInstructionView: View {
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.9))
                     .fixedSize(horizontal: false, vertical: true)
+
+                if trainingMode == .partner {
+                    Text("Partner: After Start Block, the Display opens partner setup (join code or Local Network). The 3–2–1 block countdown runs after the coach connects.")
+                        .font(.footnote)
+                        .foregroundColor(.cyan.opacity(0.92))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 Toggle(isOn: $dontShowAgain) {
                     Text("Don't show again")
@@ -87,6 +103,7 @@ struct ActivityInstructionView: View {
         .preferredColorScheme(.dark)
         .navigationTitle("Instructions")
         .navigationBarTitleDisplayMode(.inline)
+        .pbaHomeToolbar(router: router)
     }
 
     private func sectionHeader(_ text: String) -> some View {

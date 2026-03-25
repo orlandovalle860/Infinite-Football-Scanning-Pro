@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 import AVFoundation
 import Combine
 
@@ -29,6 +30,11 @@ struct AwayFromPressureDisplaySessionView: View {
     @State private var audioInterruptionObserver: NSObjectProtocol?
     @State private var wedgeStyle: WedgeCueStyle = WedgeCueStyle.style(for: 1)
     @State private var hasSentSessionEnded = false
+    /// DEBUG relay: set from `PartnerRelayDisplaySession` (`peer_joined` / `peer_left`).
+    @State private var isRelayCoachPaired = false
+    @StateObject private var partnerRelaySession = PartnerRelayDisplaySession()
+
+    private static let partnerTransportMode = PartnerTransportPolicy.transportMode(for: .awayFromPressure)
 
     init(config: AwayFromPressureConfig, mode: TrainingMode, settingsViewModel: SettingsViewModel, profileManager: UserProfileManager) {
         self.config = config
@@ -43,7 +49,7 @@ struct AwayFromPressureDisplaySessionView: View {
             Color.black.ignoresSafeArea()
             dribbleOrPassLayout
             statusOverlay
-                .opacity(isMarkerVisible ? 0.25 : 1)
+                .opacity(statusOverlayOpacity)
             repCountOverlay
             if mode != .partner {
                 wallSoloTriggerOverlay
@@ -51,6 +57,7 @@ struct AwayFromPressureDisplaySessionView: View {
             if showExitLogButtons {
                 exitLogOverlay
             }
+            waitingForCoachRelayOverlay
         }
         .contentShape(Rectangle())
         .onTapGesture {
@@ -67,22 +74,61 @@ struct AwayFromPressureDisplaySessionView: View {
             guard mode == .partner, let msg = notification.object as? TwoMinuteMessage else { return }
             switch msg {
             case .nextRep(let repIndex):
+                #if DEBUG
+                if Self.partnerTransportMode == .relayWebSocket {
+                    guard isRelayCoachPaired else {
+                        afpRelayDisplayLog("incoming nextRep repIndex=\(repIndex) ignored (coach not paired)")
+                        return
+                    }
+                    afpRelayDisplayLog("incoming nextRep repIndex=\(repIndex)")
+                }
+                #endif
                 engine.onNextRep(repIndex: repIndex)
             case .passTriggered(let repIndex, let timestamp):
+                #if DEBUG
+                if Self.partnerTransportMode == .relayWebSocket {
+                    afpRelayDisplayLog("incoming passTriggered repIndex=\(repIndex)")
+                }
+                #endif
                 engine.onPassTrigger(repIndex: repIndex, timestamp: timestamp)
             case .exitLogged(let repIndex, let gate, let timestamp):
+                #if DEBUG
+                if Self.partnerTransportMode == .relayWebSocket {
+                    afpRelayDisplayLog("incoming exitLogged repIndex=\(repIndex) gate=\(gate)")
+                }
+                #endif
                 if engine.onExitLogged(repIndex: repIndex, gate: gate, timestamp: timestamp) != nil, let log = engine.repLogs.last {
                     saveDecisionForRep(log: log)
                 }
             case .firstTouchLogged(let repIndex, let gate, let timestamp):
+                #if DEBUG
+                if Self.partnerTransportMode == .relayWebSocket {
+                    afpRelayDisplayLog("incoming firstTouchLogged repIndex=\(repIndex) gate=\(gate)")
+                }
+                #endif
                 engine.onFirstTouchLogged(repIndex: repIndex, gate: gate, timestamp: timestamp)
             case .incorrectDecision(let repIndex, let timestamp):
+                #if DEBUG
+                if Self.partnerTransportMode == .relayWebSocket {
+                    afpRelayDisplayLog("incoming incorrectDecision repIndex=\(repIndex)")
+                }
+                #endif
                 if engine.onIncorrectDecision(repIndex: repIndex, timestamp: timestamp) != nil, let log = engine.repLogs.last {
                     saveDecisionForRep(log: log)
                 }
             case .coachPaired:
+                #if DEBUG
+                if Self.partnerTransportMode == .relayWebSocket {
+                    afpRelayDisplayLog("incoming coachPaired (envelope)")
+                }
+                #endif
                 break
             case .sessionEnded:
+                #if DEBUG
+                if Self.partnerTransportMode == .relayWebSocket {
+                    afpRelayDisplayLog("sessionEnded received")
+                }
+                #endif
                 break
             }
         }
@@ -98,7 +144,29 @@ struct AwayFromPressureDisplaySessionView: View {
         .onAppear {
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
             hasSentSessionEnded = false
-            if mode == .partner { connectionManager.startHosting() }
+            if mode == .partner, Self.partnerTransportMode == .multipeer {
+                connectionManager.startHosting()
+            }
+            #if DEBUG
+            if mode == .partner, Self.partnerTransportMode == .relayWebSocket {
+                isRelayCoachPaired = false
+                afpRelayDisplayLog("relay pipeline starting (POST /v1/sessions + WebSocket display)")
+                partnerRelaySession.onCoachPairingChanged = { [partnerRelaySession] connected in
+                    if connected {
+                        afpRelayDisplayLog("coach peer_joined")
+                    } else {
+                        let socket = partnerRelaySession.socketConnectionState
+                        if socket == .disconnected {
+                            afpRelayDisplayLog("coach unpaired (relay socket disconnected)")
+                        } else {
+                            afpRelayDisplayLog("coach peer_left")
+                        }
+                    }
+                    isRelayCoachPaired = connected
+                }
+                Task { await partnerRelaySession.startDisplaySession() }
+            }
+            #endif
             let pid = playerStore.selectedPlayerId ?? profileManager.currentProfile?.id
             wedgeStyle = WedgeDifficultyEngine.currentStyle(playerId: pid)
             activateAudioSession()
@@ -115,21 +183,34 @@ struct AwayFromPressureDisplaySessionView: View {
         }
         .onDisappear {
             if mode == .partner {
-                sendSessionEndedIfNeeded()
-                connectionManager.stopHosting()
+                teardownPartnerTransportWhenSessionSuspends()
             }
             unsubscribeFromAudioInterruption()
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .background { engine.applicationDidEnterBackground() }
         }
-        .sessionCountdown()
+        // `onDisappear` may not run when Home / app switcher backgrounds the app; mirror DOP / Two Minute.
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+            schedulePartnerTeardownFromBackgroundNotification()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIScene.didEnterBackgroundNotification)) { _ in
+            schedulePartnerTeardownFromBackgroundNotification()
+        }
+        .sessionCountdown(waitForPartnerReady: mode == .partner, partnerReady: partnerReadyForCountdown)
         .onChange(of: connectionManager.connectedPeerName) { _, name in
-            guard mode == .partner, name != nil else { return }
+            guard mode == .partner, Self.partnerTransportMode == .multipeer, name != nil else { return }
             let flag = UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey)
             connectionManager.sendDisplaySessionInfo(hasCompletedInitialTest: flag)
         }
         .preferredColorScheme(.dark)
+        #if DEBUG
+        .onChange(of: partnerRelaySession.joinCode) { _, newCode in
+            guard mode == .partner, Self.partnerTransportMode == .relayWebSocket, let code = newCode else { return }
+            afpRelayDisplayLog("relay session created (HTTP OK)")
+            afpRelayDisplayLog("join code assigned code=\(code)")
+        }
+        #endif
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -199,19 +280,57 @@ struct AwayFromPressureDisplaySessionView: View {
 
     private static let totalReps = 12
 
-    private var repCountOverlay: some View {
-        VStack {
-            HStack {
-                Text(repCountText)
-                    .font(.subheadline.monospacedDigit())
-                    .foregroundColor(.white.opacity(0.7))
-                Spacer()
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 12)
-            Spacer()
+    /// DEBUG relay: full opacity while waiting; otherwise match marker dimming.
+    private var statusOverlayOpacity: CGFloat {
+        if shouldShowRelayWaiting { return 1 }
+        return isMarkerVisible ? 0.25 : 1
+    }
+
+    private var shouldShowRelayWaiting: Bool {
+        mode == .partner && Self.partnerTransportMode == .relayWebSocket && !isRelayCoachPaired
+    }
+
+    /// Partner: countdown only after coach is connected (Multipeer) or paired on relay. Solo: always ready.
+    private var partnerReadyForCountdown: Bool {
+        guard mode == .partner else { return true }
+        switch Self.partnerTransportMode {
+        case .multipeer:
+            return connectionManager.connectedPeerName != nil
+        case .relayWebSocket:
+            return isRelayCoachPaired
         }
-        .allowsHitTesting(false)
+    }
+
+    private var afpPartnerConnectionState: ConnectionState {
+        guard mode == .partner else { return connectionManager.connectionState }
+        #if DEBUG
+        if Self.partnerTransportMode == .relayWebSocket {
+            return PartnerRelayDisplayUI.statusConnectionState(
+                socketState: partnerRelaySession.socketConnectionState,
+                isCoachPairedWithRelay: isRelayCoachPaired
+            )
+        }
+        #endif
+        return connectionManager.connectionState
+    }
+
+    private var repCountOverlay: some View {
+        Group {
+            if mode != .partner || Self.partnerTransportMode != .relayWebSocket || isRelayCoachPaired {
+                VStack {
+                    HStack {
+                        Text(repCountText)
+                            .font(.subheadline.monospacedDigit())
+                            .foregroundColor(.white.opacity(0.7))
+                        Spacer()
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 12)
+                    Spacer()
+                }
+                .allowsHitTesting(false)
+            }
+        }
     }
 
     private var repCountText: String {
@@ -230,7 +349,7 @@ struct AwayFromPressureDisplaySessionView: View {
             if let repIndex = repIndexForExit {
                 VStack {
                     Spacer()
-                    Text("Tap your exit direction")
+                    Text("Turn away from the red — tap that direction")
                         .font(.subheadline.weight(.semibold))
                         .foregroundColor(.white.opacity(0.95))
                     HStack(spacing: 20) {
@@ -328,7 +447,7 @@ struct AwayFromPressureDisplaySessionView: View {
     private var statusOverlay: some View {
         VStack {
             if mode == .partner {
-                CoachRemoteConnectionStatusView(connectionState: connectionManager.connectionState)
+                CoachRemoteConnectionStatusView(connectionState: afpPartnerConnectionState)
             } else {
                 Text(mode == .solo ? "Tap screen or volume to trigger" : "Volume button to trigger")
                     .font(.caption)
@@ -354,6 +473,19 @@ struct AwayFromPressureDisplaySessionView: View {
         }
         .multilineTextAlignment(.center)
     }
+
+    @ViewBuilder
+    private var waitingForCoachRelayOverlay: some View {
+        if shouldShowRelayWaiting {
+            PartnerRelayDisplayWaitingOverlay(joinCode: partnerRelaySession.joinCode)
+        }
+    }
+
+    #if DEBUG
+    private func afpRelayDisplayLog(_ message: String) {
+        print("[RelayWS-DEBUG][AFP Display] \(message)")
+    }
+    #endif
 
     private func activateAudioSession() {
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
@@ -390,6 +522,43 @@ struct AwayFromPressureDisplaySessionView: View {
     private func sendSessionEndedIfNeeded() {
         guard !hasSentSessionEnded else { return }
         hasSentSessionEnded = true
+        #if DEBUG
+        if mode == .partner, Self.partnerTransportMode == .relayWebSocket {
+            afpRelayDisplayLog("send sessionEnded (relay)")
+            partnerRelaySession.sendTwoMinuteMessage(.sessionEnded(timestamp: Date()))
+            return
+        }
+        #endif
         connectionManager.sendTwoMinuteMessage(.sessionEnded(timestamp: Date()))
+    }
+
+    /// Ends partner transport when leaving the drill **or** when the app backgrounds (Home / app switcher).
+    private func teardownPartnerTransportWhenSessionSuspends() {
+        guard mode == .partner else { return }
+        sendSessionEndedIfNeeded()
+        #if DEBUG
+        if Self.partnerTransportMode == .relayWebSocket {
+            afpRelayDisplayLog("teardown partner transport (leave or app background)")
+            partnerRelaySession.tearDown()
+        }
+        #endif
+        if Self.partnerTransportMode == .multipeer {
+            connectionManager.stopHosting()
+        }
+    }
+
+    private func schedulePartnerTeardownFromBackgroundNotification() {
+        guard mode == .partner else { return }
+        var backgroundTaskId: UIBackgroundTaskIdentifier = .invalid
+        backgroundTaskId = UIApplication.shared.beginBackgroundTask(withName: "AFPDisplayPartnerTeardown") {
+            if backgroundTaskId != .invalid {
+                UIApplication.shared.endBackgroundTask(backgroundTaskId)
+                backgroundTaskId = .invalid
+            }
+        }
+        teardownPartnerTransportWhenSessionSuspends()
+        if backgroundTaskId != .invalid {
+            UIApplication.shared.endBackgroundTask(backgroundTaskId)
+        }
     }
 }

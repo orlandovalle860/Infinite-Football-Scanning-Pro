@@ -202,7 +202,7 @@ enum TrainingRecommendation {
                 case .hesitant:
                     return ("Commit to your decision.", "You're hesitating between options.")
                 case .correcting:
-                    return ("Decide earlier before the ball arrives.", "You're correcting your touch after receiving.")
+                    return ("Decide earlier before the ball arrives.", "You're correcting after receiving—commit to the picture earlier.")
                 }
             }
             if bias == .leftRight { return ("Scan the whole field.", "You're favoring one side.") }
@@ -307,7 +307,7 @@ enum TrainingRecommendation {
         if (activity == .dribbleOrPass || activity == .oneTouchPassing) && hasFirstTouchIssues(lastAFPSessionResult) {
             activity = .awayFromPressure
             recommendReason = .firstTouchIssues
-            reason = "First-touch decisions need work—keep training this activity."
+            reason = "Decision–action alignment needs work—keep training this activity."
         }
 
         // If decision speed is good (fast or medium) but within-session consistency is low, recommend repeating the same activity before advancing.

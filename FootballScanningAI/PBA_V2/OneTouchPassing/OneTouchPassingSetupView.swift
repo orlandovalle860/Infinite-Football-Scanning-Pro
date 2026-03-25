@@ -85,11 +85,12 @@ struct OneTouchPassingSetupView: View {
         .preferredColorScheme(.dark)
         .navigationTitle("One-Touch Passing")
         .navigationBarTitleDisplayMode(.inline)
+        .pbaHomeToolbar(router: router)
         .onAppear {
             print("[SetupScreen OTP] onAppear, router path count = \(router.pathCount)")
         }
         .navigationDestination(isPresented: $showInstructions) {
-            ActivityInstructionView(activity: .oneTouchPassing) {
+            ActivityInstructionView(activity: .oneTouchPassing, trainingMode: mode) {
                 showInstructions = false
                 navigateToSession = true
             }

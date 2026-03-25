@@ -27,26 +27,35 @@ enum PlayerIdentity: String, Codable, CaseIterable {
     var shortDescription: String {
         switch self {
         case .anticipator:
-            return "You read pressure early and decide quickly."
+            return "Your recent sessions show earlier recognition before pressure arrives."
         case .reader:
-            return "You make strong choices and keep decision quality high."
+            return "Your recent sessions show strong decision quality and control."
         case .attacker:
-            return "You look forward often and attack space with intent."
+            return "Your recent training choices currently favor forward options."
         case .playmaker:
-            return "You balance speed, accuracy, and forward choices."
+            return "Your recent sessions balance timing, decision quality, and forward choices."
+        }
+    }
+
+    var profileLabel: String {
+        switch self {
+        case .anticipator: return "Early-recognition"
+        case .reader: return "Decision-quality"
+        case .attacker: return "Forward-leaning"
+        case .playmaker: return "Balanced"
         }
     }
 
     var changeMessage: String {
         switch self {
         case .anticipator:
-            return "You're now making faster decisions under pressure."
+            return "Current training profile updated: Early-recognition."
         case .reader:
-            return "You're now showing strong reading and decision accuracy."
+            return "Current training profile updated: Decision-quality."
         case .attacker:
-            return "You're now choosing forward options more consistently."
+            return "Current training profile updated: Forward-leaning."
         case .playmaker:
-            return "You're now balancing speed, accuracy, and forward play."
+            return "Current training profile updated: Balanced."
         }
     }
 }
@@ -81,20 +90,21 @@ enum PlayerIdentityEngine {
 
     static func trendingTowardIdentity(from sessions: [SessionResult], currentIdentity: PlayerIdentity?) -> PlayerIdentity? {
         let training = sessions.filter { [.awayFromPressure, .dribbleOrPass, .oneTouchPassing].contains($0.activityType) }
-        guard training.count >= 2 else { return nil }
+        // Slightly stricter than confirmed identity to avoid noisy trend flips.
+        guard training.count >= 3 else { return nil }
         let recent = Array(training.prefix(3))
 
-        let avgTime = averageDecisionTime(from: recent)
+        let avgWindow = averageDecisionWindow(from: recent)
         let avgAccuracy = averageAccuracyPercent(from: recent)
         let avgForward = averageForwardPercent(from: recent)
 
-        if let t = avgTime, let a = avgAccuracy, t < 1.02, a >= 78, currentIdentity != .anticipator {
+        if let w = avgWindow, let a = avgAccuracy, w >= 0.10, a >= 80, currentIdentity != .anticipator {
             return .anticipator
         }
-        if let f = avgForward, f >= 55, currentIdentity != .attacker {
+        if let f = avgForward, f >= 58, currentIdentity != .attacker {
             return .attacker
         }
-        if let a = avgAccuracy, let t = avgTime, a >= 83, t > 1.00, currentIdentity != .reader {
+        if let a = avgAccuracy, let w = avgWindow, a >= 83, w < 0.10, currentIdentity != .reader {
             return .reader
         }
         return nil
@@ -135,8 +145,8 @@ enum PlayerIdentityEngine {
         return lossHits < requiredLossHits
     }
 
-    private static func averageDecisionTime(from sessions: [SessionResult]) -> Double? {
-        let times = sessions.compactMap(\.avgDecisionTime)
+    private static func averageDecisionWindow(from sessions: [SessionResult]) -> Double? {
+        let times = sessions.compactMap(\.avgDecisionWindowSeconds)
         guard !times.isEmpty else { return nil }
         return times.reduce(0, +) / Double(times.count)
     }
@@ -157,15 +167,15 @@ enum PlayerIdentityEngine {
     }
 
     private static func meetsAnticipatorGain(_ session: SessionResult) -> Bool {
-        guard let t = session.avgDecisionTime, session.totalReps > 0 else { return false }
+        guard let t = session.avgDecisionWindowSeconds, session.totalReps > 0 else { return false }
         let accuracy = Double(session.correctCount) / Double(session.totalReps) * 100.0
-        return t < 0.95 && accuracy >= 80
+        return t >= 0.10 && accuracy >= 80
     }
 
     private static func meetsReaderGain(_ session: SessionResult) -> Bool {
-        guard let t = session.avgDecisionTime, session.totalReps > 0 else { return false }
+        guard let t = session.avgDecisionWindowSeconds, session.totalReps > 0 else { return false }
         let accuracy = Double(session.correctCount) / Double(session.totalReps) * 100.0
-        return accuracy >= 85 && t > 1.05
+        return accuracy >= 85 && t < 0.10
     }
 
     private static func meetsAttackerGain(_ session: SessionResult) -> Bool {
@@ -175,14 +185,14 @@ enum PlayerIdentityEngine {
     }
 
     private static func losesAnticipator(_ session: SessionResult) -> Bool {
-        guard let t = session.avgDecisionTime else { return false }
-        return t > 1.05
+        guard let t = session.avgDecisionWindowSeconds else { return false }
+        return t < -0.10
     }
 
     private static func losesReader(_ session: SessionResult) -> Bool {
-        guard session.totalReps > 0, let t = session.avgDecisionTime else { return false }
+        guard session.totalReps > 0, let t = session.avgDecisionWindowSeconds else { return false }
         let accuracy = Double(session.correctCount) / Double(session.totalReps) * 100.0
-        return accuracy < 80 || t < 0.95
+        return accuracy < 80 || t >= 0.10
     }
 
     private static func losesAttacker(_ session: SessionResult) -> Bool {

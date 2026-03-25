@@ -20,7 +20,7 @@ enum MetricExplanations {
         case "Early Decision Rate":
             return "Measures how often you decide before the ball reaches you."
         case "Pre-Receive Decision Rate":
-            return "Measures how often you both decide early and commit with your first touch in the right direction."
+            return "Measures how often you both decide early and follow through in the direction you chose."
         case "Status":
             return "Shows whether your overall efficiency is improving, stable, or declining over recent sessions."
         case "Decision Score":

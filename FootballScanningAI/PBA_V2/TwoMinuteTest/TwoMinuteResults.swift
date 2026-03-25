@@ -174,11 +174,11 @@ enum TwoMinuteCoachInsight {
         case .playmaker:
             base = "Elite timing. You're deciding early and playing fast—keep scanning on the critical check before the pass arrives."
         case .anticipator:
-            base = "Strong awareness. You're reading pressure early—keep committing sooner so your first touch matches your plan."
+            base = "Strong awareness. You're reading pressure early—keep committing sooner so your first action matches your plan."
         case .scanner:
-            base = "Good scanning. Next step is deciding earlier before the ball arrives so your first touch goes where you intended."
+            base = "Good scanning. Next step is deciding earlier before the ball arrives so your execution matches what you intended."
         case .reactor:
-            base = "You're reacting after the ball arrives. Slow your feet, scan both shoulders earlier, and commit to a first touch before receiving."
+            base = "You're reacting after the ball arrives. Slow your feet, scan both shoulders earlier, and commit to a first decision before receiving."
         }
 
         if let bias = bias {

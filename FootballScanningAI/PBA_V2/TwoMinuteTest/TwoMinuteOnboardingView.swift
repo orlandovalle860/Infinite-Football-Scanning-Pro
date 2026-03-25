@@ -20,7 +20,7 @@ struct TwoMinuteOnboardingView: View {
             VStack(alignment: .leading, spacing: 12) {
                 bullet("You'll hear a beep, then the ball is played.")
                 bullet("A cue appears briefly—catch it on your last shoulder check.")
-                bullet("Your first touch must match what you saw.")
+                bullet("Your first decision must match what you saw.")
             }
             .padding(.horizontal)
 

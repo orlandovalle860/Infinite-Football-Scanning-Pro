@@ -3,6 +3,7 @@
 //  FootballScanningAI
 //
 //  PBA V2 — Coach/parent session summary: one block or 2-min test. Stored per player profile.
+//  `firstTouch*` property names are legacy; see `CoachRemoteDecisionModelMIGRATION.md`.
 //
 
 import Foundation
@@ -27,10 +28,10 @@ struct SessionResult: Identifiable, Codable, Hashable {
     let biasDirection: Gate?
     let directionCounts: [Gate: Int]
     let firstTouchCounts: [Gate: Int]?
-    let firstTouchMatchCount: Int?  // reps where first touch matched correct direction (optional)
-    /// AFP: reps where first touch was toward pressure (wrong direction).
+    let firstTouchMatchCount: Int?  // optional early action matched intended direction (legacy field name)
+    /// AFP: reps where early action was toward pressure (wrong direction).
     let firstTouchTowardPressureCount: Int?
-    /// AFP: reps where first touch was sideways/neutral (hesitating).
+    /// AFP: reps where early action was sideways/neutral (hesitating).
     let firstTouchHesitantCount: Int?
     let lateAdjustments: Int?
     let notes: String?
@@ -41,7 +42,7 @@ struct SessionResult: Identifiable, Codable, Hashable {
     let forwardChoiceCount: Int?
     /// Forward Intent: reps where a forward option was available.
     let forwardOpportunityCount: Int?
-    /// Pre-Receive Decision Rate: reps where decisionTime < threshold AND firstTouchDirection == correctDirection.
+    /// Pre-Receive Decision Rate: reps where decisionTime < threshold AND early action == correct direction.
     let preReceiveDecisionCount: Int?
     /// Standard deviation of decision times within the session (seconds). Lower = more consistent. Optional for backward compatibility.
     let decisionTimeStdDev: Double?
@@ -143,5 +144,22 @@ extension SessionResult {
         let mean = times.reduce(0, +) / Double(times.count)
         let variance = times.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Double(times.count)
         return variance >= 0 ? sqrt(variance) : nil
+    }
+
+    /// Decision Speed Score (0–100) from aggregate avg time + correctness; matches stored session score when timing is uniform across reps.
+    /// Use with `DecisionSpeedBand.band(forScore:curve:)` so labels align with the session score.
+    var estimatedDecisionSpeedScore: Int? {
+        guard totalReps > 0 else { return nil }
+        let ms = Int((avgDecisionTime ?? 1.0) * 1000)
+        let reactionTimesMs = [Int](repeating: ms, count: totalReps)
+        let correct = (0..<correctCount).map { _ in true } + (0..<(totalReps - correctCount)).map { _ in false }
+        switch activityType {
+        case .dribbleOrPass:
+            return DecisionSpeedScore.dribbleOrPassSessionScore(reactionTimesMs: reactionTimesMs, correct: correct)
+        case .oneTouchPassing:
+            return DecisionSpeedScore.oneTouchSessionScore(reactionTimesMs: reactionTimesMs, correct: correct)
+        case .awayFromPressure, .twoMinuteTest:
+            return DecisionSpeedScore.sessionScore(reactionTimesMs: reactionTimesMs, correct: correct)
+        }
     }
 }

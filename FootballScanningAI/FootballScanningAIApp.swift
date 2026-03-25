@@ -10,6 +10,7 @@ import UIKit
 
 @main
 struct FootballScanningAIApp: App {
+    @UIApplicationDelegateAdaptor(CoachingNotificationsAppDelegate.self) private var coachingNotificationsAppDelegate
     @StateObject private var router = AppRouter()
 
     init() {

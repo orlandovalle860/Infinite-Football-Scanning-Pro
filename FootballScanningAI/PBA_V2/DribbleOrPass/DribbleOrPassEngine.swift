@@ -68,8 +68,7 @@ final class DribbleOrPassEngine: ObservableObject {
     }
 
     func onNextRep(repIndex: Int) {
-        guard phase == .waitingForNextRep else { return }
-        currentRepIndex = repIndex
+        guard phase != .blockComplete else { return }
         guard repIndex >= 0, repIndex < plan.count else {
             if repIndex >= plan.count {
                 phase = .blockComplete
@@ -77,6 +76,9 @@ final class DribbleOrPassEngine: ObservableObject {
             }
             return
         }
+        // Ignore stale rep indices, but allow same/newer indices to resync if coach and display drift.
+        guard repIndex >= currentRepIndex else { return }
+        currentRepIndex = repIndex
         passTriggeredAt = nil
         revealedGates = []
         cancelTimers()
@@ -251,7 +253,7 @@ final class DribbleOrPassEngine: ObservableObject {
         return reactionTimeSeconds
     }
 
-    /// Called when coach taps ✕ (incorrect decision). Records rep as incorrect. Returns reaction time in seconds when saved; nil when discarded.
+    /// Coach ✕ — still required for human override when direction-only logging is wrong or disputed (base `correct` is from `onExitLogged`).
     func onIncorrectDecision(repIndex: Int, timestamp: Date) -> Double? {
         guard repIndex == currentRepIndex else { return nil }
         var rIdx: Int?
@@ -299,7 +301,7 @@ final class DribbleOrPassEngine: ObservableObject {
         return reactionTimeSeconds
     }
 
-    /// Called when coach logs first touch (before or after exit). If before exit, cached and applied when exit is logged.
+    /// Wire: `firstTouchLogged` — optional early direction; merged into `DribbleOrPassRepResult` on exit. See `CoachRemoteDecisionModelMIGRATION.md`.
     func onFirstTouchLogged(repIndex: Int, gate: Gate, timestamp: Date) {
         guard repIndex >= 0, repIndex < plan.count else { return }
         pendingFirstTouchByRep[repIndex] = (gate, timestamp)

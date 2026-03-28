@@ -92,6 +92,9 @@ struct PartnerRelayDisplayWaitingOverlay: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .allowsHitTesting(false)
+        .onAppear {
+            PartnerPersistDebug.log("PartnerRelayDisplayWaitingOverlay onAppear (join-code / waiting UI)")
+        }
     }
 }
 

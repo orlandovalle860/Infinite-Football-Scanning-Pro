@@ -219,7 +219,7 @@ enum GuidedCurriculumEngine {
 
     private static func focus(for stage: Int) -> String {
         switch stage {
-        case 1: return "Escape pressure quickly with clean first decisions."
+        case 1: return "Decide away from pressure quickly — first decision counts."
         case 2: return "Choose the right action early and play forward when available."
         default: return "Decide before the ball arrives and execute one-touch choices."
         }

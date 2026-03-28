@@ -26,7 +26,23 @@ struct TwoMinuteCoachRemoteView: View {
     @ObservedObject var profileManager: UserProfileManager
     private static let partnerTransportMode = PartnerTransportPolicy.transportMode(for: .twoMinute)
 
-    @StateObject private var remoteService = RemoteService(transport: TwoMinuteSessionTransport.makeInitial(for: TwoMinuteCoachRemoteView.partnerTransportMode))
+    #if DEBUG
+    @ObservedObject private var relaySharedRemoteService = TrainingPartnerConnectionCoordinator.shared.coachRelayRemoteService
+    #endif
+    @StateObject private var multipeerRemoteService = RemoteService(transport: TwoMinuteSessionTransport.makeInitial(for: .multipeer))
+
+    private var remoteService: RemoteService {
+        switch Self.partnerTransportMode {
+        case .relayWebSocket:
+            #if DEBUG
+            return relaySharedRemoteService
+            #else
+            return multipeerRemoteService
+            #endif
+        case .multipeer:
+            return multipeerRemoteService
+        }
+    }
     @State private var state: TwoMinuteCoachState = .ready
     @State private var currentRepIndex = 0
     @State private var volumeTriggerEnabled = true
@@ -39,6 +55,7 @@ struct TwoMinuteCoachRemoteView: View {
     @FocusState private var relayJoinCodeFieldFocused: Bool
     /// DEBUG: set when `control.peer_joined` raw frame is seen (display on relay).
     @State private var coachRelayDisplayPeerJoined = false
+    @State private var didAttemptCoachRelayAutoReconnect = false
 
     private let totalReps = 10
 
@@ -80,6 +97,11 @@ struct TwoMinuteCoachRemoteView: View {
         .onReceive(NotificationCenter.default.publisher(for: .twoMinuteMessageReceived)) { notification in
             guard let msg = notification.object as? TwoMinuteMessage else { return }
             if case .sessionEnded = msg {
+                #if DEBUG
+                if Self.partnerTransportMode == .relayWebSocket {
+                    CoachPersistDebug.log("sessionEnded notification — clearing join form", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+                }
+                #endif
                 if Self.partnerTransportMode == .relayWebSocket {
                     clearCoachRelayJoinForm()
                 }
@@ -90,13 +112,55 @@ struct TwoMinuteCoachRemoteView: View {
         }
         .onAppear {
             didNavigateBackToCoachHubAfterDisplayDisconnect = false
+            didAttemptCoachRelayAutoReconnect = false
+            #if DEBUG
+            if Self.partnerTransportMode == .relayWebSocket {
+                CoachPersistDebug.log("onAppear", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+            }
+            #endif
+            TrainingPartnerConnectionCoordinator.shared.beginPartnerTrainingSessionIfNeeded()
+            if Self.partnerTransportMode == .multipeer {
+                TrainingPartnerConnectionCoordinator.shared.prepareMultipeerCoachRemote(connectionManager: connectionManager)
+            }
+            #if DEBUG
+            if Self.partnerTransportMode == .relayWebSocket {
+                attemptCoachRelayAutoReconnectIfNeeded()
+            }
+            #endif
         }
         .onDisappear {
+            #if DEBUG
+            if Self.partnerTransportMode == .relayWebSocket {
+                CoachPersistDebug.log("onDisappear — enter", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+            }
+            #endif
+            if TrainingPartnerConnectionCoordinator.shared.shouldPersistPartnerPairing {
+                #if DEBUG
+                if Self.partnerTransportMode == .relayWebSocket {
+                    CoachPersistDebug.log("onDisappear — skip remoteService.disconnect (persist pairing)", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+                }
+                if Self.partnerTransportMode == .multipeer {
+                    print("[Multipeer] TrainingPartnerSession: coach onDisappear — skip stopBrowsing (training session active)")
+                }
+                #endif
+                if Self.partnerTransportMode == .multipeer {
+                    return
+                }
+                return
+            }
+            #if DEBUG
+            if Self.partnerTransportMode == .relayWebSocket {
+                CoachPersistDebug.log("onDisappear — before remoteService.disconnect (pairing not persisting)", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+            }
+            #endif
             if Self.partnerTransportMode == .multipeer {
                 connectionManager.stopBrowsing()
             }
             remoteService.disconnect()
             if Self.partnerTransportMode == .relayWebSocket {
+                #if DEBUG
+                CoachPersistDebug.log("onDisappear — after remoteService.disconnect, before clearCoachRelayJoinForm", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+                #endif
                 clearCoachRelayJoinForm()
             }
         }
@@ -109,6 +173,19 @@ struct TwoMinuteCoachRemoteView: View {
         .onChange(of: remoteService.connectionState) { oldState, newState in
             guard Self.partnerTransportMode == .relayWebSocket else { return }
             guard oldState == .connected, newState == .disconnected else { return }
+            #if DEBUG
+            CoachPersistDebug.log("onChange remoteService.connectionState connected→disconnected", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+            #endif
+            if TrainingPartnerConnectionCoordinator.shared.shouldPersistPartnerPairing {
+                #if DEBUG
+                print("[RelayWS-DEBUG][Coach] relay dropped — training persists; no auto-join (confirm code matches iPad)")
+                CoachPersistDebug.log("keeping lastCoachRelayJoinCode (persist pairing); next screen may auto HTTP re-join", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+                #endif
+                return
+            }
+            #if DEBUG
+            CoachPersistDebug.log("onChange disconnect — clearCoachRelayJoinForm (pairing not active)", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+            #endif
             clearCoachRelayJoinForm()
             resetLocalUIForDisconnect(source: "relayRemoteService=disconnected")
             popToCoachRemoteHubAfterDisplayDisconnect()
@@ -171,6 +248,12 @@ struct TwoMinuteCoachRemoteView: View {
 
             // A. PASS — timing input (primary)
             VStack(alignment: .leading, spacing: 12) {
+                Text(CoachRemoteCopy.partnerCoachSetupLine)
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.55))
+                Text(CoachRemoteCopy.partnerCoachBallLine)
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.55))
                 Text(CoachRemoteCopy.passTimingInstruction)
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.92))
@@ -197,9 +280,18 @@ struct TwoMinuteCoachRemoteView: View {
 
             // B. Player decision — direction (secondary)
             VStack(alignment: .leading, spacing: 12) {
+                Text(CoachRemoteCopy.coachFirstDecisionLoggingLine)
+                    .font(.caption)
+                    .foregroundColor(.cyan.opacity(0.88))
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 Text(CoachRemoteCopy.playerDecisionQuestion)
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(.white.opacity(0.88))
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 directionPad
             }
 
@@ -394,10 +486,12 @@ struct TwoMinuteCoachRemoteView: View {
                     }
                 }
                 if text.lowercased().contains("peer_left") {
-                    print("[RelayWS-DEBUG][Coach] peer_left — disconnecting coach relay (display gone)")
+                    print("[RelayWS-DEBUG][Coach] peer_left — disconnecting coach relay (display socket left room)")
                     Task { @MainActor in
                         displayPeerJoinedBinding.wrappedValue = false
+                        CoachPersistDebug.log("peer_left — before remote.disconnect", joinField: "", peerJoined: false)
                         remote.disconnect()
+                        CoachPersistDebug.log("peer_left — after remote.disconnect", joinField: "", peerJoined: false)
                     }
                 }
                 #endif
@@ -405,6 +499,7 @@ struct TwoMinuteCoachRemoteView: View {
 
             print("[RelayWS-DEBUG][Coach] replaceTransport + connect via RemoteService")
             await MainActor.run {
+                TrainingPartnerConnectionCoordinator.shared.recordCoachRelayJoinCode(code)
                 remoteService.replaceTransport(transport)
                 remoteService.connect()
                 coachRelayJoinBanner = nil
@@ -417,14 +512,16 @@ struct TwoMinuteCoachRemoteView: View {
                 if let api = error as? WebSocketSessionAPIError {
                     switch api {
                     case .httpError(let code, let body):
-                        let friendly: String
                         if code == 409, body?.contains("COACH_SLOT_TAKEN") == true {
-                            friendly = "That join code was already used (coach slot taken). On the iPad, start a new 2-minute session for a new code, or restart the relay server."
+                            clearCoachRelayJoinForm()
+                            let friendly = "That code doesn’t match the relay session on the iPad. Enter the join code shown on the display **right now**, then tap Join session."
+                            coachRelayJoinError = friendly
+                            coachRelayJoinBanner = friendly
                         } else {
-                            friendly = "Join failed (\(code)): \(body ?? "")"
+                            let friendly = "Join failed (\(code)): \(body ?? "")"
+                            coachRelayJoinError = friendly
+                            coachRelayJoinBanner = friendly
                         }
-                        coachRelayJoinError = friendly
-                        coachRelayJoinBanner = friendly
                     case .decodingFailed:
                         coachRelayJoinError = "Join response decode failed."
                         coachRelayJoinBanner = coachRelayJoinError
@@ -439,6 +536,22 @@ struct TwoMinuteCoachRemoteView: View {
                 print("[RelayWS-DEBUG][Coach] join/connect failed (UI error set): \(error)")
             }
         }
+    }
+
+    private func attemptCoachRelayAutoReconnectIfNeeded() {
+        guard !didAttemptCoachRelayAutoReconnect else { return }
+        let coord = TrainingPartnerConnectionCoordinator.shared
+        guard coord.shouldPersistPartnerPairing,
+              let code = coord.lastCoachRelayJoinCode,
+              !code.isEmpty,
+              remoteService.connectionState != .connected else {
+            CoachPersistDebug.log("auto-reconnect skipped (no code, not persisting, or already connected)", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+            return
+        }
+        didAttemptCoachRelayAutoReconnect = true
+        coachRelayJoinCodeInput = code
+        CoachPersistDebug.log("auto-reconnect starting with stored join code", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+        Task { await startCoachRelayJoin() }
     }
     #endif
 
@@ -514,12 +627,23 @@ struct TwoMinuteCoachRemoteView: View {
 
     /// Clears join code + relay banners when the relay drops or the session ends so a new display session gets a fresh field.
     private func clearCoachRelayJoinForm() {
+        #if DEBUG
+        if Self.partnerTransportMode == .relayWebSocket {
+            CoachPersistDebug.log("clearCoachRelayJoinForm BEFORE", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+        }
+        #endif
+        TrainingPartnerConnectionCoordinator.shared.clearRecordedCoachRelayJoinCode()
         coachRelayJoinCodeInput = ""
         coachRelayJoinError = nil
         coachRelayJoinBanner = nil
         coachRelayJoinBusy = false
         relayJoinCodeFieldFocused = false
         coachRelayDisplayPeerJoined = false
+        #if DEBUG
+        if Self.partnerTransportMode == .relayWebSocket {
+            CoachPersistDebug.log("clearCoachRelayJoinForm AFTER", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+        }
+        #endif
     }
 
     /// After the display disconnects or ends the session, return to the Coach Remote activity hub (or dismiss if nested under another stack).

@@ -11,7 +11,7 @@ enum NewPersonalBest {
     var title: String {
         switch self {
         case .decisionSpeed: return "Decision Speed improved"
-        case .pressureEscape: return "Pressure Escape improved"
+        case .pressureEscape: return "Away-from-pressure accuracy improved"
         case .forwardIntent: return "Forward Thinking improved"
         }
     }
@@ -161,7 +161,7 @@ class UserProfileManager: ObservableObject {
             }
         }
 
-        // Pressure escape (AFP only; higher % is better)
+        // Away-from-pressure first-decision accuracy (AFP only; higher % is better)
         if result.activityType == .awayFromPressure, result.totalReps > 0 {
             let current = Double(result.correctCount) / Double(result.totalReps) * 100.0
             let previous = profile.bestPressureEscapePercent

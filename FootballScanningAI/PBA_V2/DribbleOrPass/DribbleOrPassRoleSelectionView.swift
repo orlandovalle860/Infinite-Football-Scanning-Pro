@@ -42,7 +42,7 @@ struct DribbleOrPassRoleSelectionView: View {
                             Text("Display")
                                 .font(.system(size: 20, weight: .bold, design: .rounded))
                         }
-                        Text("This device shows the grid and gates (red/green). Place it behind the player.")
+                        Text("This device shows the grid and direction cues (red/green). Place it behind the player.")
                             .font(.footnote)
                             .foregroundColor(.black.opacity(0.8))
                             .multilineTextAlignment(.leading)
@@ -66,7 +66,7 @@ struct DribbleOrPassRoleSelectionView: View {
                             Text("Coach remote")
                                 .font(.system(size: 20, weight: .bold, design: .rounded))
                         }
-                        Text("This device starts each rep, triggers PASS, and logs direction (UP / LEFT / RIGHT).")
+                        Text("This device starts each rep, triggers PASS, and logs the player’s first decision (direction).")
                             .font(.footnote)
                             .foregroundColor(.white.opacity(0.9))
                             .multilineTextAlignment(.leading)

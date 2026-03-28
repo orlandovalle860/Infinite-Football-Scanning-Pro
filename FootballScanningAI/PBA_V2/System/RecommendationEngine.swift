@@ -68,7 +68,7 @@ enum RecommendationEngine {
 
         // 5) Curriculum progression: recommend next activity to work on
         if !progressStore.isReady(activity: .awayFromPressure, playerId: playerId) {
-            return Recommendation(headline: "Escape pressure.", rationale: "Read danger and escape.", nextActivity: .awayFromPressure)
+            return Recommendation(headline: "Decide away from pressure.", rationale: "Read the red cue and commit opposite on the first decision.", nextActivity: .awayFromPressure)
         }
         if !progressStore.isReady(activity: .dribbleOrPass, playerId: playerId) {
             return Recommendation(headline: "Choose action under pressure.", rationale: "Green = pass, Clear = dribble.", nextActivity: .dribbleOrPass)
@@ -100,7 +100,7 @@ enum RecommendationEngine {
     static func activityDescription(_ activity: ActivityKind) -> String {
         switch activity {
         case .twoMinuteTest: return "See your baseline decision speed."
-        case .awayFromPressure: return "Read pressure and escape early."
+        case .awayFromPressure: return "Decide opposite the red on your first action."
         case .dribbleOrPass: return "Choose the correct action."
         case .oneTouchPassing: return "Decide before the ball arrives."
         }

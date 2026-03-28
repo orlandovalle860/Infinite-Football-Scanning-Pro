@@ -65,7 +65,8 @@ final class ConnectionManager: NSObject, ObservableObject {
     private var lastReceivedTime: Date?
     private let queue = DispatchQueue(label: "com.pba.connectionmanager")
 
-    private enum Role {
+    /// `nonisolated` so role checks inside `queue` do not inherit MainActor isolation (Swift 6).
+    private nonisolated enum Role: Equatable, Sendable {
         case host   // iPad: advertiser only
         case remote // iPhone: browser only
     }
@@ -109,8 +110,20 @@ final class ConnectionManager: NSObject, ObservableObject {
         guard isHostDevice else { return }
         queue.async { [weak self] in
             guard let self = self else { return }
-            self.stopBrowsingIfNeeded()
+            // Only tear down remote browsing when switching roles — never disconnect a live host session here.
+            if self.role == .remote {
+                self.stopBrowsingIfNeeded()
+            }
             self.ensureSession(as: .host)
+            let hasConnectedPeers = !(self.session?.connectedPeers.isEmpty ?? true)
+            if self.role == .host, self.isAdvertising, self.advertiser != nil, hasConnectedPeers {
+                #if DEBUG
+                DispatchQueue.main.async {
+                    print("[Multipeer] reuse: host already advertising with connected peer — skipping startHosting restart")
+                }
+                #endif
+                return
+            }
             self.advertiser?.stopAdvertisingPeer()
             let adv = MCNearbyServiceAdvertiser(peer: self.myPeerID, discoveryInfo: nil, serviceType: serviceType)
             self.advertiser = adv
@@ -128,6 +141,11 @@ final class ConnectionManager: NSObject, ObservableObject {
     func stopHosting() {
         queue.async { [weak self] in
             guard let self = self else { return }
+            #if DEBUG
+            DispatchQueue.main.async {
+                print("[Multipeer] stopHosting — ending advertiser + session")
+            }
+            #endif
             self.stopHeartbeat()
             self.advertiser?.stopAdvertisingPeer()
             self.advertiser = nil
@@ -149,8 +167,20 @@ final class ConnectionManager: NSObject, ObservableObject {
         guard isRemoteDevice else { return }
         queue.async { [weak self] in
             guard let self = self else { return }
-            self.stopAdvertisingIfNeeded()
+            // Only stop host advertising when switching roles — never disconnect a live remote session here.
+            if self.role == .host {
+                self.stopAdvertisingIfNeeded()
+            }
             self.ensureSession(as: .remote)
+            let hasConnectedPeers = !(self.session?.connectedPeers.isEmpty ?? true)
+            if self.role == .remote, self.isBrowsing, self.browser != nil, hasConnectedPeers {
+                #if DEBUG
+                DispatchQueue.main.async {
+                    print("[Multipeer] reuse: remote already browsing with connected peer — skipping startBrowsing restart")
+                }
+                #endif
+                return
+            }
             self.browser?.stopBrowsingForPeers()
             let br = MCNearbyServiceBrowser(peer: self.myPeerID, serviceType: serviceType)
             self.browser = br
@@ -169,6 +199,11 @@ final class ConnectionManager: NSObject, ObservableObject {
     func stopBrowsing() {
         queue.async { [weak self] in
             guard let self = self else { return }
+            #if DEBUG
+            DispatchQueue.main.async {
+                print("[Multipeer] stopBrowsing — ending browser + session")
+            }
+            #endif
             self.stopHeartbeat()
             self.browser?.stopBrowsingForPeers()
             self.browser = nil

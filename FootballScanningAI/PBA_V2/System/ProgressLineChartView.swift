@@ -29,8 +29,30 @@ struct ProgressLineChartView: View {
         let values = points.map(\.value)
         let minV = values.min() ?? 0
         let maxV = values.max() ?? 100
-        let padding = max((maxV - minV) * 0.1, 1)
-        return (max(0, minV - padding), maxV + padding)
+        // Percent scales are 0–100; padding must not produce impossible axis labels (e.g. 101%).
+        if valueLabel == "%" {
+            let padding = max((maxV - minV) * 0.1, 1)
+            var minR = max(0, minV - padding)
+            var maxR = maxV + padding
+            maxR = min(maxR, 100)
+            minR = max(minR, 0)
+            if maxR <= minR { return (0, 100) }
+            return (minR, maxR)
+        }
+        // Seconds (decision window): typical range is ~−0.5…+0.5 s. Use tight padding — a 1 s floor was forcing
+        // negative axis labels even when every point was positive (confusing “−” on the scale vs “+” line).
+        let span = max(maxV - minV, 0.01)
+        let padding = max(span * 0.12, 0.05)
+        var minR = minV - padding
+        let maxR = maxV + padding
+        if minV >= 0 {
+            minR = max(0, minV - padding)
+        }
+        if maxR <= minR {
+            let mid = (minV + maxV) / 2
+            return (mid - 0.25, mid + 0.25)
+        }
+        return (minR, maxR)
     }
 
     var body: some View {
@@ -84,6 +106,17 @@ struct ProgressLineChartView: View {
                 }
                 .frame(width: paddingLeft - 4, height: chartH)
                 .padding(.top, paddingTop)
+
+                // Horizontal line at 0 s when the axis crosses zero (before vs after arrival).
+                if valueLabel == "s", range.min < 0, range.max > 0 {
+                    let scaleY = range.max > range.min ? chartH / CGFloat(range.max - range.min) : 1
+                    let yZero = paddingTop + CGFloat(range.max) * scaleY
+                    Path { p in
+                        p.move(to: CGPoint(x: paddingLeft, y: yZero))
+                        p.addLine(to: CGPoint(x: paddingLeft + chartW, y: yZero))
+                    }
+                    .stroke(Color.white.opacity(0.22), style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+                }
 
                 // Line path
                 Path { path in

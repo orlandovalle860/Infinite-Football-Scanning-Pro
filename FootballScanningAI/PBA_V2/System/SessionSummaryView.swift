@@ -34,7 +34,7 @@ struct SessionSummaryView: View {
     let playerName: String
     /// When true, show "New Personal Best" badge (set when this session just beat the previous best).
     var isNewPersonalBest: Bool = false
-    /// New personal bests from this block (decision speed, pressure escape, forward intent). When non-empty, show celebration banner.
+    /// New personal bests from this block (decision speed, away-from-pressure accuracy, forward intent). When non-empty, show celebration banner.
     var newPersonalBests: [NewPersonalBest] = []
     /// XP earned from this completed session.
     var xpEarned: Int = 0
@@ -76,7 +76,7 @@ struct SessionSummaryView: View {
     }
     private var primaryMetricLabel: String {
         switch session.activityType {
-        case .awayFromPressure: return "Escape success"
+        case .awayFromPressure: return "Correct first decisions"
         case .dribbleOrPass: return "Decision correctness"
         case .oneTouchPassing: return "Decision window"
         case .twoMinuteTest: return "Balanced score"

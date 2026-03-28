@@ -50,9 +50,11 @@ struct TwoMinuteCriticalScanSessionView: View {
     @ObservedObject private var currentSessionStore = CurrentSessionStore.shared
     @State private var pendingTrainingRoute: AppRoute?
     @State private var hasSentSessionEnded = false
+    /// True while ``SessionCountdownModifier`` shows 3–2–1–Go; coach drill messages must not advance the engine until the drill is visible.
+    @State private var blockCoachDrillDuringSessionCountdown = false
     /// Display-side relay (join code, WebSocket, coach paired). Used when `partnerTransportMode == .relayWebSocket` (DEBUG).
     /// Conforms to ``PartnerRelayDisplayControlling``; concrete type is ``PartnerRelayDisplaySession``.
-    @StateObject private var partnerRelaySession = PartnerRelayDisplaySession()
+    @ObservedObject private var partnerRelaySession = TrainingPartnerConnectionCoordinator.shared.relayDisplaySession
 
     init(config: TwoMinuteTestConfig, mode: TrainingMode, settingsViewModel: SettingsViewModel, profileManager: UserProfileManager) {
         self.config = config
@@ -146,10 +148,10 @@ struct TwoMinuteCriticalScanSessionView: View {
             .onDisappear(perform: handleOnDisappear)
             .onChange(of: scenePhase, handleScenePhaseChange)
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
-                scheduleTwoMinutePartnerTeardownFromBackgroundNotification()
+                scheduleTwoMinutePartnerSuspendForBackgroundNotification()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIScene.didEnterBackgroundNotification)) { _ in
-                scheduleTwoMinutePartnerTeardownFromBackgroundNotification()
+                scheduleTwoMinutePartnerSuspendForBackgroundNotification()
             }
             .onChange(of: connectionManager.connectedPeerName, handleConnectedPeerChange)
             .preferredColorScheme(.dark)
@@ -158,15 +160,16 @@ struct TwoMinuteCriticalScanSessionView: View {
             .toolbar { leaveToolbarItem }
             .alert("Leave training?", isPresented: $showLeaveAlert) {
                 Button("Stay", role: .cancel) {}
-                Button("Leave", role: .destructive) { router.popToRoot() }
+                Button("Leave", role: .destructive) { router.popToRoot(endingPartnerSession: false) }
             } message: {
                 Text("Your current block will not be saved.")
             }
-            .sessionCountdown(waitForPartnerReady: mode == .partner, partnerReady: partnerReadyForCountdown)
+            .sessionCountdown(waitForPartnerReady: mode == .partner, partnerReady: partnerReadyForCountdown, suppressCoachMessagesDuringCountdown: $blockCoachDrillDuringSessionCountdown)
     }
 
     private func handleTwoMinuteMessage(_ notification: Notification) {
         guard mode == .partner, let msg = notification.object as? TwoMinuteMessage else { return }
+        if blockCoachDrillDuringSessionCountdown && msg.isDrillInteractionFromCoach { return }
         switch msg {
         case .nextRep(let repIndex):
             guard sessionManager.isConnected else { return }
@@ -186,6 +189,8 @@ struct TwoMinuteCriticalScanSessionView: View {
         case .coachPaired:
             break
         case .sessionEnded:
+            break
+        case .partnerTrainingEnded:
             break
         }
     }
@@ -223,10 +228,16 @@ struct TwoMinuteCriticalScanSessionView: View {
 
     /// When the display loads: SessionManager creates session in Supabase and generates pairing code; UI shows pairing screen. Test does not start until coach connects.
     private func handleOnAppear() {
+        #if DEBUG
+        PartnerPersistDebug.log("TwoMinuteCriticalScanSessionView onAppear")
+        #endif
         onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
         hasSentSessionEnded = false
-        if mode == .partner, Self.partnerTransportMode == .multipeer {
-            connectionManager.startHosting()
+        if mode == .partner {
+            TrainingPartnerConnectionCoordinator.shared.beginPartnerTrainingSessionIfNeeded()
+            if Self.partnerTransportMode == .multipeer {
+                TrainingPartnerConnectionCoordinator.shared.prepareMultipeerDisplayPartner(connectionManager: connectionManager)
+            }
         }
         activateAudioSession()
         subscribeToAudioInterruption()
@@ -238,7 +249,15 @@ struct TwoMinuteCriticalScanSessionView: View {
             partnerRelaySession.onCoachPairingChanged = { connected in
                 sessionManager.setConnected(connected)
             }
-            Task { await partnerRelaySession.startDisplaySession() }
+            Task {
+                await TrainingPartnerConnectionCoordinator.shared.prepareRelayDisplayForActivity()
+                await MainActor.run {
+                    if partnerRelaySession.isCoachPaired {
+                        sessionManager.setConnected(true)
+                    }
+                    PartnerPersistDebug.log("TwoMinuteCriticalScanSessionView prepareRelayDisplayForActivity finished (synced sessionManager if relay already paired)")
+                }
+            }
         }
         #endif
         Task {
@@ -251,17 +270,37 @@ struct TwoMinuteCriticalScanSessionView: View {
     }
 
     private func handleOnDisappear() {
-        #if DEBUG
-        partnerRelaySession.tearDown()
-        #endif
         if mode == .partner {
-            sendSessionEndedIfNeeded()
-            if Self.partnerTransportMode == .multipeer {
-                connectionManager.stopHosting()
+            // Do not send sessionEnded while persisting — coach app treats it as a full disconnect (clears join / hub).
+            if TrainingPartnerConnectionCoordinator.shared.shouldPersistPartnerPairing {
+                #if DEBUG
+                if Self.partnerTransportMode == .relayWebSocket {
+                    print("[RelayWS-DEBUG] persist partner pairing — skip sessionEnded + relay tearDown (Home / next activity)")
+                }
+                if Self.partnerTransportMode == .multipeer {
+                    print("[Multipeer] TrainingPartnerSession: display onDisappear — skip sessionEnded + stopHosting (training session active)")
+                }
+                #endif
+            } else {
+                sendSessionEndedIfNeeded()
+                #if DEBUG
+                partnerRelaySession.tearDown()
+                #endif
+                if Self.partnerTransportMode == .multipeer {
+                    connectionManager.stopHosting()
+                }
             }
         }
         unsubscribeFromAudioInterruption()
-        sessionManager.clear()
+        let preserveCoachConnection =
+            mode == .partner
+            && TrainingPartnerConnectionCoordinator.shared.shouldPersistPartnerPairing
+            && Self.partnerTransportMode == .relayWebSocket
+            && partnerRelaySession.isCoachPaired
+        #if DEBUG
+        PartnerPersistDebug.log("TwoMinuteCriticalScanSessionView onDisappear — sessionManager.clear(preserveCoachConnection: \(preserveCoachConnection))")
+        #endif
+        sessionManager.clear(preserveCoachConnection: preserveCoachConnection)
         if testResultItem == nil { currentSessionStore.clear() }
     }
 
@@ -271,28 +310,17 @@ struct TwoMinuteCriticalScanSessionView: View {
         }
     }
 
-    /// Home / app switcher: `onDisappear` and `scenePhase` may not run before suspend; system background notifications do.
-    private func handleTeardownPartnerOnAppBackground() {
-        guard mode == .partner else { return }
-        sendSessionEndedIfNeeded()
-        #if DEBUG
-        partnerRelaySession.tearDown()
-        #endif
-        if Self.partnerTransportMode == .multipeer {
-            connectionManager.stopHosting()
-        }
-    }
-
-    private func scheduleTwoMinutePartnerTeardownFromBackgroundNotification() {
+    /// iOS Home / app switcher: soft-suspend relay only (keep join code / pairing).
+    private func scheduleTwoMinutePartnerSuspendForBackgroundNotification() {
         guard mode == .partner else { return }
         var backgroundTaskId: UIBackgroundTaskIdentifier = .invalid
-        backgroundTaskId = UIApplication.shared.beginBackgroundTask(withName: "PartnerRelayTeardown") {
+        backgroundTaskId = UIApplication.shared.beginBackgroundTask(withName: "TwoMinutePartnerSuspend") {
             if backgroundTaskId != .invalid {
                 UIApplication.shared.endBackgroundTask(backgroundTaskId)
                 backgroundTaskId = .invalid
             }
         }
-        handleTeardownPartnerOnAppBackground()
+        TrainingPartnerConnectionCoordinator.shared.suspendPartnerSessionForBackground()
         if backgroundTaskId != .invalid {
             UIApplication.shared.endBackgroundTask(backgroundTaskId)
         }
@@ -418,9 +446,12 @@ struct TwoMinuteCriticalScanSessionView: View {
     private func twoMinuteExitLogOverlay(repIndex: Int) -> some View {
         VStack {
             Spacer()
-            Text("Tap your exit direction")
+            Text(ActivityDisplaySessionCopy.tapTwoMinuteOrDOP)
                 .font(.subheadline.weight(.semibold))
                 .foregroundColor(.white.opacity(0.95))
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 16)
             HStack(spacing: 20) {
                 Button { logExit(repIndex: repIndex, gate: .up) } label: {
                     Image(systemName: "arrow.up")
@@ -520,10 +551,10 @@ struct TwoMinuteCriticalScanSessionView: View {
         guard mode == .partner else { return connectionManager.connectionState }
         #if DEBUG
         if Self.partnerTransportMode == .relayWebSocket {
-            // Do not treat “relay WebSocket open” as coach paired — only `peer_joined` sets sessionManager connected.
+            // Do not treat “relay WebSocket open” as coach paired — only `peer_joined` sets relay paired state.
             return PartnerRelayDisplayUI.statusConnectionState(
                 socketState: partnerRelaySession.socketConnectionState,
-                isCoachPairedWithRelay: sessionManager.isConnected
+                isCoachPairedWithRelay: partnerRelaySession.isCoachPaired
             )
         }
         #endif
@@ -545,12 +576,18 @@ struct TwoMinuteCriticalScanSessionView: View {
     /// Partner “waiting for coach” overlay: show until the coach is paired (Multipeer peer or relay `peer_joined`).
     private var shouldShowWaitingForCoachOverlay: Bool {
         guard mode == .partner else { return false }
+        if Self.partnerTransportMode == .relayWebSocket {
+            return !partnerRelaySession.isCoachPaired
+        }
         return !sessionManager.isConnected
     }
 
     /// Partner: 3–2–1–Go only after coach is connected (same signal as waiting overlay). Solo: always ready.
     private var partnerReadyForCountdown: Bool {
         guard mode == .partner else { return true }
+        if Self.partnerTransportMode == .relayWebSocket {
+            return partnerRelaySession.isCoachPaired
+        }
         return sessionManager.isConnected
     }
 
@@ -661,13 +698,35 @@ struct TwoMinuteCriticalScanSessionView: View {
         } else {
             switch engine.phase {
             case .waitingForNextRep:
-                phaseVStack(title: "Waiting for coach…", subtitle: "Keep moving. Check both shoulders.")
+                if mode == .partner {
+                    phaseVStack(
+                        title: "Waiting for coach…",
+                        subtitle: "\(ActivityInstructionData.partnerCoachSetupLine)\n\(ActivityInstructionData.partnerCoachBallLine)"
+                    )
+                } else {
+                    phaseVStack(title: "Waiting for coach…", subtitle: "Keep moving. Check both shoulders.")
+                }
             case .armedScanning:
-                phaseVStack(title: "Keep moving. Check both shoulders.", subtitle: "Beep is coming.")
+                if mode == .partner {
+                    phaseVStack(
+                        title: "Scan",
+                        subtitle: "\(ActivityInstructionData.partnerPlayerBeepLine)\n\(ActivityInstructionData.timingLine)"
+                    )
+                } else {
+                    phaseVStack(title: "Keep moving. Check both shoulders.", subtitle: "Beep is coming.")
+                }
             case .beepedAwaitingPass:
-                phaseVStack(title: "Ball is coming. Check again.", subtitle: "Coach: press PASS when it leaves your foot.")
+                if mode == .partner {
+                    phaseVStack(title: "Ball is coming", subtitle: ActivityInstructionData.partnerCoachPassTimingLine)
+                } else {
+                    phaseVStack(title: "Ball is coming. Check again.", subtitle: "Coach: press PASS when it leaves your foot.")
+                }
             case .awaitingExitLog:
-                phaseVStack(title: "Play the rep.", subtitle: "Waiting for coach log…")
+                if mode == .partner {
+                    phaseVStack(title: "Play the rep.", subtitle: "Coach: log the direction that matches the ball (first decision).")
+                } else {
+                    phaseVStack(title: "Play the rep.", subtitle: "Waiting for coach log…")
+                }
             default:
                 Text(phaseStatusText)
                     .font(.footnote)

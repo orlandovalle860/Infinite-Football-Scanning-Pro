@@ -61,10 +61,13 @@ final class TwoMinuteSessionManager: ObservableObject {
     }
 
     /// Reset state when leaving the session without completing (e.g. user leaves screen).
-    func clear() {
+    /// - Parameter preserveCoachConnection: When `true`, keeps ``isConnected`` so relay partner UI can stay in sync across activity transitions (Home → Pathway → next drill) while the shared relay remains paired.
+    func clear(preserveCoachConnection: Bool = false) {
         sessionId = nil
         isCreating = false
         creationError = nil
-        isConnected = false
+        if !preserveCoachConnection {
+            isConnected = false
+        }
     }
 }

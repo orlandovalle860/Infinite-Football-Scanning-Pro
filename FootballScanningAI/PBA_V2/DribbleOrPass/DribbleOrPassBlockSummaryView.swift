@@ -354,7 +354,7 @@ struct DribbleOrPassBlockSummaryView: View {
                     Text("(Forward pass 4, forward dribble 3, lateral pass 2, lateral dribble 1, backward 0; + fast timing)")
                         .font(.caption2)
                         .foregroundColor(.white.opacity(0.6))
-                    Text("Correct gate: \(blockResult.correctCount)/12")
+                    Text("Correct first decisions: \(blockResult.correctCount)/12")
                         .font(.subheadline)
                         .foregroundColor(.white.opacity(0.7))
                     Text("Decision Window: \(dominantDecisionSpeed.rawValue.capitalized)")

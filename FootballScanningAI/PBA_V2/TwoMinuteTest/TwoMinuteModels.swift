@@ -61,6 +61,8 @@ enum TwoMinuteMessage: Codable {
     case coachPaired(sessionId: UUID)
     /// Display device: notifies coach that session ended so UI can reset immediately.
     case sessionEnded(timestamp: Date)
+    /// Either device: the **whole** partner training run ended (explicit hub end / Leave with end session). Peers must tear down relay and clear pairing so the next activity gets a fresh join code.
+    case partnerTrainingEnded(timestamp: Date)
 
     enum CodingKeys: String, CodingKey {
         case kind
@@ -88,6 +90,8 @@ enum TwoMinuteMessage: Codable {
             self = .coachPaired(sessionId: try c.decode(UUID.self, forKey: .sessionId))
         case "sessionEnded":
             self = .sessionEnded(timestamp: try c.decode(Date.self, forKey: .timestamp))
+        case "partnerTrainingEnded":
+            self = .partnerTrainingEnded(timestamp: try c.decode(Date.self, forKey: .timestamp))
         default:
             throw DecodingError.dataCorruptedError(forKey: .kind, in: c, debugDescription: "Unknown kind: \(kind)")
         }
@@ -123,6 +127,21 @@ enum TwoMinuteMessage: Codable {
         case .sessionEnded(let timestamp):
             try c.encode("sessionEnded", forKey: .kind)
             try c.encode(timestamp, forKey: .timestamp)
+        case .partnerTrainingEnded(let timestamp):
+            try c.encode("partnerTrainingEnded", forKey: .kind)
+            try c.encode(timestamp, forKey: .timestamp)
+        }
+    }
+}
+
+extension TwoMinuteMessage {
+    /// Rep-flow messages from coach that must not be applied while session countdown (3–2–1) is visible.
+    var isDrillInteractionFromCoach: Bool {
+        switch self {
+        case .nextRep, .passTriggered, .exitLogged, .firstTouchLogged, .incorrectDecision:
+            return true
+        case .coachPaired, .sessionEnded, .partnerTrainingEnded:
+            return false
         }
     }
 }

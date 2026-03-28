@@ -160,7 +160,7 @@ struct PlayerDashboardView: View {
     }
     private var primaryTrendTitle: String {
         switch latestActivity {
-        case .awayFromPressure: return "Correct Escape Trend"
+        case .awayFromPressure: return "Correct First-Decision Trend"
         case .dribbleOrPass: return "Correct Decision Trend"
         case .oneTouchPassing: return "Decision Window Trend"
         case .twoMinuteTest: return "2-Minute Balanced Trend"

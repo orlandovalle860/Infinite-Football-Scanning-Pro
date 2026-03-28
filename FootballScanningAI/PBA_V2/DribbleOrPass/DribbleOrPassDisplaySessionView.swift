@@ -29,10 +29,10 @@ struct DribbleOrPassDisplaySessionView: View {
     @State private var nextRepIndex = 0
     @State private var audioInterruptionObserver: NSObjectProtocol?
     @State private var hasSentSessionEnded = false
-    /// DEBUG relay: set from `PartnerRelayDisplaySession` (`peer_joined` / `peer_left`).
-    @State private var isRelayCoachPaired = false
-    /// Display-side relay (join code, WebSocket, coach paired). Used when `partnerTransportMode == .relayWebSocket` (DEBUG).
-    @StateObject private var partnerRelaySession = PartnerRelayDisplaySession()
+    /// True while ``SessionCountdownModifier`` shows 3–2–1–Go; coach drill messages must not advance the engine until the drill is visible.
+    @State private var blockCoachDrillDuringSessionCountdown = false
+    /// Display-side relay (join code, WebSocket, coach paired). Shared across partner activities in one training session.
+    @ObservedObject private var partnerRelaySession = TrainingPartnerConnectionCoordinator.shared.relayDisplaySession
 
     private static let partnerTransportMode = PartnerTransportPolicy.transportMode(for: .dribbleOrPass)
 
@@ -41,7 +41,7 @@ struct DribbleOrPassDisplaySessionView: View {
         self.mode = mode
         self.settingsViewModel = settingsViewModel
         self.profileManager = profileManager
-        _engine = StateObject(wrappedValue: DribbleOrPassEngine(config: config))
+        _engine = StateObject(wrappedValue: DribbleOrPassEngine(config: config, trainingMode: mode))
     }
 
     var body: some View {
@@ -74,13 +74,13 @@ struct DribbleOrPassDisplaySessionView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .twoMinuteMessageReceived).receive(on: RunLoop.main)) { notification in
             guard mode == .partner, let msg = notification.object as? TwoMinuteMessage else { return }
+            if blockCoachDrillDuringSessionCountdown && msg.isDrillInteractionFromCoach { return }
             switch msg {
             case .nextRep(let repIndex):
                 #if DEBUG
                 if Self.partnerTransportMode == .relayWebSocket {
-                    guard isRelayCoachPaired else {
-                        dopRelayDisplayLog("incoming nextRep repIndex=\(repIndex) ignored (coach not paired)")
-                        return
+                    if !partnerRelaySession.isCoachPaired {
+                        dopRelayDisplayLog("incoming nextRep repIndex=\(repIndex) while isCoachPaired=false (still applying — relay UI can lag peer_joined)")
                     }
                     dopRelayDisplayLog("incoming nextRep repIndex=\(repIndex)")
                 }
@@ -132,6 +132,13 @@ struct DribbleOrPassDisplaySessionView: View {
                 }
                 #endif
                 break
+            case .partnerTrainingEnded:
+                #if DEBUG
+                if Self.partnerTransportMode == .relayWebSocket {
+                    dopRelayDisplayLog("partnerTrainingEnded received (coordinator also tears down relay)")
+                }
+                #endif
+                break
             }
         }
         .onChange(of: engine.phase) { _, newPhase in
@@ -141,14 +148,19 @@ struct DribbleOrPassDisplaySessionView: View {
             if case .beepedAwaitingPass = newPhase { playBeep() }
         }
         .onAppear {
+            #if DEBUG
+            PartnerPersistDebug.log("DribbleOrPassDisplaySessionView onAppear")
+            #endif
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
             hasSentSessionEnded = false
-            if mode == .partner, Self.partnerTransportMode == .multipeer {
-                connectionManager.startHosting()
+            if mode == .partner {
+                TrainingPartnerConnectionCoordinator.shared.beginPartnerTrainingSessionIfNeeded()
+                if Self.partnerTransportMode == .multipeer {
+                    TrainingPartnerConnectionCoordinator.shared.prepareMultipeerDisplayPartner(connectionManager: connectionManager)
+                }
             }
             #if DEBUG
             if mode == .partner, Self.partnerTransportMode == .relayWebSocket {
-                isRelayCoachPaired = false
                 dopRelayDisplayLog("relay pipeline starting (POST /v1/sessions + WebSocket display)")
                 partnerRelaySession.onCoachPairingChanged = { [partnerRelaySession] connected in
                     if connected {
@@ -161,9 +173,8 @@ struct DribbleOrPassDisplaySessionView: View {
                             dopRelayDisplayLog("coach peer_left")
                         }
                     }
-                    isRelayCoachPaired = connected
                 }
-                Task { await partnerRelaySession.startDisplaySession() }
+                Task { await TrainingPartnerConnectionCoordinator.shared.prepareRelayDisplayForActivity() }
             }
             #endif
             activateAudioSession()
@@ -179,6 +190,9 @@ struct DribbleOrPassDisplaySessionView: View {
             }
         }
         .onDisappear {
+            #if DEBUG
+            PartnerPersistDebug.log("DribbleOrPassDisplaySessionView onDisappear")
+            #endif
             if mode == .partner {
                 teardownPartnerTransportWhenSessionSuspends()
             }
@@ -193,10 +207,10 @@ struct DribbleOrPassDisplaySessionView: View {
         // System notifications fire when Home / app switcher backgrounds the app or scene; use both App + Scene.
         // `beginBackgroundTask` gives a short window so disconnect runs before the system freezes the process.
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
-            schedulePartnerTeardownFromBackgroundNotification()
+            schedulePartnerSuspendForBackgroundNotification()
         }
         .onReceive(NotificationCenter.default.publisher(for: UIScene.didEnterBackgroundNotification)) { _ in
-            schedulePartnerTeardownFromBackgroundNotification()
+            schedulePartnerSuspendForBackgroundNotification()
         }
         .onChange(of: connectionManager.connectedPeerName) { _, name in
             guard mode == .partner, Self.partnerTransportMode == .multipeer, name != nil else { return }
@@ -225,12 +239,12 @@ struct DribbleOrPassDisplaySessionView: View {
                         await MainActor.run { CurrentSessionStore.shared.clear() }
                     }
                 }
-                router.popToRoot()
+                router.popToRoot(endingPartnerSession: false)
             }
         } message: {
             Text("Your current block will not be saved.")
         }
-        .sessionCountdown(waitForPartnerReady: mode == .partner, partnerReady: partnerReadyForCountdown)
+        .sessionCountdown(waitForPartnerReady: mode == .partner, partnerReady: partnerReadyForCountdown, suppressCoachMessagesDuringCountdown: $blockCoachDrillDuringSessionCountdown)
         #if DEBUG
         .onChange(of: partnerRelaySession.joinCode) { _, newCode in
             guard mode == .partner, Self.partnerTransportMode == .relayWebSocket, let code = newCode else { return }
@@ -247,8 +261,21 @@ struct DribbleOrPassDisplaySessionView: View {
     #endif
 
     /// Ends partner transport when leaving the drill **or** when the app backgrounds (Home / app switcher), since `onDisappear` may not run.
+    /// While ``TrainingPartnerConnectionCoordinator`` has an active training session, keeps relay + multipeer host alive for the next activity.
+    /// **Do not** send ``sessionEnded`` while persisting — that message tells the coach app to clear the join session and return to the hub.
     private func teardownPartnerTransportWhenSessionSuspends() {
         guard mode == .partner else { return }
+        if TrainingPartnerConnectionCoordinator.shared.shouldPersistPartnerPairing {
+            #if DEBUG
+            if Self.partnerTransportMode == .relayWebSocket {
+                dopRelayDisplayLog("persist partner pairing — skip sessionEnded + relay tearDown (Home / next activity)")
+            }
+            if Self.partnerTransportMode == .multipeer {
+                print("[Multipeer] TrainingPartnerSession: display onDisappear — skip sessionEnded + stopHosting (training session active)")
+            }
+            #endif
+            return
+        }
         sendSessionEndedIfNeeded()
         #if DEBUG
         if Self.partnerTransportMode == .relayWebSocket {
@@ -261,16 +288,16 @@ struct DribbleOrPassDisplaySessionView: View {
         }
     }
 
-    private func schedulePartnerTeardownFromBackgroundNotification() {
+    private func schedulePartnerSuspendForBackgroundNotification() {
         guard mode == .partner else { return }
         var backgroundTaskId: UIBackgroundTaskIdentifier = .invalid
-        backgroundTaskId = UIApplication.shared.beginBackgroundTask(withName: "PartnerRelayTeardown") {
+        backgroundTaskId = UIApplication.shared.beginBackgroundTask(withName: "DOPDisplayPartnerSuspend") {
             if backgroundTaskId != .invalid {
                 UIApplication.shared.endBackgroundTask(backgroundTaskId)
                 backgroundTaskId = .invalid
             }
         }
-        teardownPartnerTransportWhenSessionSuspends()
+        TrainingPartnerConnectionCoordinator.shared.suspendPartnerSessionForBackground()
         if backgroundTaskId != .invalid {
             UIApplication.shared.endBackgroundTask(backgroundTaskId)
         }
@@ -317,7 +344,7 @@ struct DribbleOrPassDisplaySessionView: View {
     }
 
     private var shouldShowRelayWaiting: Bool {
-        mode == .partner && Self.partnerTransportMode == .relayWebSocket && !isRelayCoachPaired
+        mode == .partner && Self.partnerTransportMode == .relayWebSocket && !partnerRelaySession.isCoachPaired
     }
 
     /// Partner: countdown only after coach is connected (Multipeer) or paired on relay. Solo: always ready.
@@ -327,7 +354,7 @@ struct DribbleOrPassDisplaySessionView: View {
         case .multipeer:
             return connectionManager.connectedPeerName != nil
         case .relayWebSocket:
-            return isRelayCoachPaired
+            return partnerRelaySession.isCoachPaired
         }
     }
 
@@ -337,7 +364,7 @@ struct DribbleOrPassDisplaySessionView: View {
         if Self.partnerTransportMode == .relayWebSocket {
             return PartnerRelayDisplayUI.statusConnectionState(
                 socketState: partnerRelaySession.socketConnectionState,
-                isCoachPairedWithRelay: isRelayCoachPaired
+                isCoachPairedWithRelay: partnerRelaySession.isCoachPaired
             )
         }
         #endif
@@ -346,7 +373,7 @@ struct DribbleOrPassDisplaySessionView: View {
 
     private var repCountOverlay: some View {
         Group {
-            if mode != .partner || Self.partnerTransportMode != .relayWebSocket || isRelayCoachPaired {
+            if mode != .partner || Self.partnerTransportMode != .relayWebSocket || partnerRelaySession.isCoachPaired {
                 VStack {
                     HStack {
                         Text(repCountText)
@@ -377,9 +404,12 @@ struct DribbleOrPassDisplaySessionView: View {
     private func exitLogOverlay(repIndex: Int) -> some View {
         VStack {
             Spacer()
-            Text("Tap your exit direction")
+            Text(ActivityDisplaySessionCopy.tapTwoMinuteOrDOP)
                 .font(.subheadline.weight(.semibold))
                 .foregroundColor(.white.opacity(0.95))
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 16)
             HStack(spacing: 20) {
                 Button { logExit(repIndex: repIndex, gate: .up) } label: {
                     Image(systemName: "arrow.up")

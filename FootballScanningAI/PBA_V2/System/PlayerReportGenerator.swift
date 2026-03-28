@@ -104,7 +104,7 @@ enum PlayerReportGenerator {
             if total > 0 && Double(correct) / Double(total) >= 0.5 {
                 return "You're finding the right option when you see it."
             }
-            return "You're building awareness of pressure and escape options."
+            return "You're building awareness of pressure and the opposite direction."
         }
     }
 
@@ -186,7 +186,7 @@ enum PlayerReportGenerator {
             return "You're favoring one side—scan the whole field."
         }
         if let reason = recommendation.reason, reason.contains("accuracy") || reason.contains("Build") {
-            return "Focus on reading pressure and choosing the right escape."
+            return "Focus on reading pressure and choosing the opposite direction on first decision."
         }
         if let reason = recommendation.reason, reason.contains("earlier") || reason.contains("Decide") {
             return "Your decisions can arrive slightly late—decide earlier."

@@ -16,14 +16,17 @@ import SwiftUI
 struct SessionCountdownModifier: ViewModifier {
     let waitForPartnerReady: Bool
     let partnerReady: Bool
+    /// When non-nil, set to `true` while the 3–2–1–Go overlay is active so partner drill views can ignore coach `TwoMinuteMessage` ingress (engine/timer state must not advance while content is hidden).
+    var suppressCoachMessagesDuringCountdown: Binding<Bool>?
 
     @State private var countdown: Int?
     @State private var timer: Timer?
     @State private var hasStartedCountdown = false
 
-    init(waitForPartnerReady: Bool, partnerReady: Bool) {
+    init(waitForPartnerReady: Bool, partnerReady: Bool, suppressCoachMessagesDuringCountdown: Binding<Bool>? = nil) {
         self.waitForPartnerReady = waitForPartnerReady
         self.partnerReady = partnerReady
+        self.suppressCoachMessagesDuringCountdown = suppressCoachMessagesDuringCountdown
         _countdown = State(initialValue: waitForPartnerReady ? nil : 3)
     }
 
@@ -50,15 +53,33 @@ struct SessionCountdownModifier: ViewModifier {
             } else if partnerReady {
                 startCountdownOnce()
             }
+            syncCoachMessageSuppression(countdownValue: countdown)
         }
         .onChange(of: partnerReady) { _, ready in
-            guard waitForPartnerReady, ready else { return }
+            guard waitForPartnerReady else { return }
+            if !ready {
+                // Relay reconnect / peer_left can flip partnerReady off briefly; reset so the next "ready" can start 3–2–1 again.
+                hasStartedCountdown = false
+                timer?.invalidate()
+                timer = nil
+                countdown = nil
+                syncCoachMessageSuppression(countdownValue: nil)
+                return
+            }
             startCountdownOnce()
+        }
+        .onChange(of: countdown) { _, newValue in
+            syncCoachMessageSuppression(countdownValue: newValue)
         }
         .onDisappear {
             timer?.invalidate()
             timer = nil
+            syncCoachMessageSuppression(countdownValue: nil)
         }
+    }
+
+    private func syncCoachMessageSuppression(countdownValue: Int?) {
+        suppressCoachMessagesDuringCountdown?.wrappedValue = (countdownValue != nil)
     }
 
     private func startCountdownOnce() {
@@ -94,6 +115,11 @@ extension View {
     ///   - waitForPartnerReady: Pass `true` for partner mode so countdown waits until the coach is connected/paired.
     ///   - partnerReady: `true` when relay/Multipeer pairing is complete (ignored when `waitForPartnerReady` is `false`).
     func sessionCountdown(waitForPartnerReady: Bool = false, partnerReady: Bool = false) -> some View {
-        modifier(SessionCountdownModifier(waitForPartnerReady: waitForPartnerReady, partnerReady: partnerReady))
+        modifier(SessionCountdownModifier(waitForPartnerReady: waitForPartnerReady, partnerReady: partnerReady, suppressCoachMessagesDuringCountdown: nil))
+    }
+
+    /// Same as ``sessionCountdown(waitForPartnerReady:partnerReady:)`` but toggles `suppressCoachMessagesDuringCountdown` while the countdown overlay is visible so drill engines do not process coach messages until "Go".
+    func sessionCountdown(waitForPartnerReady: Bool, partnerReady: Bool, suppressCoachMessagesDuringCountdown: Binding<Bool>) -> some View {
+        modifier(SessionCountdownModifier(waitForPartnerReady: waitForPartnerReady, partnerReady: partnerReady, suppressCoachMessagesDuringCountdown: suppressCoachMessagesDuringCountdown))
     }
 }

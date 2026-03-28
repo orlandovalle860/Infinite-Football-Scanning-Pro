@@ -40,7 +40,17 @@ final class RemoteService: ObservableObject {
     }
 
     func send(_ message: TwoMinuteMessage) {
-        transport.send(message)
+        send(message, completion: nil)
+    }
+
+    /// - Parameter completion: Called on the main queue after the send attempt (WebSocket: after URLSession callback; Multipeer: immediately).
+    func send(_ message: TwoMinuteMessage, completion: (@Sendable () -> Void)?) {
+        if let ws = transport as? WebSocketRemoteTransport {
+            ws.send(message, completion: completion)
+        } else {
+            transport.send(message)
+            completion?()
+        }
         connectionState = transport.connectionState
     }
 

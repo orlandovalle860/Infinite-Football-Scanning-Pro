@@ -25,7 +25,23 @@ struct OneTouchPassingCoachRemoteView: View {
     @ObservedObject var profileManager: UserProfileManager
     private static let partnerTransportMode = PartnerTransportPolicy.transportMode(for: .oneTouchPassing)
 
-    @StateObject private var remoteService = RemoteService(transport: TwoMinuteSessionTransport.makeInitial(for: OneTouchPassingCoachRemoteView.partnerTransportMode))
+    #if DEBUG
+    @ObservedObject private var relaySharedRemoteService = TrainingPartnerConnectionCoordinator.shared.coachRelayRemoteService
+    #endif
+    @StateObject private var multipeerRemoteService = RemoteService(transport: TwoMinuteSessionTransport.makeInitial(for: .multipeer))
+
+    private var remoteService: RemoteService {
+        switch Self.partnerTransportMode {
+        case .relayWebSocket:
+            #if DEBUG
+            return relaySharedRemoteService
+            #else
+            return multipeerRemoteService
+            #endif
+        case .multipeer:
+            return multipeerRemoteService
+        }
+    }
     @State private var state: OneTouchPassingCoachState = .ready
     @State private var currentRepIndex = 0
     @State private var volumeTriggerEnabled = true
@@ -36,6 +52,7 @@ struct OneTouchPassingCoachRemoteView: View {
     @State private var coachRelayJoinBanner: String?
     @FocusState private var relayJoinCodeFieldFocused: Bool
     @State private var coachRelayDisplayPeerJoined = false
+    @State private var didAttemptCoachRelayAutoReconnect = false
 
     private let totalReps = 12
 
@@ -77,9 +94,12 @@ struct OneTouchPassingCoachRemoteView: View {
                 #if DEBUG
                 if Self.partnerTransportMode == .relayWebSocket {
                     otpCoachRelayLog("sessionEnded received")
-                    clearCoachRelayJoinForm()
+                    CoachPersistDebug.log("sessionEnded notification — clearing join form", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
                 }
                 #endif
+                if Self.partnerTransportMode == .relayWebSocket {
+                    clearCoachRelayJoinForm()
+                }
                 state = .ready
                 volumeTriggerEnabled = true
                 popToCoachRemoteHubAfterDisplayDisconnect()
@@ -87,20 +107,58 @@ struct OneTouchPassingCoachRemoteView: View {
         }
         .onAppear {
             didNavigateBackToCoachHubAfterDisplayDisconnect = false
-            if Self.partnerTransportMode == .multipeer {
-                connectionManager.startBrowsing()
+            didAttemptCoachRelayAutoReconnect = false
+            #if DEBUG
+            if Self.partnerTransportMode == .relayWebSocket {
+                CoachPersistDebug.log("onAppear", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
             }
+            #endif
+            TrainingPartnerConnectionCoordinator.shared.beginPartnerTrainingSessionIfNeeded()
+            if Self.partnerTransportMode == .multipeer {
+                TrainingPartnerConnectionCoordinator.shared.prepareMultipeerCoachRemote(connectionManager: connectionManager)
+            }
+            #if DEBUG
+            if Self.partnerTransportMode == .relayWebSocket {
+                attemptCoachRelayAutoReconnectIfNeeded()
+            }
+            #endif
         }
         .onDisappear {
+            #if DEBUG
+            if Self.partnerTransportMode == .relayWebSocket {
+                CoachPersistDebug.log("onDisappear — enter", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+            }
+            #endif
+            if TrainingPartnerConnectionCoordinator.shared.shouldPersistPartnerPairing {
+                #if DEBUG
+                if Self.partnerTransportMode == .relayWebSocket {
+                    otpCoachRelayLog("persist coach pairing — skip relay disconnect on activity disappear")
+                    CoachPersistDebug.log("onDisappear — skip remoteService.disconnect (persist pairing)", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+                }
+                if Self.partnerTransportMode == .multipeer {
+                    print("[Multipeer] TrainingPartnerSession: coach onDisappear — skip stopBrowsing (training session active)")
+                }
+                #endif
+                if Self.partnerTransportMode == .multipeer {
+                    return
+                }
+                return
+            }
+            #if DEBUG
+            if Self.partnerTransportMode == .relayWebSocket {
+                CoachPersistDebug.log("onDisappear — before remoteService.disconnect (pairing not persisting)", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+            }
+            #endif
             if Self.partnerTransportMode == .multipeer {
                 connectionManager.stopBrowsing()
             }
             remoteService.disconnect()
-            #if DEBUG
             if Self.partnerTransportMode == .relayWebSocket {
+                #if DEBUG
+                CoachPersistDebug.log("onDisappear — after remoteService.disconnect, before clearCoachRelayJoinForm", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+                #endif
                 clearCoachRelayJoinForm()
             }
-            #endif
         }
         .onChange(of: connectionManager.connectedPeerName) { oldName, newName in
             guard Self.partnerTransportMode == .multipeer else { return }
@@ -116,6 +174,19 @@ struct OneTouchPassingCoachRemoteView: View {
             #endif
             guard Self.partnerTransportMode == .relayWebSocket else { return }
             guard oldState == .connected, newState == .disconnected else { return }
+            #if DEBUG
+            CoachPersistDebug.log("onChange remoteService.connectionState connected→disconnected", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+            #endif
+            if TrainingPartnerConnectionCoordinator.shared.shouldPersistPartnerPairing {
+                #if DEBUG
+                otpCoachRelayLog("relay socket dropped — partner training still active; no auto-join (confirm code matches iPad)")
+                CoachPersistDebug.log("keeping lastCoachRelayJoinCode (persist pairing); next screen may auto HTTP re-join", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+                #endif
+                return
+            }
+            #if DEBUG
+            CoachPersistDebug.log("onChange disconnect — clearCoachRelayJoinForm (pairing not active)", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+            #endif
             clearCoachRelayJoinForm()
             resetLocalUIForDisconnect(source: "relayRemoteService=disconnected")
             popToCoachRemoteHubAfterDisplayDisconnect()
@@ -177,6 +248,12 @@ struct OneTouchPassingCoachRemoteView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             VStack(alignment: .leading, spacing: 12) {
+                Text(CoachRemoteCopy.partnerCoachSetupLine)
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.55))
+                Text(CoachRemoteCopy.partnerCoachBallLine)
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.55))
                 Text(CoachRemoteCopy.passTimingInstruction)
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.92))
@@ -207,9 +284,18 @@ struct OneTouchPassingCoachRemoteView: View {
             }
 
             VStack(alignment: .leading, spacing: 12) {
+                Text(CoachRemoteCopy.coachFirstDecisionLoggingLine)
+                    .font(.caption)
+                    .foregroundColor(.cyan.opacity(0.88))
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 Text(CoachRemoteCopy.playerDecisionQuestion)
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(.white.opacity(0.88))
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 directionPad
             }
 
@@ -360,10 +446,12 @@ struct OneTouchPassingCoachRemoteView: View {
                     }
                 }
                 if text.lowercased().contains("peer_left") {
-                    otpCoachRelayLog("peer_left detected — disconnecting coach relay (display gone)")
+                    otpCoachRelayLog("peer_left detected — disconnecting coach relay (display socket left room)")
                     Task { @MainActor in
                         displayPeerJoinedBinding.wrappedValue = false
+                        CoachPersistDebug.log("peer_left — before remote.disconnect", joinField: "", peerJoined: false)
                         remote.disconnect()
+                        CoachPersistDebug.log("peer_left — after remote.disconnect", joinField: "", peerJoined: false)
                     }
                 }
                 #endif
@@ -371,6 +459,7 @@ struct OneTouchPassingCoachRemoteView: View {
 
             otpCoachRelayLog("RemoteService.replaceTransport + connect()")
             await MainActor.run {
+                TrainingPartnerConnectionCoordinator.shared.recordCoachRelayJoinCode(code)
                 remoteService.replaceTransport(transport)
                 remoteService.connect()
                 coachRelayJoinBanner = nil
@@ -383,14 +472,16 @@ struct OneTouchPassingCoachRemoteView: View {
                 if let api = error as? WebSocketSessionAPIError {
                     switch api {
                     case .httpError(let code, let body):
-                        let friendly: String
                         if code == 409, body?.contains("COACH_SLOT_TAKEN") == true {
-                            friendly = "That join code was already used (coach slot taken). On the iPad, start a new One-Touch Passing display session for a new code, or restart the relay server."
+                            clearCoachRelayJoinForm()
+                            let friendly = "That code doesn’t match the relay session on the iPad. Enter the join code shown on the display **right now**, then tap Join session."
+                            coachRelayJoinError = friendly
+                            coachRelayJoinBanner = friendly
                         } else {
-                            friendly = "Join failed (\(code)): \(body ?? "")"
+                            let friendly = "Join failed (\(code)): \(body ?? "")"
+                            coachRelayJoinError = friendly
+                            coachRelayJoinBanner = friendly
                         }
-                        coachRelayJoinError = friendly
-                        coachRelayJoinBanner = friendly
                     case .decodingFailed:
                         coachRelayJoinError = "Join response decode failed."
                         coachRelayJoinBanner = coachRelayJoinError
@@ -408,6 +499,22 @@ struct OneTouchPassingCoachRemoteView: View {
 
     private func otpCoachRelayLog(_ message: String) {
         print("[RelayWS-DEBUG][OTP Coach] \(message)")
+    }
+
+    private func attemptCoachRelayAutoReconnectIfNeeded() {
+        guard !didAttemptCoachRelayAutoReconnect else { return }
+        let coord = TrainingPartnerConnectionCoordinator.shared
+        guard coord.shouldPersistPartnerPairing,
+              let code = coord.lastCoachRelayJoinCode,
+              !code.isEmpty,
+              remoteService.connectionState != .connected else {
+            CoachPersistDebug.log("auto-reconnect skipped (no code, not persisting, or already connected)", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+            return
+        }
+        didAttemptCoachRelayAutoReconnect = true
+        coachRelayJoinCodeInput = code
+        CoachPersistDebug.log("auto-reconnect starting with stored join code", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+        Task { await startOTPCoachRelayJoin() }
     }
     #endif
 
@@ -507,12 +614,23 @@ struct OneTouchPassingCoachRemoteView: View {
     }
 
     private func clearCoachRelayJoinForm() {
+        #if DEBUG
+        if Self.partnerTransportMode == .relayWebSocket {
+            CoachPersistDebug.log("clearCoachRelayJoinForm BEFORE", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+        }
+        #endif
+        TrainingPartnerConnectionCoordinator.shared.clearRecordedCoachRelayJoinCode()
         coachRelayJoinCodeInput = ""
         coachRelayJoinError = nil
         coachRelayJoinBanner = nil
         coachRelayJoinBusy = false
         relayJoinCodeFieldFocused = false
         coachRelayDisplayPeerJoined = false
+        #if DEBUG
+        if Self.partnerTransportMode == .relayWebSocket {
+            CoachPersistDebug.log("clearCoachRelayJoinForm AFTER", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+        }
+        #endif
     }
 
     private func popToCoachRemoteHubAfterDisplayDisconnect() {

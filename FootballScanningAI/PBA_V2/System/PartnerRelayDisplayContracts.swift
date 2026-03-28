@@ -13,9 +13,12 @@ import SwiftUI
 /// Display-side relay surface: join code, socket lifecycle, coach paired (`peer_joined` / `peer_left`),
 /// and start/stop. Activities wire `onCoachPairingChanged` into their session / pairing model.
 ///
-/// **Adoption:** Hold `@StateObject private var relay = PartnerRelayDisplaySession()` (or inject a test double
-/// conforming to this protocol). On partner appear (relay mode): set callback, `await relay.startDisplaySession()`.
-/// On disappear: `relay.tearDown()`. Read `joinCode` / `socketConnectionState` / `isCoachPaired` for UI, or use
+/// **Adoption:** Use ``TrainingPartnerConnectionCoordinator.shared.relayDisplaySession`` for partner training so
+/// relay + join code persist across activity changes; call `await relay.startDisplaySessionIfNeeded()` on each
+/// activity display. Tear down only via ``TrainingPartnerConnectionCoordinator.endPartnerTrainingSession(reason:)`` (e.g.
+/// explicit Leave training, coach hub end, or `popToRoot(endingPartnerSession: true)`). iOS background only **suspends** relay.
+/// `onDisappear` or plain Home navigation. Read `joinCode` / `socketConnectionState` /
+/// `isCoachPaired` for UI, or use
 /// ``PartnerRelayDisplayUI/statusConnectionState(socketState:isCoachPairedWithRelay:)`` for a single status `ConnectionState`.
 protocol PartnerRelayDisplayControlling: AnyObject, ObservableObject {
     var joinCode: String? { get }

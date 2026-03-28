@@ -26,6 +26,7 @@ final class DribbleOrPassEngine: ObservableObject {
     @Published private(set) var revealedGates: Set<Gate> = []
 
     private let config: DribbleOrPassConfig
+    private let trainingMode: TrainingMode
     private let plan: [DribbleOrPassRepPlan]
     private var currentRepIndex: Int = 0
     private var passTriggeredAt: Date?
@@ -35,8 +36,9 @@ final class DribbleOrPassEngine: ObservableObject {
     private var revealTimers: [Timer] = []
     private var cueHideTimer: Timer?
 
-    init(config: DribbleOrPassConfig, plan: [DribbleOrPassRepPlan] = DribbleOrPassScenarioGenerator.generatePlan()) {
+    init(config: DribbleOrPassConfig, trainingMode: TrainingMode = .solo, plan: [DribbleOrPassRepPlan] = DribbleOrPassScenarioGenerator.generatePlan()) {
         self.config = config
+        self.trainingMode = trainingMode
         self.plan = plan
         updateInstructions()
     }
@@ -45,13 +47,23 @@ final class DribbleOrPassEngine: ObservableObject {
         switch phase {
         case .waitingForNextRep:
             instructionTitle = "Waiting for coach…"
-            instructionSubtitle = "Keep moving. Check both shoulders."
+            if trainingMode == .partner {
+                instructionSubtitle = "\(ActivityInstructionData.partnerCoachSetupLine)\n\(ActivityInstructionData.partnerCoachBallLine)"
+            } else {
+                instructionSubtitle = "Keep moving. Check both shoulders."
+            }
         case .armedScanning:
             instructionTitle = "Scan freely"
-            instructionSubtitle = "Beep is coming."
+            if trainingMode == .partner {
+                instructionSubtitle = "\(ActivityInstructionData.partnerPlayerBeepLine)\n\(ActivityInstructionData.timingLine)"
+            } else {
+                instructionSubtitle = "Beep is coming."
+            }
         case .beepedAwaitingPass:
             instructionTitle = "Ball is coming"
-            instructionSubtitle = "Coach: press PASS at the strike."
+            instructionSubtitle = trainingMode == .partner
+                ? ActivityInstructionData.partnerCoachPassTimingLine
+                : "Coach: press PASS at the strike."
         case .cueRevealing:
             instructionTitle = "Decide now"
             instructionSubtitle = "Green = pass, Clear = dribble."

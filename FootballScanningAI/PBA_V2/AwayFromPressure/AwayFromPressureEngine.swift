@@ -24,6 +24,7 @@ final class AwayFromPressureEngine: ObservableObject {
     @Published var instructionSubtitle: String = ""
 
     private let config: AwayFromPressureConfig
+    private let trainingMode: TrainingMode
     private let plan: [AwayFromPressureRepPlan]
     private var currentRepIndex: Int = 0
     private var passTriggeredAt: Date?
@@ -35,8 +36,9 @@ final class AwayFromPressureEngine: ObservableObject {
     private var scanDelayTimer: Timer?
     private var markerHideTimer: Timer?
 
-    init(config: AwayFromPressureConfig, plan: [AwayFromPressureRepPlan] = AwayFromPressureRepPlanner.generatePlan()) {
+    init(config: AwayFromPressureConfig, trainingMode: TrainingMode = .solo, plan: [AwayFromPressureRepPlan] = AwayFromPressureRepPlanner.generatePlan()) {
         self.config = config
+        self.trainingMode = trainingMode
         self.plan = plan
         updateInstructions()
     }
@@ -45,19 +47,29 @@ final class AwayFromPressureEngine: ObservableObject {
         switch phase {
         case .waitingForNextRep:
             instructionTitle = "Waiting for coach…"
-            instructionSubtitle = "Keep moving. Check both shoulders."
+            if trainingMode == .partner {
+                instructionSubtitle = "\(ActivityInstructionData.partnerCoachSetupLine)\n\(ActivityInstructionData.partnerCoachBallLine)"
+            } else {
+                instructionSubtitle = "Keep moving. Check both shoulders."
+            }
         case .armedScanning:
             instructionTitle = "Scan"
-            instructionSubtitle = "Be ready to turn away from pressure."
+            if trainingMode == .partner {
+                instructionSubtitle = "\(ActivityInstructionData.partnerPlayerBeepLine)\n\(ActivityInstructionData.timingLine)"
+            } else {
+                instructionSubtitle = "Be ready to turn away from pressure."
+            }
         case .beepedAwaitingPass:
             instructionTitle = "Ball is coming"
-            instructionSubtitle = "Coach: press PASS at the strike."
+            instructionSubtitle = trainingMode == .partner
+                ? ActivityInstructionData.partnerCoachPassTimingLine
+                : "Coach: press PASS at the strike."
         case .markerVisible:
-            instructionTitle = "Turn away from pressure"
-            instructionSubtitle = "Move opposite the red — into space."
+            instructionTitle = "Decide away from pressure"
+            instructionSubtitle = "Show your first decision opposite the red — into space."
         case .awaitingExitLog:
             instructionTitle = "Waiting for coach"
-            instructionSubtitle = "They log your turn (opposite the red = correct)."
+            instructionSubtitle = "Coach logs your first decision (opposite the red = correct)."
         case .blockComplete:
             instructionTitle = "Block complete."
             instructionSubtitle = ""

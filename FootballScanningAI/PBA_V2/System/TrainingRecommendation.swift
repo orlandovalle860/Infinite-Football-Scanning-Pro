@@ -148,9 +148,9 @@ enum TrainingRecommendation {
         // backwardSafe not yet measured; when we have it, return "recognize forward options sooner" here.
         switch activity {
         case .awayFromPressure:
-            return "read danger and escape early"
+            return "read danger and decide away early"
         case .dribbleOrPass:
-            return "choose action under pressure"
+            return "decide pass or dribble before the ball arrives"
         case .oneTouchPassing:
             return "decide before the ball arrives"
         case .twoMinuteTest:
@@ -198,7 +198,7 @@ enum TrainingRecommendation {
             if case .firstTouchIssues = reason, let subtype = firstTouchSubtype(lastAFPSessionResult) {
                 switch subtype {
                 case .towardPressure:
-                    return ("Escape pressure earlier.", "You're turning into pressure too often.")
+                    return ("Decide away from pressure earlier.", "You're turning into pressure too often.")
                 case .hesitant:
                     return ("Commit to your decision.", "You're hesitating between options.")
                 case .correcting:
@@ -207,9 +207,9 @@ enum TrainingRecommendation {
             }
             if bias == .leftRight { return ("Scan the whole field.", "You're favoring one side.") }
             if speed == .slow { return ("Decide earlier before the ball arrives.", "Your decisions are arriving late.") }
-            return ("Escape pressure earlier.", "Keep scanning and escaping pressure.")
+            return ("Decide away from pressure earlier.", "Keep scanning and deciding away from pressure.")
         case .dribbleOrPass:
-            return ("Choose action under pressure.", "You're hesitating between options.")
+            return ("Decide pass or dribble before the ball arrives.", "You're hesitating between options.")
         case .oneTouchPassing:
             if speed == .slow { return ("Decide before the ball arrives.", "Your decisions are arriving late.") }
             return ("Decide before the ball arrives.", "Train deciding before the ball arrives.")

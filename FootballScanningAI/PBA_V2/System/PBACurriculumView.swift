@@ -30,9 +30,9 @@ struct PBACurriculumView: View {
     }
 
     private static let activities: [(title: String, subtitle: String, activity: ActivityKind)] = [
-        ("Playing Away From Pressure", "Recognize pressure and escape quickly.", .awayFromPressure),
-        ("Dribble or Pass", "Choose the correct attacking action.", .dribbleOrPass),
-        ("One-Touch Passing", "Decide and execute instantly.", .oneTouchPassing)
+        ("Playing Away From Pressure", "Recognize pressure and decide away from it early.", .awayFromPressure),
+        ("Dribble or Pass", "Decide pass or dribble before the ball arrives.", .dribbleOrPass),
+        ("One-Touch Passing", "Pre-decide your target, then execute one-touch.", .oneTouchPassing)
     ]
 
     private let timelineIndicatorWidth: CGFloat = 48
@@ -119,6 +119,13 @@ struct PBACurriculumView: View {
         }
         .onAppear {
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
+        }
+        .onChange(of: router.path) { oldPath, newPath in
+            #if DEBUG
+            if newPath.count > oldPath.count, let last = newPath.last {
+                PartnerPersistDebug.log("PBACurriculumView Pathway push — route=\(String(describing: last)) pathCount=\(newPath.count)")
+            }
+            #endif
         }
     }
 

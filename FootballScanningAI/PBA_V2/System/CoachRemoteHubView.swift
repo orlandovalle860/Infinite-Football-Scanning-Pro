@@ -11,6 +11,8 @@ struct CoachRemoteHubView: View {
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
     @EnvironmentObject private var router: AppRouter
+    @State private var partnerSessionActive = false
+    @State private var showDisconnectCoachConfirm = false
 
     var body: some View {
         ScrollView {
@@ -59,6 +61,27 @@ struct CoachRemoteHubView: View {
                 }
             }
             .padding(20)
+
+            if partnerSessionActive {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Ends coach/display connection")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.55))
+                        .padding(.horizontal, 4)
+                    Button {
+                        showDisconnectCoachConfirm = true
+                    } label: {
+                        Text("Disconnect Coach")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.orange.opacity(0.95))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 24)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
@@ -75,6 +98,18 @@ struct CoachRemoteHubView: View {
         .navigationTitle("Coach Remote")
         .navigationBarTitleDisplayMode(.inline)
         .preferredColorScheme(.dark)
+        .onAppear {
+            partnerSessionActive = TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive
+        }
+        .alert("Disconnect Coach?", isPresented: $showDisconnectCoachConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Disconnect", role: .destructive) {
+                TrainingPartnerConnectionCoordinator.shared.endPartnerTrainingSession(reason: "coachRemoteHubEndTrainingSession")
+                partnerSessionActive = false
+            }
+        } message: {
+            Text("You'll need to enter a new join code to start another session.")
+        }
     }
 }
 

@@ -67,21 +67,38 @@ final class WebSocketRemoteTransport: NSObject, RemoteTransport {
     }
 
     func send(_ message: TwoMinuteMessage) {
+        send(message, completion: nil)
+    }
+
+    /// - Parameter completion: Called on the main queue after the send attempt finishes (success or failure).
+    func send(_ message: TwoMinuteMessage, completion: (@Sendable () -> Void)?) {
         guard let task = webSocketTask else {
-            DispatchQueue.main.async { [weak self] in self?._connectionState = .disconnected }
+            DispatchQueue.main.async { [weak self] in
+                self?._connectionState = .disconnected
+                completion?()
+            }
             return
         }
         do {
             let envelope = try WebSocketEnvelope(sessionId: config.sessionId, message: message)
             let data = try encoder.encode(envelope)
-            guard let string = String(data: data, encoding: .utf8) else { return }
+            guard let string = String(data: data, encoding: .utf8) else {
+                DispatchQueue.main.async { completion?() }
+                return
+            }
             task.send(.string(string)) { [weak self] error in
-                if error != nil {
-                    DispatchQueue.main.async { self?.handleSendFailure() }
+                DispatchQueue.main.async {
+                    if error != nil {
+                        self?.handleSendFailure()
+                    }
+                    completion?()
                 }
             }
         } catch {
-            DispatchQueue.main.async { [weak self] in self?.handleSendFailure() }
+            DispatchQueue.main.async { [weak self] in
+                self?.handleSendFailure()
+                completion?()
+            }
         }
     }
 

@@ -30,9 +30,9 @@ struct AwayFromPressureDisplaySessionView: View {
     @State private var audioInterruptionObserver: NSObjectProtocol?
     @State private var wedgeStyle: WedgeCueStyle = WedgeCueStyle.style(for: 1)
     @State private var hasSentSessionEnded = false
-    /// DEBUG relay: set from `PartnerRelayDisplaySession` (`peer_joined` / `peer_left`).
-    @State private var isRelayCoachPaired = false
-    @StateObject private var partnerRelaySession = PartnerRelayDisplaySession()
+    /// True while ``SessionCountdownModifier`` shows 3–2–1–Go; coach drill messages must not advance the engine until the drill is visible.
+    @State private var blockCoachDrillDuringSessionCountdown = false
+    @ObservedObject private var partnerRelaySession = TrainingPartnerConnectionCoordinator.shared.relayDisplaySession
 
     private static let partnerTransportMode = PartnerTransportPolicy.transportMode(for: .awayFromPressure)
 
@@ -41,7 +41,7 @@ struct AwayFromPressureDisplaySessionView: View {
         self.mode = mode
         self.settingsViewModel = settingsViewModel
         self.profileManager = profileManager
-        _engine = StateObject(wrappedValue: AwayFromPressureEngine(config: config))
+        _engine = StateObject(wrappedValue: AwayFromPressureEngine(config: config, trainingMode: mode))
     }
 
     var body: some View {
@@ -72,13 +72,13 @@ struct AwayFromPressureDisplaySessionView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .twoMinuteMessageReceived).receive(on: RunLoop.main)) { notification in
             guard mode == .partner, let msg = notification.object as? TwoMinuteMessage else { return }
+            if blockCoachDrillDuringSessionCountdown && msg.isDrillInteractionFromCoach { return }
             switch msg {
             case .nextRep(let repIndex):
                 #if DEBUG
                 if Self.partnerTransportMode == .relayWebSocket {
-                    guard isRelayCoachPaired else {
-                        afpRelayDisplayLog("incoming nextRep repIndex=\(repIndex) ignored (coach not paired)")
-                        return
+                    if !partnerRelaySession.isCoachPaired {
+                        afpRelayDisplayLog("incoming nextRep repIndex=\(repIndex) while isCoachPaired=false (still applying — relay UI can lag peer_joined)")
                     }
                     afpRelayDisplayLog("incoming nextRep repIndex=\(repIndex)")
                 }
@@ -130,6 +130,13 @@ struct AwayFromPressureDisplaySessionView: View {
                 }
                 #endif
                 break
+            case .partnerTrainingEnded:
+                #if DEBUG
+                if Self.partnerTransportMode == .relayWebSocket {
+                    afpRelayDisplayLog("partnerTrainingEnded received (coordinator also tears down relay)")
+                }
+                #endif
+                break
             }
         }
         .onChange(of: engine.phase) { _, newPhase in
@@ -142,14 +149,19 @@ struct AwayFromPressureDisplaySessionView: View {
             }
         }
         .onAppear {
+            #if DEBUG
+            PartnerPersistDebug.log("AwayFromPressureDisplaySessionView onAppear")
+            #endif
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
             hasSentSessionEnded = false
-            if mode == .partner, Self.partnerTransportMode == .multipeer {
-                connectionManager.startHosting()
+            if mode == .partner {
+                TrainingPartnerConnectionCoordinator.shared.beginPartnerTrainingSessionIfNeeded()
+                if Self.partnerTransportMode == .multipeer {
+                    TrainingPartnerConnectionCoordinator.shared.prepareMultipeerDisplayPartner(connectionManager: connectionManager)
+                }
             }
             #if DEBUG
             if mode == .partner, Self.partnerTransportMode == .relayWebSocket {
-                isRelayCoachPaired = false
                 afpRelayDisplayLog("relay pipeline starting (POST /v1/sessions + WebSocket display)")
                 partnerRelaySession.onCoachPairingChanged = { [partnerRelaySession] connected in
                     if connected {
@@ -162,9 +174,8 @@ struct AwayFromPressureDisplaySessionView: View {
                             afpRelayDisplayLog("coach peer_left")
                         }
                     }
-                    isRelayCoachPaired = connected
                 }
-                Task { await partnerRelaySession.startDisplaySession() }
+                Task { await TrainingPartnerConnectionCoordinator.shared.prepareRelayDisplayForActivity() }
             }
             #endif
             let pid = playerStore.selectedPlayerId ?? profileManager.currentProfile?.id
@@ -182,6 +193,9 @@ struct AwayFromPressureDisplaySessionView: View {
             }
         }
         .onDisappear {
+            #if DEBUG
+            PartnerPersistDebug.log("AwayFromPressureDisplaySessionView onDisappear")
+            #endif
             if mode == .partner {
                 teardownPartnerTransportWhenSessionSuspends()
             }
@@ -192,12 +206,12 @@ struct AwayFromPressureDisplaySessionView: View {
         }
         // `onDisappear` may not run when Home / app switcher backgrounds the app; mirror DOP / Two Minute.
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
-            schedulePartnerTeardownFromBackgroundNotification()
+            schedulePartnerSuspendForBackgroundNotification()
         }
         .onReceive(NotificationCenter.default.publisher(for: UIScene.didEnterBackgroundNotification)) { _ in
-            schedulePartnerTeardownFromBackgroundNotification()
+            schedulePartnerSuspendForBackgroundNotification()
         }
-        .sessionCountdown(waitForPartnerReady: mode == .partner, partnerReady: partnerReadyForCountdown)
+        .sessionCountdown(waitForPartnerReady: mode == .partner, partnerReady: partnerReadyForCountdown, suppressCoachMessagesDuringCountdown: $blockCoachDrillDuringSessionCountdown)
         .onChange(of: connectionManager.connectedPeerName) { _, name in
             guard mode == .partner, Self.partnerTransportMode == .multipeer, name != nil else { return }
             let flag = UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey)
@@ -232,7 +246,8 @@ struct AwayFromPressureDisplaySessionView: View {
                         await MainActor.run { CurrentSessionStore.shared.clear() }
                     }
                 }
-                router.popToRoot()
+                // Same intent as Get Ready / Home toolbar: return to Pathway without ending the shared relay run.
+                router.popToRoot(endingPartnerSession: false)
             }
         } message: {
             Text("Your current block will not be saved.")
@@ -287,7 +302,7 @@ struct AwayFromPressureDisplaySessionView: View {
     }
 
     private var shouldShowRelayWaiting: Bool {
-        mode == .partner && Self.partnerTransportMode == .relayWebSocket && !isRelayCoachPaired
+        mode == .partner && Self.partnerTransportMode == .relayWebSocket && !partnerRelaySession.isCoachPaired
     }
 
     /// Partner: countdown only after coach is connected (Multipeer) or paired on relay. Solo: always ready.
@@ -297,7 +312,7 @@ struct AwayFromPressureDisplaySessionView: View {
         case .multipeer:
             return connectionManager.connectedPeerName != nil
         case .relayWebSocket:
-            return isRelayCoachPaired
+            return partnerRelaySession.isCoachPaired
         }
     }
 
@@ -307,7 +322,7 @@ struct AwayFromPressureDisplaySessionView: View {
         if Self.partnerTransportMode == .relayWebSocket {
             return PartnerRelayDisplayUI.statusConnectionState(
                 socketState: partnerRelaySession.socketConnectionState,
-                isCoachPairedWithRelay: isRelayCoachPaired
+                isCoachPairedWithRelay: partnerRelaySession.isCoachPaired
             )
         }
         #endif
@@ -316,7 +331,7 @@ struct AwayFromPressureDisplaySessionView: View {
 
     private var repCountOverlay: some View {
         Group {
-            if mode != .partner || Self.partnerTransportMode != .relayWebSocket || isRelayCoachPaired {
+            if mode != .partner || Self.partnerTransportMode != .relayWebSocket || partnerRelaySession.isCoachPaired {
                 VStack {
                     HStack {
                         Text(repCountText)
@@ -349,9 +364,12 @@ struct AwayFromPressureDisplaySessionView: View {
             if let repIndex = repIndexForExit {
                 VStack {
                     Spacer()
-                    Text("Turn away from the red — tap that direction")
+                    Text(ActivityDisplaySessionCopy.tapAwayFromPressure)
                         .font(.subheadline.weight(.semibold))
                         .foregroundColor(.white.opacity(0.95))
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 16)
                     HStack(spacing: 20) {
                         Button { logExit(repIndex: repIndex, gate: .up) } label: {
                             Image(systemName: "arrow.up")
@@ -533,8 +551,20 @@ struct AwayFromPressureDisplaySessionView: View {
     }
 
     /// Ends partner transport when leaving the drill **or** when the app backgrounds (Home / app switcher).
+    /// **Do not** send ``sessionEnded`` while persisting — that message tells the coach app to clear the join session and return to the hub.
     private func teardownPartnerTransportWhenSessionSuspends() {
         guard mode == .partner else { return }
+        if TrainingPartnerConnectionCoordinator.shared.shouldPersistPartnerPairing {
+            #if DEBUG
+            if Self.partnerTransportMode == .relayWebSocket {
+                afpRelayDisplayLog("persist partner pairing — skip sessionEnded + relay tearDown (Home / next activity)")
+            }
+            if Self.partnerTransportMode == .multipeer {
+                print("[Multipeer] TrainingPartnerSession: display onDisappear — skip sessionEnded + stopHosting (training session active)")
+            }
+            #endif
+            return
+        }
         sendSessionEndedIfNeeded()
         #if DEBUG
         if Self.partnerTransportMode == .relayWebSocket {
@@ -547,16 +577,17 @@ struct AwayFromPressureDisplaySessionView: View {
         }
     }
 
-    private func schedulePartnerTeardownFromBackgroundNotification() {
+    /// iOS Home / app switcher backgrounds the process — **do not** end training pairing (that forced a new join code).
+    private func schedulePartnerSuspendForBackgroundNotification() {
         guard mode == .partner else { return }
         var backgroundTaskId: UIBackgroundTaskIdentifier = .invalid
-        backgroundTaskId = UIApplication.shared.beginBackgroundTask(withName: "AFPDisplayPartnerTeardown") {
+        backgroundTaskId = UIApplication.shared.beginBackgroundTask(withName: "AFPDisplayPartnerSuspend") {
             if backgroundTaskId != .invalid {
                 UIApplication.shared.endBackgroundTask(backgroundTaskId)
                 backgroundTaskId = .invalid
             }
         }
-        teardownPartnerTransportWhenSessionSuspends()
+        TrainingPartnerConnectionCoordinator.shared.suspendPartnerSessionForBackground()
         if backgroundTaskId != .invalid {
             UIApplication.shared.endBackgroundTask(backgroundTaskId)
         }

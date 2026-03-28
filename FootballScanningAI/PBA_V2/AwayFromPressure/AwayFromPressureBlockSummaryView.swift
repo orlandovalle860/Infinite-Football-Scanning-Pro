@@ -50,11 +50,11 @@ struct AwayFromPressureBlockSummaryView: View {
 
     private var coachMessage: String {
         if correctCount >= 10 {
-            return "Good. You escaped pressure consistently. Keep the standard."
+            return "Good. You decided away from pressure consistently. Keep the standard."
         } else if correctCount >= 8 {
-            return "You're getting out. Now make the decision earlier."
+            return "You're reading pressure. Now make the first decision earlier."
         } else {
-            return "You're reacting to pressure. Commit to the escape earlier."
+            return "You're reacting late. Commit to your first decision earlier."
         }
     }
 
@@ -421,7 +421,7 @@ struct AwayFromPressureBlockSummaryView: View {
                         .multilineTextAlignment(.center)
                         .foregroundColor(.white.opacity(0.85))
 
-                    Text("Escapes: \(correctCount)/12")
+                    Text("Correct first decisions: \(correctCount)/12")
                         .font(.subheadline)
                         .foregroundColor(.white.opacity(0.7))
                 }
@@ -436,7 +436,7 @@ struct AwayFromPressureBlockSummaryView: View {
                 if showDetails {
                     VStack(spacing: 10) {
                         HStack {
-                            Text("Escapes")
+                            Text("Correct decisions")
                             Spacer()
                             Text("\(correctCount)/12")
                         }

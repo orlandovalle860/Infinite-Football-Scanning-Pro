@@ -141,7 +141,7 @@ struct PlayerDevelopmentSnapshotView: View {
         )
     }
 
-    /// Pressure escape: AFP correct %. Higher is better.
+    /// Away-from-pressure first-decision accuracy (AFP). Higher is better.
     private var pressureEscapeMetric: (current: String, improvement: String?, progress: Double, improved: Bool?) {
         let afpSessions = chartSessions.filter { $0.activityType == .awayFromPressure }
         let current: Double?
@@ -301,7 +301,7 @@ struct PlayerDevelopmentSnapshotView: View {
                     explanationText: decisionSpeedMetric.explanationText
                 )
                 SnapshotMetricRow(
-                    label: "Pressure Escape Rate",
+                    label: "Away-from-pressure accuracy",
                     currentDisplay: pressureEscapeMetric.current,
                     improvementText: pressureEscapeMetric.improvement,
                     progress: pressureEscapeMetric.progress,

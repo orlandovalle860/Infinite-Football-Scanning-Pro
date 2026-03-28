@@ -25,8 +25,8 @@ enum MetricExplanations {
             return "Shows whether your overall efficiency is improving, stable, or declining over recent sessions."
         case "Decision Score":
             return "Reflects how well your recent decisions match the right option and timing."
-        case "Pressure Escape Rate":
-            return "Measures how effectively you handle pressure situations by choosing and executing the right escape."
+        case "Away-from-pressure accuracy", "Pressure Escape Rate":
+            return "Your accuracy choosing the correct direction away from pressure on the first decision (Playing Away From Pressure)."
         default:
             return nil
         }

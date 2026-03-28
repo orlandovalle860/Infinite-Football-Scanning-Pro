@@ -270,7 +270,7 @@ enum PBAPostSessionNarrativeBuilder {
         let d = session.correctCount - previous.correct
         let correctnessLabel: String = {
             switch session.activityType {
-            case .awayFromPressure: return "Escape success"
+            case .awayFromPressure: return "Correct first decisions"
             case .dribbleOrPass: return "Decision correctness"
             case .oneTouchPassing: return "Correct decisions"
             case .twoMinuteTest: return "Correct decisions"
@@ -319,8 +319,8 @@ enum PBAPostSessionNarrativeBuilder {
         let window = session.avgDecisionWindowSeconds ?? -0.9
         switch session.activityType {
         case .awayFromPressure:
-            if acc >= 85 { return "Escapes are getting cleaner — \(baseHeadline)" }
-            if acc < 70 { return "Escape direction is the focus — \(baseHeadline)" }
+            if acc >= 85 { return "First-decision accuracy is improving — \(baseHeadline)" }
+            if acc < 70 { return "Opposite-direction choices are the focus — \(baseHeadline)" }
             return baseHeadline
         case .dribbleOrPass:
             if acc >= 82 { return "Choice quality is strong — \(baseHeadline)" }

@@ -339,7 +339,7 @@ struct OneTouchPassingBlockSummaryView: View {
                         .font(.body)
                         .multilineTextAlignment(.center)
                         .foregroundColor(.white.opacity(0.85))
-                    Text("Correct Passes: \(blockResult.correctCount)/12")
+                    Text("Correct first decisions: \(blockResult.correctCount)/12")
                         .font(.subheadline)
                         .foregroundColor(.white.opacity(0.7))
                     Text("Decision Speed: \(dominantDecisionSpeed.rawValue.capitalized)")

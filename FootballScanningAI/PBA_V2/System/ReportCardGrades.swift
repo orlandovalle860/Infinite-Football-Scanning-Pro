@@ -407,7 +407,7 @@ enum ReportCardGenerator {
         return "—"
     }
 
-    /// Pressure Escape: AFP only, % correct (successful escapes).
+    /// Away-from-pressure first decisions: AFP only, % correct (first decision opposite the red).
     private static func gradePressureEscape(sessions: [SessionResult]) -> ReportCardGrade? {
         let afp = sessions.filter { $0.activityType == .awayFromPressure }
         guard !afp.isEmpty else { return nil }
@@ -461,7 +461,7 @@ enum ReportCardGenerator {
         if let sp = decisionSpeed, sp == .f || sp == .d || sp == .dMinus || sp == .dPlus {
             weakest = "Decision speed"
         } else if let pe = pressureEscape, pe == .f || pe == .d || pe == .dMinus || pe == .dPlus {
-            weakest = "Escaping pressure"
+            weakest = "Away-from-pressure first decisions"
         } else {
             weakest = ""
         }

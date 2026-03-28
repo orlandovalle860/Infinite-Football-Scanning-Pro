@@ -82,7 +82,23 @@ final class AppRouter: ObservableObject {
     }
 
     /// Clear the navigation path so the stack returns to root (Home). One tap from any deep screen.
-    func popToRoot() {
+    ///
+    /// **Partner relay / Multipeer:** By default this does **not** end the partner training session, so the same
+    /// join code and transport can be reused after Home → Pathway → another partner activity. Call with
+    /// `endingPartnerSession: true` only when the user explicitly abandons training (e.g. “Leave” in a drill alert).
+    func popToRoot(endingPartnerSession: Bool = false) {
+        if endingPartnerSession {
+            #if DEBUG
+            PartnerPersistDebug.log("AppRouter.popToRoot(endingPartnerSession:true) — ending partner training session")
+            #endif
+            TrainingPartnerConnectionCoordinator.shared.endPartnerTrainingSession(reason: "AppRouter.popToRoot(endingPartnerSession:true)")
+        } else {
+            #if DEBUG
+            let active = TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive
+            print("[Multipeer] TrainingPartnerSession: popToRoot — preserving pairing (navigation only); isPartnerTrainingSessionActive=\(active)")
+            PartnerPersistDebug.log("AppRouter.popToRoot — navigation only (preserve pairing if active); isPartnerTrainingSessionActive=\(active)")
+            #endif
+        }
         if Thread.isMainThread {
             withAnimation(.easeInOut(duration: 0.25)) {
                 path.removeAll(keepingCapacity: false)

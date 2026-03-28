@@ -274,33 +274,33 @@ enum CoachInsightGenerator {
             switch (activity, state) {
             case (.awayFromPressure, .lateCorrect):
                 return [
-                    "Open your hips away from pressure when the red cue appears, then take the opposite gate on your first touch.",
+                    "Open your hips away from pressure when the red cue appears, then show your first decision opposite the red on your first touch.",
                     "Show away-from-pressure body shape before the pass arrives, then commit opposite without a recovery touch.",
-                    "Set your escape lane early when pressure is shown, then drive opposite as the ball travels."
+                    "Set your away-from-pressure direction early when pressure is shown, then drive opposite as the ball travels."
                 ]
             case (.awayFromPressure, .fastIncorrect):
                 return [
-                    "Read the pressure side first when the cue flashes, then explode only toward the opposite gate.",
-                    "Lock the opposite escape before contact when pressure appears, then accelerate in that lane.",
-                    "Pick the away-from-pressure exit during your scan, then use your first action to protect and escape."
+                    "Read the pressure side first when the cue flashes, then explode only toward the opposite direction.",
+                    "Lock the opposite direction before contact when pressure appears, then accelerate in that lane.",
+                    "Pick the away-from-pressure direction during your scan, then use your first action to protect the ball into space."
                 ]
             case (.awayFromPressure, .lateIncorrect):
                 return [
                     "Scan for pressure as the pass is released, then choose the opposite lane before your first touch.",
                     "Find the pressure shoulder early when the cue appears, then turn out away from it immediately.",
-                    "Identify the safe exit before arrival, then play away from pressure on first contact."
+                    "Identify the safe direction before arrival, then play away from pressure on first contact."
                 ]
             case (.awayFromPressure, .sharp):
                 return [
                     "Keep scanning pressure before each pass, then explode opposite on touch one every rep.",
-                    "Maintain early away-from-pressure pictures as the ball travels, then execute the opposite exit cleanly.",
+                    "Maintain early away-from-pressure pictures as the ball travels, then execute the opposite first decision cleanly.",
                     "Repeat your early pressure read each rep, then finish with a decisive opposite first action."
                 ]
             case (.awayFromPressure, .inconsistent):
                 return [
                     "Use one consistent away-from-pressure scan before each pass, then commit opposite on first action.",
-                    "Reset to the same pressure-read routine every rep, then exit opposite without hesitation.",
-                    "Stabilize your process when cues appear, then make one clean opposite escape on touch one."
+                    "Reset to the same pressure-read routine every rep, then decide opposite without hesitation.",
+                    "Stabilize your process when cues appear, then make one clean opposite first decision on touch one."
                 ]
             case (.dribbleOrPass, .lateCorrect):
                 return [
@@ -334,21 +334,21 @@ enum CoachInsightGenerator {
                 ]
             case (.oneTouchPassing, .lateCorrect):
                 return [
-                    "Picture your next pass before the ball arrives, then play one-touch to the chosen gate immediately.",
+                    "Picture your next pass before the ball arrives, then play one-touch to the chosen target immediately.",
                     "Set your body and target during ball travel, then release one-touch without a decision delay.",
                     "Read the next action early before contact, then let your first touch be the pass."
                 ]
             case (.oneTouchPassing, .fastIncorrect):
                 return [
-                    "Choose the target gate before arrival, then keep one-touch tempo only on the correct option.",
+                    "Choose the target before arrival, then keep one-touch tempo only on the correct option.",
                     "Confirm the right one-touch lane during your scan, then pass first-time with quality.",
-                    "Set your passing picture before contact, then play one-touch only to the best gate."
+                    "Set your passing picture before contact, then play one-touch only to the best target."
                 ]
             case (.oneTouchPassing, .lateIncorrect):
                 return [
                     "Decide your one-touch target as the pass travels, then release before a second thought appears.",
                     "Pre-shape to the right lane before reception, then play the first-time pass on touch one.",
-                    "Take your final scan before the ball arrives, then execute one-touch to the planned gate."
+                    "Take your final scan before the ball arrives, then execute one-touch to the planned target."
                 ]
             case (.oneTouchPassing, .sharp):
                 return [
@@ -359,7 +359,7 @@ enum CoachInsightGenerator {
             case (.oneTouchPassing, .inconsistent):
                 return [
                     "Use one pre-arrival scan routine before every pass, then commit to one-touch without hesitation.",
-                    "Stabilize your pre-receive timing each rep, then release one-touch to the chosen gate.",
+                    "Stabilize your pre-receive timing each rep, then release one-touch to the chosen target.",
                     "Keep the same early target check each ball, then execute one-touch with consistent rhythm."
                 ]
             case (.twoMinuteTest, .lateCorrect):
@@ -508,10 +508,10 @@ enum CoachInsightGenerator {
             return ThemeLines(
                 anchor: "The window of opportunity closes before the ball arrives.",
                 supporting: [
-                    "In AFP, read pressure early and escape opposite before the lane closes.",
+                    "In AFP, read pressure early and decide opposite before the lane closes.",
                     "Turn away from pressure sooner so your first action creates space.",
                     "See the red cue early and commit opposite without a second touch.",
-                    "Scan early, then attack the opposite gate with conviction."
+                    "Scan early, then commit to the opposite direction with conviction."
                 ]
             )
         case .afpCommitOpposite:
@@ -519,8 +519,8 @@ enum CoachInsightGenerator {
                 anchor: "Decide before the ball arrives.",
                 supporting: [
                     "Your first look should confirm, not decide.",
-                    "Commit to the opposite exit on first action, not after contact.",
-                    "Lose the hesitation and own the opposite gate immediately.",
+                    "Commit to the opposite direction on first action, not after contact.",
+                    "Lose the hesitation and own the opposite direction immediately.",
                     "One clear picture, one committed first move."
                 ]
             )
@@ -530,7 +530,7 @@ enum CoachInsightGenerator {
                 supporting: [
                     "You are reading pressure well; keep that calm first touch opposite.",
                     "Stay composed and let your first action match the early picture.",
-                    "Good escape habits - repeat the same calm execution each rep."
+                    "Good away-from-pressure habits — repeat the same calm execution each rep."
                 ]
             )
         case .dopPickForwardCue:

@@ -13,14 +13,21 @@ enum CoachRemoteCopy {
     /// Ready state — headline when connected and waiting for NEXT REP.
     static let readyForNextRep = "Ready for next rep"
 
-    /// PASS step — timing input (after cue on Display).
-    static let passTimingInstruction = "When the cue happens, tap PASS"
+    /// PASS step — timing input (after cue on Display). Same phrase as pre-block partner instructions.
+    static let passTimingInstruction = ActivityInstructionData.partnerCoachPassTimingLine
+
+    /// Short field-spacing reminders on the coach remote (PASS step).
+    static let partnerCoachSetupLine = ActivityInstructionData.partnerCoachSetupLine
+    static let partnerCoachBallLine = ActivityInstructionData.partnerCoachBallLine
+
+    /// When to log direction on remote — shortened; full wording is ``ActivityInstructionData.coachFirstDecisionLoggingLine`` (instruction screen).
+    static let coachFirstDecisionLoggingLine = ActivityInstructionData.coachFirstDecisionLoggingLineShort
 
     /// Direction step — coach records outcome; app scores correctness.
-    static let playerDecisionQuestion = "What did the player choose?"
+    static let playerDecisionQuestion = "What was the player’s first decision?"
 
-    /// Away From Pressure — coach logs the player’s turn; correct = opposite the red pressure (single gate per rep).
-    static let awayFromPressurePlayerDecisionPrompt = "Log their turn away from pressure (opposite the red is correct)."
+    /// Away From Pressure — coach logs first decision; correct = opposite the red pressure (single direction per rep).
+    static let awayFromPressurePlayerDecisionPrompt = "Log their first decision away from pressure (opposite the red is correct)."
 
     /// Subtle note: volume still triggers PASS (hardware path unchanged).
     static let volumePassHint = "Volume keys also send PASS"
@@ -29,7 +36,7 @@ enum CoachRemoteCopy {
     static let multipeerSetupHint = "Same Wi‑Fi · allow Local Network · Display on session screen"
 
     /// Legacy combined prompt (avoid for new layouts; prefer `playerDecisionQuestion` + `CoachRemoteIncorrectPadButton`).
-    static let logPlayerDecisionPrompt = "Tap the direction they chose, or ✕ if wrong."
+    static let logPlayerDecisionPrompt = "Tap the direction of their first decision, or ✕ if wrong."
 }
 
 // MARK: - Subtle connection status (not the primary focus)

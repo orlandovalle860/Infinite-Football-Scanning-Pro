@@ -68,7 +68,7 @@ struct OneTouchPassingRoleSelectionView: View {
                             Text("Coach remote")
                                 .font(.system(size: 20, weight: .bold, design: .rounded))
                         }
-                        Text("This device starts each rep and logs pass direction. Tap Connect to Display first.")
+                        Text("This device starts each rep and logs the player’s first decision (pass target). Tap Connect to Display first.")
                             .font(.footnote)
                             .foregroundColor(.white.opacity(0.9))
                             .multilineTextAlignment(.leading)

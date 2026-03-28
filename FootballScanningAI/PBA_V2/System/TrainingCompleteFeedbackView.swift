@@ -110,7 +110,7 @@ struct TrainingCompleteFeedbackView: View {
 
     private var primaryMetricLabel: String {
         switch activityKind {
-        case .awayFromPressure: return "Escape success"
+        case .awayFromPressure: return "Correct first decisions"
         case .dribbleOrPass: return "Decision correctness"
         case .oneTouchPassing: return "Decision window"
         case .twoMinuteTest: return "Balanced score"

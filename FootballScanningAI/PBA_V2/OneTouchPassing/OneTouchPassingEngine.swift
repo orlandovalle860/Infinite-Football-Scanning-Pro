@@ -28,6 +28,7 @@ final class OneTouchPassingEngine: ObservableObject {
     @Published private(set) var showCheckCue: Bool = false
 
     private let config: OneTouchPassingConfig
+    private let trainingMode: TrainingMode
     private let plan: [OneTouchRepPlan]
     private var currentRepIndex: Int = 0
     private var passTriggeredAt: Date?
@@ -36,8 +37,9 @@ final class OneTouchPassingEngine: ObservableObject {
     private var revealTimers: [Timer] = []
     private var cueHideTimer: Timer?
 
-    init(config: OneTouchPassingConfig, plan: [OneTouchRepPlan] = OneTouchPassingScenarioGenerator.generatePlan()) {
+    init(config: OneTouchPassingConfig, trainingMode: TrainingMode = .solo, plan: [OneTouchRepPlan] = OneTouchPassingScenarioGenerator.generatePlan()) {
         self.config = config
+        self.trainingMode = trainingMode
         self.plan = plan
         updateInstructions()
     }
@@ -46,16 +48,26 @@ final class OneTouchPassingEngine: ObservableObject {
         switch phase {
         case .waitingForNextRep:
             instructionTitle = "Waiting for coach…"
-            instructionSubtitle = "Scan the field."
+            if trainingMode == .partner {
+                instructionSubtitle = "\(ActivityInstructionData.partnerCoachSetupLine)\n\(ActivityInstructionData.partnerCoachBallLine)"
+            } else {
+                instructionSubtitle = "Scan the field."
+            }
         case .armedScanning:
             instructionTitle = "Scan freely"
-            instructionSubtitle = "CHECK is coming."
+            if trainingMode == .partner {
+                instructionSubtitle = "\(ActivityInstructionData.partnerPlayerBeepLine)\n\(ActivityInstructionData.timingLine)\nCHECK is coming."
+            } else {
+                instructionSubtitle = "CHECK is coming."
+            }
         case .showingCheck:
             instructionTitle = "CHECK"
-            instructionSubtitle = "Ball is coming…"
+            instructionSubtitle = trainingMode == .partner ? ActivityInstructionData.timingLine : "Ball is coming…"
         case .awaitingPassTrigger:
             instructionTitle = "Ball is coming…"
-            instructionSubtitle = "Coach: press PASS at the strike."
+            instructionSubtitle = trainingMode == .partner
+                ? ActivityInstructionData.partnerCoachPassTimingLine
+                : "Coach: press PASS at the strike."
         case .cueRevealing:
             instructionTitle = "Decide now"
             instructionSubtitle = "Pass to any green."

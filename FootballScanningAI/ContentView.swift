@@ -991,7 +991,7 @@ struct IntroView: View {
         stage: 1,
         loop: 1,
         nextActivity: .awayFromPressure,
-        focus: "Escape pressure quickly with clean first decisions."
+        focus: "Decide away from pressure quickly — your first decision is what we score."
     )
     @State private var currentPlayerIdentity: PlayerIdentity?
     @State private var trendingIdentity: PlayerIdentity?
@@ -1178,7 +1178,7 @@ struct IntroView: View {
     private var snapshotTrendTitle: String {
         switch snapshotTrendMetric {
         case .escapeRate:
-            return "\(RecommendationEngine.activityTitle(snapshotTrendActivity)) — Correct Escape Trend"
+            return "\(RecommendationEngine.activityTitle(snapshotTrendActivity)) — Correct First-Decision Trend"
         case .decisionRate:
             return "\(RecommendationEngine.activityTitle(snapshotTrendActivity)) — Correct Decision Trend"
         case .decisionWindow:
@@ -1192,6 +1192,14 @@ struct IntroView: View {
         switch snapshotTrendMetric {
         case .decisionWindow: return "s"
         case .escapeRate, .decisionRate, .balanced: return "%"
+        }
+    }
+
+    /// Pin percent-based home trends to 0–100 so the axis never implies values above 100%.
+    private var snapshotTrendYAxisRange: (Double, Double)? {
+        switch snapshotTrendMetric {
+        case .decisionWindow: return nil
+        case .escapeRate, .decisionRate, .balanced: return (0, 100)
         }
     }
 
@@ -1229,7 +1237,7 @@ struct IntroView: View {
 
     private var snapshotTrendPrimaryMetricName: String {
         switch snapshotTrendMetric {
-        case .escapeRate: return "Correct escapes"
+        case .escapeRate: return "Correct first decisions"
         case .decisionRate: return "Correct decisions"
         case .decisionWindow: return "Decision window"
         case .balanced: return "Balanced score"
@@ -1246,9 +1254,9 @@ struct IntroView: View {
         let delta = newer - olderAvg
         switch snapshotTrendMetric {
         case .escapeRate:
-            if delta >= 3 { return "Escape direction is getting cleaner in recent \(title) sessions." }
-            if delta <= -3 { return "Escape execution dipped in your last \(title) block — lock the opposite gate earlier." }
-            return "Escape execution is stable across recent \(title) sessions."
+            if delta >= 3 { return "First-decision accuracy is improving in recent \(title) sessions." }
+            if delta <= -3 { return "First-decision accuracy dipped in your last \(title) block — commit opposite the red earlier." }
+            return "First-decision accuracy is stable across recent \(title) sessions."
         case .decisionRate:
             if delta >= 3 { return "Decision quality is improving in your recent \(title) blocks." }
             if delta <= -3 { return "Decision quality slipped in your last \(title) block — confirm the cue before committing." }
@@ -2523,7 +2531,7 @@ struct IntroView: View {
         }
     }
 
-    /// Personal Bests: Fastest Decision Speed (with band + explanation), Best Pressure Escape Rate, Best Forward Thinking.
+    /// Personal Bests: Fastest Decision Speed (with band + explanation), best away-from-pressure first-decision accuracy, Best Forward Thinking.
     private var personalBestsCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("🏆 Personal Bests")
@@ -2532,7 +2540,7 @@ struct IntroView: View {
             personalBestDecisionSpeedRow(session: profileManager.sessionResultsForCharts().max {
                 ($0.avgDecisionWindowSeconds ?? -.greatestFiniteMagnitude) < ($1.avgDecisionWindowSeconds ?? -.greatestFiniteMagnitude)
             })
-            personalBestRow(label: "Best Pressure Escape Rate", value: profileManager.bestPressureEscapePercent().map { String(format: "%.0f%%", $0) })
+            personalBestRow(label: "Best AFP first-decision accuracy", value: profileManager.bestPressureEscapePercent().map { String(format: "%.0f%%", $0) })
             personalBestRow(label: "Best Forward Thinking", value: profileManager.bestForwardIntentPercent().map { String(format: "%.0f%%", $0) })
         }
     }
@@ -2636,7 +2644,7 @@ struct IntroView: View {
                     title: "",
                     points: snapshotTrendPoints,
                     valueLabel: snapshotTrendValueLabel,
-                    yAxisRange: nil,
+                    yAxisRange: snapshotTrendYAxisRange,
                     emptyStateMessage: nil
                 )
                 .padding(.horizontal, -16)
@@ -2835,7 +2843,7 @@ struct IntroView: View {
                 otherActivityRow(title: "2-Minute Test", subtitle: "Benchmark your decision speed") {
                     router.push(.twoMinuteRoleSelection)
                 }
-                otherActivityRow(title: "Personal Bests", subtitle: "Fastest decision speed, escape rate, forward intent") {
+                otherActivityRow(title: "Personal Bests", subtitle: "Fastest decision speed, AFP first-decision accuracy, forward intent") {
                     router.push(.progress)
                 }
                 Button {
@@ -3405,7 +3413,7 @@ struct TwoMinuteGetReadyView: View {
         .alert("Leave training?", isPresented: $showLeaveAlert) {
             Button("Stay", role: .cancel) {}
             Button("Leave", role: .destructive) {
-                router.popToRoot()
+                router.popToRoot(endingPartnerSession: false)
             }
         } message: {
             Text("Your current block will not be saved.")

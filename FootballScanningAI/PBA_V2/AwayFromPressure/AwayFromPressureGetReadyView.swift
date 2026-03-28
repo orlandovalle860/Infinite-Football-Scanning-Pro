@@ -28,7 +28,7 @@ struct AwayFromPressureGetReadyView: View {
     private var getReadySubtitle: String {
         switch mode {
         case .partner:
-            return "Tap Begin for directions, then Start Block. On Display, partner setup runs first; the block countdown starts after the coach connects."
+            return "Tap Begin for directions, then Start Block. Coach stands about 10 yards away from the player. On Display, partner setup runs first; countdown starts after the coach connects."
         case .solo, .wall:
             return "Tap Begin for directions, then Start Block. You’ll get a short countdown, then your block begins."
         }
@@ -95,7 +95,8 @@ struct AwayFromPressureGetReadyView: View {
         .alert("Leave training?", isPresented: $showLeaveAlert) {
             Button("Stay", role: .cancel) {}
             Button("Leave", role: .destructive) {
-                router.popToRoot()
+                // Same as Home: preserve coach↔display relay so Pathway → next activity does not require a new join code.
+                router.popToRoot(endingPartnerSession: false)
             }
         } message: {
             Text("Your current block will not be saved.")

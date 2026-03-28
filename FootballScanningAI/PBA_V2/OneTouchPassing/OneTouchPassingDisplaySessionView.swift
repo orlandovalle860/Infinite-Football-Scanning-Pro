@@ -10,6 +10,14 @@ import UIKit
 import AVFoundation
 import Combine
 
+#if DEBUG
+private enum OTPPersistDebug {
+    static func log(_ message: String) {
+        print("[OTP-Persist-Debug] \(message)")
+    }
+}
+#endif
+
 struct OneTouchPassingDisplaySessionView: View {
     let config: OneTouchPassingConfig
     let mode: TrainingMode
@@ -29,9 +37,9 @@ struct OneTouchPassingDisplaySessionView: View {
     @State private var nextRepIndex = 0
     @State private var audioInterruptionObserver: NSObjectProtocol?
     @State private var hasSentSessionEnded = false
-    /// DEBUG relay: set from `PartnerRelayDisplaySession` (`peer_joined` / `peer_left`).
-    @State private var isRelayCoachPaired = false
-    @StateObject private var partnerRelaySession = PartnerRelayDisplaySession()
+    /// True while ``SessionCountdownModifier`` shows 3–2–1–Go; coach drill messages must not advance the engine until the drill is visible.
+    @State private var blockCoachDrillDuringSessionCountdown = false
+    @ObservedObject private var partnerRelaySession = TrainingPartnerConnectionCoordinator.shared.relayDisplaySession
 
     private static let partnerTransportMode = PartnerTransportPolicy.transportMode(for: .oneTouchPassing)
 
@@ -40,7 +48,7 @@ struct OneTouchPassingDisplaySessionView: View {
         self.mode = mode
         self.settingsViewModel = settingsViewModel
         self.profileManager = profileManager
-        _engine = StateObject(wrappedValue: OneTouchPassingEngine(config: config))
+        _engine = StateObject(wrappedValue: OneTouchPassingEngine(config: config, trainingMode: mode))
     }
 
     var body: some View {
@@ -73,13 +81,21 @@ struct OneTouchPassingDisplaySessionView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .twoMinuteMessageReceived).receive(on: RunLoop.main)) { notification in
             guard mode == .partner, let msg = notification.object as? TwoMinuteMessage else { return }
+            if blockCoachDrillDuringSessionCountdown && msg.isDrillInteractionFromCoach {
+                #if DEBUG
+                OTPPersistDebug.log("dropped drill message during session countdown (stale/early vs overlay): \(otpMessageKind(msg))")
+                #endif
+                return
+            }
+            #if DEBUG
+            OTPPersistDebug.log("coach message received: \(otpMessageKind(msg))")
+            #endif
             switch msg {
             case .nextRep(let repIndex):
                 #if DEBUG
                 if Self.partnerTransportMode == .relayWebSocket {
-                    guard isRelayCoachPaired else {
-                        otpRelayDisplayLog("incoming nextRep repIndex=\(repIndex) ignored (coach not paired)")
-                        return
+                    if !partnerRelaySession.isCoachPaired {
+                        otpRelayDisplayLog("incoming nextRep repIndex=\(repIndex) while isCoachPaired=false (still applying — relay UI can lag peer_joined)")
                     }
                     otpRelayDisplayLog("incoming nextRep repIndex=\(repIndex)")
                 }
@@ -125,23 +141,44 @@ struct OneTouchPassingDisplaySessionView: View {
                 }
                 #endif
                 break
+            case .partnerTrainingEnded:
+                #if DEBUG
+                if Self.partnerTransportMode == .relayWebSocket {
+                    otpRelayDisplayLog("partnerTrainingEnded received (coordinator also tears down relay)")
+                }
+                #endif
+                break
             }
         }
         .onChange(of: engine.phase) { _, newPhase in
+            #if DEBUG
+            OTPPersistDebug.log("engine.phase -> \(String(describing: newPhase)) | blockCoachDrillDuringSessionCountdown=\(blockCoachDrillDuringSessionCountdown) waitingOverlay=\(shouldShowRelayWaiting) relayCoachPaired=\(partnerRelaySession.isCoachPaired)")
+            #endif
             if case .blockComplete = newPhase {
                 DispatchQueue.main.async { navigateToBlockSummary = true }
             }
-            if case .showingCheck = newPhase { playBeep() }
+            if case .showingCheck = newPhase {
+                #if DEBUG
+                OTPPersistDebug.log("phase showingCheck — playBeep() armed from phase handler")
+                #endif
+                playBeep()
+            }
         }
         .onAppear {
+            #if DEBUG
+            PartnerPersistDebug.log("OneTouchPassingDisplaySessionView onAppear")
+            otpPersistDebugSnapshot("onAppear")
+            #endif
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
             hasSentSessionEnded = false
-            if mode == .partner, Self.partnerTransportMode == .multipeer {
-                connectionManager.startHosting()
+            if mode == .partner {
+                TrainingPartnerConnectionCoordinator.shared.beginPartnerTrainingSessionIfNeeded()
+                if Self.partnerTransportMode == .multipeer {
+                    TrainingPartnerConnectionCoordinator.shared.prepareMultipeerDisplayPartner(connectionManager: connectionManager)
+                }
             }
             #if DEBUG
             if mode == .partner, Self.partnerTransportMode == .relayWebSocket {
-                isRelayCoachPaired = false
                 otpRelayDisplayLog("relay pipeline starting (POST /v1/sessions + WebSocket display)")
                 partnerRelaySession.onCoachPairingChanged = { [partnerRelaySession] connected in
                     if connected {
@@ -154,9 +191,8 @@ struct OneTouchPassingDisplaySessionView: View {
                             otpRelayDisplayLog("coach peer_left")
                         }
                     }
-                    isRelayCoachPaired = connected
                 }
-                Task { await partnerRelaySession.startDisplaySession() }
+                Task { await TrainingPartnerConnectionCoordinator.shared.prepareRelayDisplayForActivity() }
             }
             #endif
             activateAudioSession()
@@ -172,6 +208,10 @@ struct OneTouchPassingDisplaySessionView: View {
             }
         }
         .onDisappear {
+            #if DEBUG
+            PartnerPersistDebug.log("OneTouchPassingDisplaySessionView onDisappear")
+            otpPersistDebugSnapshot("onDisappear")
+            #endif
             if mode == .partner {
                 teardownPartnerTransportWhenSessionSuspends()
             }
@@ -181,10 +221,10 @@ struct OneTouchPassingDisplaySessionView: View {
             if newPhase == .background { engine.applicationDidEnterBackground() }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
-            schedulePartnerTeardownFromBackgroundNotification()
+            schedulePartnerSuspendForBackgroundNotification()
         }
         .onReceive(NotificationCenter.default.publisher(for: UIScene.didEnterBackgroundNotification)) { _ in
-            schedulePartnerTeardownFromBackgroundNotification()
+            schedulePartnerSuspendForBackgroundNotification()
         }
         .onChange(of: connectionManager.connectedPeerName) { _, name in
             guard mode == .partner, Self.partnerTransportMode == .multipeer, name != nil else { return }
@@ -220,12 +260,24 @@ struct OneTouchPassingDisplaySessionView: View {
                         await MainActor.run { CurrentSessionStore.shared.clear() }
                     }
                 }
-                router.popToRoot()
+                router.popToRoot(endingPartnerSession: false)
             }
         } message: {
             Text("Your current block will not be saved.")
         }
-        .sessionCountdown(waitForPartnerReady: mode == .partner, partnerReady: partnerReadyForCountdown)
+        .sessionCountdown(waitForPartnerReady: mode == .partner, partnerReady: partnerReadyForCountdown, suppressCoachMessagesDuringCountdown: $blockCoachDrillDuringSessionCountdown)
+        #if DEBUG
+        .onChange(of: blockCoachDrillDuringSessionCountdown) { _, on in
+            OTPPersistDebug.log("blockCoachDrillDuringSessionCountdown=\(on) (session 3–2–1–Go overlay \(on ? "visible — drill messages suppressed" : "cleared after Go"))")
+        }
+        .onChange(of: partnerRelaySession.isCoachPaired) { _, paired in
+            otpPersistDebugSnapshot("relay isCoachPaired=\(paired)")
+        }
+        .onChange(of: connectionManager.connectedPeerName) { _, name in
+            guard mode == .partner, Self.partnerTransportMode == .multipeer else { return }
+            otpPersistDebugSnapshot("multipeer connectedPeerName=\(name ?? "nil")")
+        }
+        #endif
     }
 
     private var canVolumeTrigger: Bool {
@@ -268,7 +320,7 @@ struct OneTouchPassingDisplaySessionView: View {
     }
 
     private var shouldShowRelayWaiting: Bool {
-        mode == .partner && Self.partnerTransportMode == .relayWebSocket && !isRelayCoachPaired
+        mode == .partner && Self.partnerTransportMode == .relayWebSocket && !partnerRelaySession.isCoachPaired
     }
 
     /// Partner: countdown only after coach is connected (Multipeer) or paired on relay. Solo: always ready.
@@ -278,7 +330,7 @@ struct OneTouchPassingDisplaySessionView: View {
         case .multipeer:
             return connectionManager.connectedPeerName != nil
         case .relayWebSocket:
-            return isRelayCoachPaired
+            return partnerRelaySession.isCoachPaired
         }
     }
 
@@ -288,7 +340,7 @@ struct OneTouchPassingDisplaySessionView: View {
         if Self.partnerTransportMode == .relayWebSocket {
             return PartnerRelayDisplayUI.statusConnectionState(
                 socketState: partnerRelaySession.socketConnectionState,
-                isCoachPairedWithRelay: isRelayCoachPaired
+                isCoachPairedWithRelay: partnerRelaySession.isCoachPaired
             )
         }
         #endif
@@ -297,7 +349,7 @@ struct OneTouchPassingDisplaySessionView: View {
 
     private var repCountOverlay: some View {
         Group {
-            if mode != .partner || Self.partnerTransportMode != .relayWebSocket || isRelayCoachPaired {
+            if mode != .partner || Self.partnerTransportMode != .relayWebSocket || partnerRelaySession.isCoachPaired {
                 VStack {
                     HStack {
                         Text(repCountText)
@@ -328,9 +380,12 @@ struct OneTouchPassingDisplaySessionView: View {
     private func exitLogOverlay(repIndex: Int) -> some View {
         VStack {
             Spacer()
-            Text("Tap your pass direction")
+            Text(ActivityDisplaySessionCopy.tapOneTouchPassing)
                 .font(.subheadline.weight(.semibold))
                 .foregroundColor(.white.opacity(0.95))
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 16)
             HStack(spacing: 20) {
                 Button { logExit(repIndex: repIndex, gate: .up) } label: {
                     Image(systemName: "arrow.up")
@@ -458,6 +513,29 @@ struct OneTouchPassingDisplaySessionView: View {
     private func otpRelayDisplayLog(_ message: String) {
         print("[RelayWS-DEBUG][OTP Display] \(message)")
     }
+
+    private func otpPersistDebugSnapshot(_ tag: String) {
+        let sessionActive = TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive
+        let paired = partnerRelaySession.isCoachPaired
+        let waiting = shouldShowRelayWaiting
+        let ready = partnerReadyForCountdown
+        let block = blockCoachDrillDuringSessionCountdown
+        let phase = String(describing: engine.phase)
+        OTPPersistDebug.log("\(tag) | partnerTrainingSessionActive=\(sessionActive) relayCoachPaired=\(paired) otpThinksCoachPaired(relay)=\(paired) partnerReadyForCountdown=\(ready) waitingForCoachOverlay=\(waiting) reason=\(waiting ? "!isCoachPaired (relay)" : "paired or not relay") blockCoachDrillDuringSessionCountdown=\(block) phase=\(phase)")
+    }
+
+    private func otpMessageKind(_ msg: TwoMinuteMessage) -> String {
+        switch msg {
+        case .nextRep(let i): return "nextRep(\(i))"
+        case .passTriggered(let i, _): return "passTriggered(\(i))"
+        case .exitLogged(let i, let g, _): return "exitLogged(\(i),\(g))"
+        case .firstTouchLogged(let i, let g, _): return "firstTouchLogged(\(i),\(g))"
+        case .incorrectDecision(let i, _): return "incorrectDecision(\(i))"
+        case .coachPaired(let sid): return "coachPaired(\(sid))"
+        case .sessionEnded: return "sessionEnded"
+        case .partnerTrainingEnded: return "partnerTrainingEnded"
+        }
+    }
     #endif
 
     private func activateAudioSession() {
@@ -486,6 +564,9 @@ struct OneTouchPassingDisplaySessionView: View {
     }
 
     private func playBeep() {
+        #if DEBUG
+        OTPPersistDebug.log("playBeep() executing (CHECK cue)")
+        #endif
         DispatchQueue.main.async {
             self.activateAudioSession()
             PBABeepSoundManager.shared.play(soundEnabled: settingsViewModel.soundEnabled)
@@ -505,8 +586,20 @@ struct OneTouchPassingDisplaySessionView: View {
         connectionManager.sendTwoMinuteMessage(.sessionEnded(timestamp: Date()))
     }
 
+    /// **Do not** send ``sessionEnded`` while persisting — that message tells the coach app to clear the join session and return to the hub.
     private func teardownPartnerTransportWhenSessionSuspends() {
         guard mode == .partner else { return }
+        if TrainingPartnerConnectionCoordinator.shared.shouldPersistPartnerPairing {
+            #if DEBUG
+            if Self.partnerTransportMode == .relayWebSocket {
+                otpRelayDisplayLog("persist partner pairing — skip sessionEnded + relay tearDown (Home / next activity)")
+            }
+            if Self.partnerTransportMode == .multipeer {
+                print("[Multipeer] TrainingPartnerSession: display onDisappear — skip sessionEnded + stopHosting (training session active)")
+            }
+            #endif
+            return
+        }
         sendSessionEndedIfNeeded()
         #if DEBUG
         if Self.partnerTransportMode == .relayWebSocket {
@@ -519,16 +612,16 @@ struct OneTouchPassingDisplaySessionView: View {
         }
     }
 
-    private func schedulePartnerTeardownFromBackgroundNotification() {
+    private func schedulePartnerSuspendForBackgroundNotification() {
         guard mode == .partner else { return }
         var backgroundTaskId: UIBackgroundTaskIdentifier = .invalid
-        backgroundTaskId = UIApplication.shared.beginBackgroundTask(withName: "OTPDisplayPartnerTeardown") {
+        backgroundTaskId = UIApplication.shared.beginBackgroundTask(withName: "OTPDisplayPartnerSuspend") {
             if backgroundTaskId != .invalid {
                 UIApplication.shared.endBackgroundTask(backgroundTaskId)
                 backgroundTaskId = .invalid
             }
         }
-        teardownPartnerTransportWhenSessionSuspends()
+        TrainingPartnerConnectionCoordinator.shared.suspendPartnerSessionForBackground()
         if backgroundTaskId != .invalid {
             UIApplication.shared.endBackgroundTask(backgroundTaskId)
         }

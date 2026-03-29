@@ -2,9 +2,10 @@
 //  DebugMenuView.swift
 //  FootballScanningAI
 //
-//  Tester mode: shown as a route from Home (toolbar "Tester Tools" button). Not the app root.
-//  Includes PBA beep sound A/B test selector.
+//  Tester Tools: DEBUG-only. Route from Home toolbar; includes PBA beep A/B selector. Stripped from Release/TestFlight.
 //
+
+#if DEBUG
 
 import SwiftUI
 import Combine
@@ -14,7 +15,7 @@ struct DebugMenuView: View {
     @ObservedObject var profileManager: UserProfileManager
     @ObservedObject var settingsViewModel: SettingsViewModel
     @EnvironmentObject private var router: AppRouter
-    @AppStorage(PBABeepSoundManager.selectedBeepStorageKey) private var selectedBeepSound: String = "A"
+    @AppStorage(PBABeepSoundManager.selectedBeepStorageKey) private var selectedBeepSound: String = PBABeepSoundManager.defaultSelectedBeepRawValue
 
     var body: some View {
         List {
@@ -60,3 +61,5 @@ struct DebugMenuView: View {
         }
     }
 }
+
+#endif

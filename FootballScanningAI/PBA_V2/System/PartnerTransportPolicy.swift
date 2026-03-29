@@ -7,8 +7,8 @@
 
 import Foundation
 
-/// Central policy for partner session transport. Partner screens should read ``transportMode(for:)``
-/// instead of duplicating `#if DEBUG` / Release switches per activity.
+/// Central policy for partner session transport. Partner screens should read ``transportMode(for:trainingMode:)``
+/// (display) or ``coachRemoteTransportMode`` (phone Coach Remote) instead of duplicating per-activity transport switches.
 enum PartnerTransportPolicy {
 
     /// PBA partner activities that participate in shared transport rollout.
@@ -19,15 +19,11 @@ enum PartnerTransportPolicy {
         case oneTouchPassing
     }
 
-    /// Which ``SessionTransportMode`` to use for the given partner activity.
-    ///
-    /// **Current behavior:** DEBUG builds use relay WebSocket; Release uses Multipeer.
-    /// Per-activity branches can diverge here later (e.g. feature flags, Remote Config) without touching drill UI.
-    static func transportMode(for activity: PartnerActivity) -> SessionTransportMode {
-        #if DEBUG
-        return .relayWebSocket
-        #else
-        return .multipeer
-        #endif
+    /// Transport for the **display** session: Partner and Wall use relay; Solo has no phone↔iPad session (Multipeer value is unused).
+    static func transportMode(for _: PartnerActivity, trainingMode: TrainingMode) -> SessionTransportMode {
+        trainingMode.requiresPhoneDisplayRelay ? .relayWebSocket : .multipeer
     }
+
+    /// Phone **Coach Remote** always joins the display via relay when logging from the phone.
+    static let coachRemoteTransportMode: SessionTransportMode = .relayWebSocket
 }

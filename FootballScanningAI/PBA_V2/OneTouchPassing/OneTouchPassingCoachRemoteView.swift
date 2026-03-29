@@ -23,21 +23,15 @@ struct OneTouchPassingCoachRemoteView: View {
     @State private var didNavigateBackToCoachHubAfterDisplayDisconnect = false
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
-    private static let partnerTransportMode = PartnerTransportPolicy.transportMode(for: .oneTouchPassing)
+    private static let partnerTransportMode = PartnerTransportPolicy.coachRemoteTransportMode
 
-    #if DEBUG
     @ObservedObject private var relaySharedRemoteService = TrainingPartnerConnectionCoordinator.shared.coachRelayRemoteService
-    #endif
     @StateObject private var multipeerRemoteService = RemoteService(transport: TwoMinuteSessionTransport.makeInitial(for: .multipeer))
 
     private var remoteService: RemoteService {
         switch Self.partnerTransportMode {
         case .relayWebSocket:
-            #if DEBUG
             return relaySharedRemoteService
-            #else
-            return multipeerRemoteService
-            #endif
         case .multipeer:
             return multipeerRemoteService
         }
@@ -117,11 +111,9 @@ struct OneTouchPassingCoachRemoteView: View {
             if Self.partnerTransportMode == .multipeer {
                 TrainingPartnerConnectionCoordinator.shared.prepareMultipeerCoachRemote(connectionManager: connectionManager)
             }
-            #if DEBUG
             if Self.partnerTransportMode == .relayWebSocket {
                 attemptCoachRelayAutoReconnectIfNeeded()
             }
-            #endif
         }
         .onDisappear {
             #if DEBUG
@@ -319,7 +311,6 @@ struct OneTouchPassingCoachRemoteView: View {
 
     private var connectionSection: some View {
         Group {
-            #if DEBUG
             if Self.partnerTransportMode == .relayWebSocket {
                 VStack(spacing: 20) {
                     Text("Rep \(currentRepIndex + 1) of \(totalReps)")
@@ -344,9 +335,6 @@ struct OneTouchPassingCoachRemoteView: View {
             } else {
                 multipeerConnectionScrollContent
             }
-            #else
-            multipeerConnectionScrollContent
-            #endif
         }
     }
 
@@ -412,7 +400,12 @@ struct OneTouchPassingCoachRemoteView: View {
         .padding(.top, 60)
     }
 
-    #if DEBUG
+    private func otpCoachRelayLog(_ message: String) {
+        #if DEBUG
+        print("[RelayWS-DEBUG][OTP Coach] \(message)")
+        #endif
+    }
+
     private func startOTPCoachRelayJoin() async {
         let code = coachRelayJoinCodeInput.trimmingCharacters(in: .whitespacesAndNewlines)
         otpCoachRelayLog("join HTTP: start joinCode=\(code)")
@@ -438,7 +431,6 @@ struct OneTouchPassingCoachRemoteView: View {
             let displayPeerJoinedBinding = $coachRelayDisplayPeerJoined
             let remote = remoteService
             transport.onRawTextReceived = { text in
-                #if DEBUG
                 if text.contains("peer_joined") {
                     otpCoachRelayLog("peer_joined detected (raw frame)")
                     Task { @MainActor in
@@ -454,7 +446,6 @@ struct OneTouchPassingCoachRemoteView: View {
                         CoachPersistDebug.log("peer_left — after remote.disconnect", joinField: "", peerJoined: false)
                     }
                 }
-                #endif
             }
 
             otpCoachRelayLog("RemoteService.replaceTransport + connect()")
@@ -497,10 +488,6 @@ struct OneTouchPassingCoachRemoteView: View {
         }
     }
 
-    private func otpCoachRelayLog(_ message: String) {
-        print("[RelayWS-DEBUG][OTP Coach] \(message)")
-    }
-
     private func attemptCoachRelayAutoReconnectIfNeeded() {
         guard !didAttemptCoachRelayAutoReconnect else { return }
         let coord = TrainingPartnerConnectionCoordinator.shared
@@ -516,7 +503,6 @@ struct OneTouchPassingCoachRemoteView: View {
         CoachPersistDebug.log("auto-reconnect starting with stored join code", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
         Task { await startOTPCoachRelayJoin() }
     }
-    #endif
 
     private var volumeTriggerOverlay: some View {
         CoachRemoteVolumeTriggerView(

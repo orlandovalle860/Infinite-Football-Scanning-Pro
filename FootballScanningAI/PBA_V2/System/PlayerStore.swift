@@ -19,14 +19,43 @@ final class PlayerStore: ObservableObject {
     private let playersKey = "pba_players_v1"
     private let selectedKey = "pba_selected_player_v1"
     private let lastSelectedKey = "pba_last_selected_player_v1"
+    /// Same keys as `UserProfileManager` — used to heal when `pba_players_v1` is empty but profiles still exist.
+    private let userProfilesKey = "userProfiles"
+    private let currentProfileIdKey = "currentProfileId"
+
+    /// Load synchronously so the first SwiftUI frame sees saved players (avoids a flash of Intro when data exists).
+    init() {
+        load()
+    }
 
     func load() {
+        var healedFromUserProfiles = false
         if let data = UserDefaults.standard.data(forKey: playersKey),
            let decoded = try? JSONDecoder().decode([Player].self, from: data) {
             players = decoded
+#if DEBUG
+            print("[Profiles] source=local persisted UserDefaults \(playersKey) playerCount=\(players.count)")
+#endif
         } else {
             players = []
+#if DEBUG
+            print("[Profiles] source=local no \(playersKey) data — starting with empty player list")
+#endif
         }
+
+        // If the player list file is missing but `UserProfileManager` data remains, mirror profiles into
+        // `PlayerStore` so root routing does not briefly show Intro before `onAppear` / Supabase hydration.
+        if players.isEmpty,
+           let profileData = UserDefaults.standard.data(forKey: userProfilesKey),
+           let loadedProfiles = try? JSONDecoder().decode([UserProfile].self, from: profileData),
+           !loadedProfiles.isEmpty {
+            players = loadedProfiles.map { Player(id: $0.id, name: $0.name, createdAt: $0.dateCreated) }
+            healedFromUserProfiles = true
+#if DEBUG
+            print("[Profiles] source=local healed PlayerStore from \(userProfilesKey) count=\(players.count)")
+#endif
+        }
+
         if let uuidString = UserDefaults.standard.string(forKey: lastSelectedKey),
            let uuid = UUID(uuidString: uuidString) {
             selectedPlayerId = players.contains(where: { $0.id == uuid }) ? uuid : players.first?.id
@@ -34,8 +63,17 @@ final class PlayerStore: ObservableObject {
                   let uuid = UUID(uuidString: uuidString) {
             // Backward compatibility with older selection key.
             selectedPlayerId = players.contains(where: { $0.id == uuid }) ? uuid : players.first?.id
+        } else if healedFromUserProfiles,
+                  let idString = UserDefaults.standard.string(forKey: currentProfileIdKey),
+                  let uuid = UUID(uuidString: idString),
+                  players.contains(where: { $0.id == uuid }) {
+            selectedPlayerId = uuid
         } else {
             selectedPlayerId = players.first?.id
+        }
+
+        if healedFromUserProfiles {
+            persist()
         }
     }
 

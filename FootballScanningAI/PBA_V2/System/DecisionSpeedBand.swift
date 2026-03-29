@@ -46,12 +46,13 @@ enum DecisionSpeedBand {
     }
 
     /// Base classification from decision window only (balanced profile).
+    /// Thresholds shifted with `DecisionTimingModel` ~10 yd travel (same semantics as pre–10 yd bands).
     static func band(forDecisionWindow windowSeconds: Double?) -> DecisionSpeedBand? {
         guard let w = windowSeconds else { return nil }
-        if w >= 0.25 { return .elite }
-        if w >= 0.10 { return .advanced }
-        if w >= 0.00 { return .competent }
-        if w >= -0.10 { return .late }
+        if w >= 0.68 { return .elite }
+        if w >= 0.53 { return .advanced }
+        if w >= 0.43 { return .competent }
+        if w >= 0.33 { return .late }
         return .reactive
     }
 
@@ -67,16 +68,16 @@ enum DecisionSpeedBand {
         switch activity {
         case .awayFromPressure:
             // AFP: slightly more forgiving timing; correctness primary.
-            thresholds = (0.18, 0.06, -0.03, -0.12)
+            thresholds = (0.59, 0.47, 0.38, 0.29)
         case .dribbleOrPass:
             // DOP: balanced, slightly stricter than AFP.
-            thresholds = (0.22, 0.08, -0.02, -0.12)
+            thresholds = (0.67, 0.53, 0.43, 0.33)
         case .oneTouchPassing:
             // OTP: timing-primary.
-            thresholds = (0.22, 0.10, 0.00, -0.08)
+            thresholds = (0.61, 0.49, 0.39, 0.31)
         case .twoMinuteTest:
             // 2-min baseline: balanced.
-            thresholds = (0.20, 0.08, -0.02, -0.10)
+            thresholds = (0.63, 0.51, 0.41, 0.33)
         }
 
         var band: DecisionSpeedBand

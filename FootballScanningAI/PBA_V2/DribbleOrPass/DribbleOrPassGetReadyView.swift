@@ -29,7 +29,9 @@ struct DribbleOrPassGetReadyView: View {
         switch mode {
         case .partner:
             return "Tap Begin for directions, then Start Block. Coach stands about 10 yards away from the player. On Display, partner setup runs first; countdown starts after the coach connects."
-        case .solo, .wall:
+        case .wall:
+            return "Tap Begin for directions, then Start Block. Log from the phone: the Display shows a join code—enter it on the phone to pair with this iPad. Countdown starts after the phone connects."
+        case .solo:
             return "Tap Begin for directions, then Start Block. You’ll get a short countdown, then your block begins."
         }
     }

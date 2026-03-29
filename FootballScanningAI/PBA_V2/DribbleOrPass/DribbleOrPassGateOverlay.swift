@@ -10,6 +10,8 @@ import SwiftUI
 struct DribbleOrPassGateOverlay: View {
     let gate: Gate
     let content: DribbleOrPassGateContent
+    /// Matches ``WedgeDifficultyEngine`` / Playing Away From Pressure red wedge sizing.
+    var wedgeStyle: WedgeCueStyle = WedgeCueStyle.style(for: 1)
     var laneSpan: CGFloat = 0.70
     var insetFraction: CGFloat = 0.22
 
@@ -18,7 +20,7 @@ struct DribbleOrPassGateOverlay: View {
             if content == .open {
                 Color.clear
             } else if content == .opponent {
-                DangerZoneOverlay(gate: gate)
+                DangerZoneOverlay(gate: gate, style: wedgeStyle)
             } else {
                 GeometryReader { geo in
                     let w = geo.size.width

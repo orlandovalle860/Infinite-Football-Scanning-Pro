@@ -41,7 +41,7 @@ struct AwayFromPressureSetupView: View {
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.9))
                 if mode == .partner {
-                    Text("• Coach stands 5–7 yards in front with the ball.")
+                    Text("• Coach stands about 10 yards in front with the ball.")
                         .font(.subheadline)
                         .foregroundColor(.white.opacity(0.9))
                 }

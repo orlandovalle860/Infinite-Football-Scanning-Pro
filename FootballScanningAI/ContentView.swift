@@ -399,11 +399,8 @@ struct PostAuthView: View {
                     let list = try await SupabasePlayerService.shared.fetchPlayersForCurrentUser()
                     await MainActor.run {
                         hasFetched = true
-                        if list.isEmpty {
-                            showCreatePlayer = true
-                        } else {
-                            hydrateStoresWithFetchedPlayers(list)
-                        }
+                        profileManager.reconcileWithSupabasePlayerList(list, playerStore: playerStore)
+                        showCreatePlayer = profileManager.profiles.isEmpty
                     }
                 } catch {
                     await MainActor.run {
@@ -415,26 +412,6 @@ struct PostAuthView: View {
         }
     }
 
-    private func hydrateStoresWithFetchedPlayers(_ list: [SupabasePlayer]) {
-        let ids = list.compactMap(\.uuid)
-        for p in list {
-            guard let uuid = p.uuid else { continue }
-            if !profileManager.profiles.contains(where: { $0.id == uuid }) {
-                profileManager.addProfileById(uuid, name: p.name)
-            }
-            if !playerStore.players.contains(where: { $0.id == uuid }) {
-                playerStore.addPlayer(id: uuid, name: p.name)
-            }
-        }
-        SupabasePlayerService.shared.markPlayersAsSynced(ids)
-        let preferredId = playerStore.selectedPlayerId ?? profileManager.currentProfile?.id ?? ids.first
-        if let selectedId = preferredId, ids.contains(selectedId),
-           let selectedProfile = profileManager.profile(id: selectedId) {
-            profileManager.switchToProfile(selectedProfile)
-            playerStore.selectedPlayerId = selectedId
-            playerStore.persist()
-        }
-    }
 }
 
 private let coachDeviceShownHomeKey = "coachDeviceShownHome"
@@ -456,11 +433,39 @@ struct MainAppView: View {
     @AppStorage(hasCompletedInitialTestKey) private var hasCompletedInitialTest = false
     @AppStorage(coachDeviceShownHomeKey) private var coachDeviceShownHome = false
 
-    /// Launch: no players → Intro (new user); has players → Home or PlayerSelection.
+    /// After reinstall, local stores are empty but Supabase session may still restore from keychain; players then load asynchronously. Don't flash Intro until we know remote is empty too (signed-in + host).
+    private var shouldWaitForRemoteHydration: Bool {
+        guard Config.isSupabaseConfigured else { return false }
+        guard ConnectionManager.shared.isHost else { return false }
+        guard authManager.currentSession != nil else { return false }
+        guard !hasHydratedPlayersForSession else { return false }
+        return profileManager.profiles.isEmpty && playerStore.players.isEmpty
+    }
+
+    private var launchBootstrapPlaceholder: some View {
+        ZStack {
+            Color(red: 0.05, green: 0.05, blue: 0.1).ignoresSafeArea()
+            ProgressView()
+                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                .scaleEffect(1.2)
+        }
+    }
+
+    /// Launch: auth/bootstrap → Intro until initial test is completed (`hasCompletedInitialTest`) so remote hydration cannot skip first-run; then Home / player pick.
     @ViewBuilder
     private var rootView: some View {
         Group {
-            if playerStore.players.isEmpty {
+            if authManager.isRestoring {
+                launchBootstrapPlaceholder
+            } else if shouldWaitForRemoteHydration {
+                launchBootstrapPlaceholder
+            } else if !hasCompletedInitialTest {
+                // Remote/local may already have players after hydrate; still show first-run until baseline flow marks AppStorage.
+                IntroOnboardingView(
+                    settingsViewModel: settingsViewModel,
+                    profileManager: profileManager
+                )
+            } else if playerStore.players.isEmpty, profileManager.profiles.isEmpty {
                 IntroOnboardingView(
                     settingsViewModel: settingsViewModel,
                     profileManager: profileManager
@@ -485,6 +490,24 @@ struct MainAppView: View {
         .environmentObject(playerStore)
         .environmentObject(popToRootTrigger)
         .environmentObject(router)
+    }
+
+    private func logLaunchRouting(reason: String) {
+        let route: String = {
+            if authManager.isRestoring { return "bootstrap_auth_restoring" }
+            if shouldWaitForRemoteHydration { return "bootstrap_wait_remote_hydration" }
+            if !hasCompletedInitialTest { return "intro_first_run_incomplete_test" }
+            if playerStore.players.isEmpty, profileManager.profiles.isEmpty { return "intro_no_local_identity" }
+            if Config.isSupabaseConfigured, authManager.currentSession != nil, playerStore.selectedPlayerId == nil {
+                return "player_selection"
+            }
+            return "home"
+        }()
+        LaunchProfileDebug.log("app_launch reason=\(reason) route=\(route)")
+        LaunchProfileDebug.log("first_run hasCompletedInitialTest=\(hasCompletedInitialTest)")
+        LaunchProfileDebug.log("session authenticated=\(authManager.currentSession != nil) isRestoring=\(authManager.isRestoring)")
+        LaunchProfileDebug.log("local playerCount=\(playerStore.players.count) profileCount=\(profileManager.profiles.count)")
+        LaunchProfileDebug.log("remote hydrate hasHydratedPlayersForSession=\(hasHydratedPlayersForSession) shouldWaitRemote=\(shouldWaitForRemoteHydration)")
     }
 
     private func refreshCoachingTrainingNudgesIfNeeded() {
@@ -534,11 +557,13 @@ struct MainAppView: View {
             .environmentObject(progressStore)
         }
         .onAppear {
+#if DEBUG
             print("DEBUG SUPABASE_URL:", Bundle.main.object(forInfoDictionaryKey: "SUPABASE_URL") ?? "nil")
             print("DEBUG SUPABASE_ANON_KEY:", Bundle.main.object(forInfoDictionaryKey: "SUPABASE_ANON_KEY") ?? "nil")
+#endif
             print("[Supabase] App main screen appeared — checking config and unsynced sessions.")
             progressStore.load()
-            playerStore.load()
+            // PlayerStore loads persisted players in its init (first frame); no duplicate load() here.
             if let selectedId = playerStore.selectedPlayerId,
                let selectedProfile = profileManager.profile(id: selectedId) {
                 profileManager.switchToProfile(selectedProfile)
@@ -549,7 +574,9 @@ struct MainAppView: View {
                     playerStore.addPlayer(id: current.id, name: current.name)
                 }
             }
+            logLaunchRouting(reason: "MainAppView.onAppear_before_hydrate")
             hydratePlayersIfNeeded()
+            logLaunchRouting(reason: "MainAppView.onAppear_after_hydrate_scheduled")
             // One-time clear of unsynced sessions and pending decisions so old data (outdated schema) is not retried.
             let clearedKey = "SupabaseDidClearUnsyncedQueue"
             if !UserDefaults.standard.bool(forKey: clearedKey) {
@@ -572,9 +599,22 @@ struct MainAppView: View {
         .onReceive(NotificationCenter.default.publisher(for: .coachingTrainingNudgesShouldRefresh)) { _ in
             refreshCoachingTrainingNudgesIfNeeded()
         }
+        .onChange(of: authManager.isRestoring) { _, restoring in
+            if !restoring {
+                logLaunchRouting(reason: "auth_isRestoring_false")
+                hydratePlayersIfNeeded()
+            }
+        }
         .onChange(of: authManager.currentSession != nil) { _, hasSession in
             if !hasSession { hasHydratedPlayersForSession = false }
             else { hydratePlayersIfNeeded() }
+            logLaunchRouting(reason: "session_changed hasSession=\(hasSession)")
+        }
+        .onChange(of: hasHydratedPlayersForSession) { _, v in
+            logLaunchRouting(reason: "hasHydratedPlayersForSession=\(v)")
+        }
+        .onChange(of: hasCompletedInitialTest) { _, v in
+            logLaunchRouting(reason: "hasCompletedInitialTest=\(v)")
         }
         .onReceive(NetworkReachabilityObserver.shared.reachableSubject) { _ in
             SupabaseSessionService.shared.retryPendingSessions(progressStore: progressStore)
@@ -587,42 +627,28 @@ struct MainAppView: View {
 
     /// When signed in, fetch players from Supabase and hydrate stores once per session. If no players, offer Create Player sheet.
     private func hydratePlayersIfNeeded() {
-        guard Config.isSupabaseConfigured, authManager.currentSession != nil, !hasHydratedPlayersForSession else { return }
+        guard Config.isSupabaseConfigured, authManager.currentSession != nil, !hasHydratedPlayersForSession else {
+            LaunchProfileDebug.log("hydrate_skipped supabase=\(Config.isSupabaseConfigured) session=\(authManager.currentSession != nil) alreadyHydrated=\(hasHydratedPlayersForSession)")
+            return
+        }
+        LaunchProfileDebug.log("hydrate_start fetching players for current user")
         Task {
             do {
                 let list = try await SupabasePlayerService.shared.fetchPlayersForCurrentUser()
                 await MainActor.run {
+                    LaunchProfileDebug.log("hydrate_success remoteRowCount=\(list.count) — reconciling local stores")
                     hasHydratedPlayersForSession = true
-                    if list.isEmpty {
-                        showCreatePlayerAfterAuth = true
-                    } else {
-                        hydrateStoresWithFetchedPlayers(list)
-                    }
+                    profileManager.reconcileWithSupabasePlayerList(list, playerStore: playerStore)
+                    showCreatePlayerAfterAuth = profileManager.profiles.isEmpty
+                    logLaunchRouting(reason: "after_reconcile remoteRows=\(list.count) localProfiles=\(profileManager.profiles.count)")
                 }
             } catch {
-                await MainActor.run { hasHydratedPlayersForSession = true }
+                await MainActor.run {
+                    LaunchProfileDebug.log("hydrate_failed error=\(error.localizedDescription)")
+                    hasHydratedPlayersForSession = true
+                    logLaunchRouting(reason: "hydrate_catch")
+                }
             }
-        }
-    }
-
-    private func hydrateStoresWithFetchedPlayers(_ list: [SupabasePlayer]) {
-        let ids = list.compactMap(\.uuid)
-        for p in list {
-            guard let uuid = p.uuid else { continue }
-            if !profileManager.profiles.contains(where: { $0.id == uuid }) {
-                profileManager.addProfileById(uuid, name: p.name)
-            }
-            if !playerStore.players.contains(where: { $0.id == uuid }) {
-                playerStore.addPlayer(id: uuid, name: p.name)
-            }
-        }
-        SupabasePlayerService.shared.markPlayersAsSynced(ids)
-        let preferredId = playerStore.selectedPlayerId ?? profileManager.currentProfile?.id ?? ids.first
-        if let selectedId = preferredId, ids.contains(selectedId),
-           let selectedProfile = profileManager.profile(id: selectedId) {
-            profileManager.switchToProfile(selectedProfile)
-            playerStore.selectedPlayerId = selectedId
-            playerStore.persist()
         }
     }
 
@@ -806,9 +832,11 @@ struct MainAppView: View {
                     .environmentObject(playerStore)
                     .environmentObject(router)
             }
+#if DEBUG
         case .debugMenu:
             DebugMenuView(profileManager: profileManager, settingsViewModel: settingsViewModel)
                 .environmentObject(router)
+#endif
         }
     }
 }
@@ -827,7 +855,7 @@ struct IntroOnboardingView: View {
         ScrollView {
             VStack(spacing: 24) {
                 Spacer(minLength: 32)
-                Text("Do you know your next action before you receive the ball?")
+                Text("Do you know what you'll do before the ball gets to you?")
                     .font(.system(size: 26, weight: .bold, design: .rounded))
                     .foregroundColor(.white)
                     .multilineTextAlignment(.center)
@@ -1474,6 +1502,7 @@ struct IntroView: View {
         .navigationTitle("Home")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+#if DEBUG
             if AppConfig.testerMode {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Tester Tools") {
@@ -1482,6 +1511,7 @@ struct IntroView: View {
                     .foregroundColor(.white.opacity(0.9))
                 }
             }
+#endif
         }
         .alert(snapshotMetricInfoToShow?.title ?? "", isPresented: Binding(
             get: { snapshotMetricInfoToShow != nil },
@@ -1965,6 +1995,7 @@ struct IntroView: View {
 #endif
     }
 
+#if DEBUG
     private func resetCurriculumForSelectedPlayer() {
         guidedProgress = GuidedCurriculumEngine.resetCurriculumForPlayer(
             playerId: playerId,
@@ -1972,6 +2003,7 @@ struct IntroView: View {
         )
         refreshGuidedProgress()
     }
+#endif
 
     /// 1. Current Focus card (top): single dominant guided CTA with stage + path context.
     private var dailyGoalCard: some View {
@@ -3292,8 +3324,6 @@ struct TwoMinuteTestSetupView: View {
     @EnvironmentObject private var playerStore: PlayerStore
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
     @EnvironmentObject private var router: AppRouter
-    @AppStorage("hasSeenTwoMinuteOnboarding") private var hasSeenTwoMinuteOnboarding = false
-    @State private var showOnboarding = false
     @State private var navigateToGetReady = false
 
     var body: some View {
@@ -3314,7 +3344,7 @@ struct TwoMinuteTestSetupView: View {
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.9))
                 if mode == .partner {
-                    Text("• Coach stands 5–7 yards in front with the ball.")
+                    Text("• Coach stands about 10 yards in front with the ball.")
                         .font(.subheadline)
                         .foregroundColor(.white.opacity(0.9))
                 }
@@ -3364,15 +3394,6 @@ struct TwoMinuteTestSetupView: View {
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
-        }
-        .onAppear {
-            if !hasSeenTwoMinuteOnboarding { showOnboarding = true }
-        }
-        .sheet(isPresented: $showOnboarding) {
-            TwoMinuteOnboardingView {
-                hasSeenTwoMinuteOnboarding = true
-                showOnboarding = false
-            }
         }
     }
 }

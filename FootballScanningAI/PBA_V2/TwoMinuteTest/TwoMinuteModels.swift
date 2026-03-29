@@ -145,3 +145,22 @@ extension TwoMinuteMessage {
         }
     }
 }
+
+/// While ``SessionCountdownModifier`` suppresses coach drill messages, `nextRep` is **queued** instead of dropped so the
+/// first tap after pairing still starts the rep once “Go” finishes (otherwise the beep/timer never arms).
+enum PartnerCountdownCoachMessagePolicy {
+    /// Returns `true` if the message must not be applied to the engine yet (countdown overlay is blocking drill traffic).
+    ///
+    /// The latest `nextRep` index is stored in `pendingNextRepIndex` so it can be flushed when the overlay dismisses.
+    static func shouldDeferWhileCountdown(
+        msg: TwoMinuteMessage,
+        isBlockingDrillMessagesFromCoach: Bool,
+        pendingNextRepIndex: inout Int?
+    ) -> Bool {
+        guard isBlockingDrillMessagesFromCoach, msg.isDrillInteractionFromCoach else { return false }
+        if case .nextRep(let idx) = msg {
+            pendingNextRepIndex = idx
+        }
+        return true
+    }
+}

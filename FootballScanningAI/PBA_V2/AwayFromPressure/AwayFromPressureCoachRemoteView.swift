@@ -24,21 +24,15 @@ struct AwayFromPressureCoachRemoteView: View {
     @State private var didNavigateBackToCoachHubAfterDisplayDisconnect = false
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
-    private static let partnerTransportMode = PartnerTransportPolicy.transportMode(for: .awayFromPressure)
+    private static let partnerTransportMode = PartnerTransportPolicy.coachRemoteTransportMode
 
-    #if DEBUG
     @ObservedObject private var relaySharedRemoteService = TrainingPartnerConnectionCoordinator.shared.coachRelayRemoteService
-    #endif
     @StateObject private var multipeerRemoteService = RemoteService(transport: TwoMinuteSessionTransport.makeInitial(for: .multipeer))
 
     private var remoteService: RemoteService {
         switch Self.partnerTransportMode {
         case .relayWebSocket:
-            #if DEBUG
             return relaySharedRemoteService
-            #else
-            return multipeerRemoteService
-            #endif
         case .multipeer:
             return multipeerRemoteService
         }
@@ -121,11 +115,9 @@ struct AwayFromPressureCoachRemoteView: View {
             if Self.partnerTransportMode == .multipeer {
                 TrainingPartnerConnectionCoordinator.shared.prepareMultipeerCoachRemote(connectionManager: connectionManager)
             }
-            #if DEBUG
             if Self.partnerTransportMode == .relayWebSocket {
                 attemptCoachRelayAutoReconnectIfNeeded()
             }
-            #endif
         }
         .onDisappear {
             #if DEBUG
@@ -351,7 +343,6 @@ struct AwayFromPressureCoachRemoteView: View {
 
     private var connectionSection: some View {
         Group {
-            #if DEBUG
             if Self.partnerTransportMode == .relayWebSocket {
                 VStack(spacing: 20) {
                     Text("Rep \(currentRepIndex + 1) of \(totalReps)")
@@ -376,9 +367,6 @@ struct AwayFromPressureCoachRemoteView: View {
             } else {
                 multipeerConnectionScrollContent
             }
-            #else
-            multipeerConnectionScrollContent
-            #endif
         }
     }
 
@@ -457,7 +445,12 @@ struct AwayFromPressureCoachRemoteView: View {
         .padding(.top, 60)
     }
 
-    #if DEBUG
+    private func afpCoachRelayLog(_ message: String) {
+        #if DEBUG
+        print("[RelayWS-DEBUG][AFP Coach] \(message)")
+        #endif
+    }
+
     private func startAFPCoachRelayJoin() async {
         let code = coachRelayJoinCodeInput.trimmingCharacters(in: .whitespacesAndNewlines)
         afpCoachRelayLog("join HTTP: start joinCode=\(code)")
@@ -483,7 +476,6 @@ struct AwayFromPressureCoachRemoteView: View {
             let displayPeerJoinedBinding = $coachRelayDisplayPeerJoined
             let remote = remoteService
             transport.onRawTextReceived = { text in
-                #if DEBUG
                 if text.contains("peer_joined") {
                     afpCoachRelayLog("peer_joined detected (raw frame)")
                     Task { @MainActor in
@@ -499,7 +491,6 @@ struct AwayFromPressureCoachRemoteView: View {
                         CoachPersistDebug.log("peer_left — after remote.disconnect", joinField: "", peerJoined: false)
                     }
                 }
-                #endif
             }
 
             afpCoachRelayLog("RemoteService.replaceTransport + connect()")
@@ -542,10 +533,6 @@ struct AwayFromPressureCoachRemoteView: View {
         }
     }
 
-    private func afpCoachRelayLog(_ message: String) {
-        print("[RelayWS-DEBUG][AFP Coach] \(message)")
-    }
-
     /// After navigating hub → another activity coach screen, HTTP re-join with the last successful code if the shared socket is not connected.
     private func attemptCoachRelayAutoReconnectIfNeeded() {
         guard !didAttemptCoachRelayAutoReconnect else { return }
@@ -562,7 +549,6 @@ struct AwayFromPressureCoachRemoteView: View {
         CoachPersistDebug.log("auto-reconnect starting with stored join code", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
         Task { await startAFPCoachRelayJoin() }
     }
-    #endif
 
     /// Volume trigger enabled during the PASS (trigger) step so a mistaken tap doesn’t disable volume for the rest of the rep.
     private var volumeTriggerOverlay: some View {

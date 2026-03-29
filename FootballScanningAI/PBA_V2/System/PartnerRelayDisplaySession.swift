@@ -27,11 +27,7 @@ final class PartnerRelayDisplaySession: ObservableObject {
 
     /// True when the relay WebSocket is fully established (not just in-flight).
     var isRelaySocketConnected: Bool {
-        #if DEBUG
         socketConnectionState == .connected
-        #else
-        false
-        #endif
     }
 
     #if DEBUG
@@ -41,31 +37,32 @@ final class PartnerRelayDisplaySession: ObservableObject {
 
     /// True when an in-flight or live relay exists (reuse same join code across activity transitions).
     private var hasActiveRelayInFlightOrLive: Bool {
-        #if DEBUG
         switch socketConnectionState {
         case .connected, .connecting, .searching: return true
         case .disconnected: return false
         }
-        #else
-        return false
-        #endif
     }
 
-    /// Starts HTTP create + WebSocket connect for display. No-op in non-DEBUG builds.
+    /// Starts HTTP create + WebSocket connect for display.
     func startDisplaySession() async {
         #if DEBUG
         print("[RelayWS-DEBUG] PartnerRelayDisplaySession.startDisplaySession entered")
+        #endif
         do {
             let created = try await WebSocketSessionAPI.createSession()
             await MainActor.run {
                 joinCode = created.joinCode
             }
+            #if DEBUG
             print("[RelayWS-DEBUG] session creation OK sessionId=\(created.sessionId)")
             print("[RelayWS-DEBUG] joinCode=\(created.joinCode) (share with coach for relay join)")
             print("[RelayWS-DEBUG] wsUrl(base)=\(created.wsUrl) expiresAt=\(created.expiresAt ?? "nil")")
+            #endif
 
             let wsURL = try created.webSocketURLForDisplay()
+            #if DEBUG
             print("[RelayWS-DEBUG] WebSocket URL (with query)=\(wsURL.absoluteString)")
+            #endif
 
             let config = WebSocketSessionConfig(url: wsURL, sessionId: created.sessionId, authToken: created.displayToken)
             let newTransport = WebSocketRemoteTransport(config: config)
@@ -75,6 +72,7 @@ final class PartnerRelayDisplaySession: ObservableObject {
                     guard let self = self else { return }
                     self.applySocketConnectionState(state)
                 }
+                #if DEBUG
                 switch state {
                 case .searching:
                     print("[RelayWS-DEBUG] connection state: searching")
@@ -85,25 +83,31 @@ final class PartnerRelayDisplaySession: ObservableObject {
                 case .disconnected:
                     print("[RelayWS-DEBUG] connection state: disconnected")
                 }
+                #endif
             }
             newTransport.onRawTextReceived = { [weak self] text in
+                #if DEBUG
                 print("[RelayWS-DEBUG] received raw: \(text)")
+                #endif
                 self?.handleRawRelayText(text)
             }
 
             await MainActor.run {
                 transport = newTransport
+                #if DEBUG
                 print("[RelayWS-DEBUG] calling connect()")
+                #endif
                 newTransport.connect()
             }
         } catch {
+            #if DEBUG
             print("[RelayWS-DEBUG] relay session/WebSocket setup failed: \(error)")
+            #endif
             await MainActor.run {
                 joinCode = nil
                 transport = nil
             }
         }
-        #endif
     }
 
     /// Reuses an existing relay session when we already have a join code and transport (training session pairing).
@@ -113,18 +117,21 @@ final class PartnerRelayDisplaySession: ObservableObject {
     /// Otherwise a fast activity switch can POST a second `/v1/sessions` and show a new join code while the coach
     /// is still on the first code.
     func startDisplaySessionIfNeeded() async {
-        #if DEBUG
         if let t = transport, joinCode != nil {
             if hasActiveRelayInFlightOrLive {
+                #if DEBUG
                 print("[RelayWS-DEBUG] PartnerRelayDisplaySession.startDisplaySessionIfNeeded — reusing active relay (socket=\(socketConnectionState.rawValue), same join code)")
                 PartnerPersistDebug.log("startDisplaySessionIfNeeded → reuse existing relay (socket active/in-flight)")
+                #endif
                 return
             }
             if socketConnectionState == .disconnected {
                 await MainActor.run {
+                    #if DEBUG
                     print("[RelayWS-DEBUG] PartnerRelayDisplaySession.startDisplaySessionIfNeeded — reconnecting existing transport (same join code, was disconnected)")
-                    t.connect()
                     PartnerPersistDebug.log("startDisplaySessionIfNeeded → reconnect existing transport (was disconnected)")
+                    #endif
+                    t.connect()
                 }
                 return
             }
@@ -133,10 +140,9 @@ final class PartnerRelayDisplaySession: ObservableObject {
         if TrainingPartnerConnectionCoordinator.shared.shouldPersistPartnerPairing {
             print("[RelayWS-DEBUG] NEW /v1/sessions while partner training active — old transport/joinCode missing (transport=\(transport != nil) joinCode=\(joinCode ?? "nil")). Coach must use the NEW code on the display.")
         }
-        #endif
         PartnerPersistDebug.log("startDisplaySessionIfNeeded → create new relay session (HTTP + WebSocket)")
-        await startDisplaySession()
         #endif
+        await startDisplaySession()
     }
 
     /// App moved to background (springboard / app switcher). Disconnect socket but **keep** `joinCode` and `transport`
@@ -144,20 +150,18 @@ final class PartnerRelayDisplaySession: ObservableObject {
     func suspendForAppBackground() {
         #if DEBUG
         print("[RelayWS-DEBUG] PartnerRelayDisplaySession.suspendForAppBackground — disconnect socket; keep joinCode=\(joinCode ?? "nil")")
-        transport?.disconnect()
         #endif
+        transport?.disconnect()
     }
 
     /// Disconnects socket and clears relay UI state.
     func tearDown() {
-        #if DEBUG
         transport?.disconnect()
         transport = nil
         joinCode = nil
         socketConnectionState = .disconnected
         isCoachPaired = false
         onCoachPairingChanged?(false)
-        #endif
     }
 
     /// Sends a message when display relay is active (e.g. session ended). Safe no-op if not connected.
@@ -167,7 +171,6 @@ final class PartnerRelayDisplaySession: ObservableObject {
 
     /// - Parameter completion: Called on the main queue after the send attempt (or immediately if no transport).
     func sendTwoMinuteMessage(_ message: TwoMinuteMessage, completion: (@Sendable () -> Void)?) {
-        #if DEBUG
         guard let transport = transport else {
             if let completion {
                 DispatchQueue.main.async(execute: completion)
@@ -175,14 +178,8 @@ final class PartnerRelayDisplaySession: ObservableObject {
             return
         }
         transport.send(message, completion: completion)
-        #else
-        if let completion {
-            DispatchQueue.main.async(execute: completion)
-        }
-        #endif
     }
 
-    #if DEBUG
     @MainActor
     private func applySocketConnectionState(_ state: ConnectionState) {
         socketConnectionState = state
@@ -206,5 +203,4 @@ final class PartnerRelayDisplaySession: ObservableObject {
             }
         }
     }
-    #endif
 }

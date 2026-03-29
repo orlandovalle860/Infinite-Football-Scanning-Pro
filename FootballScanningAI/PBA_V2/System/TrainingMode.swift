@@ -27,4 +27,12 @@ enum TrainingMode: String, CaseIterable, Hashable {
         case .solo: return "person.fill"
         }
     }
+
+    /// True when the iPad display must pair with the phone (join code + relay WebSocket) for remote logging. Partner and Wall; Solo is local-only on the display.
+    var requiresPhoneDisplayRelay: Bool {
+        switch self {
+        case .partner, .wall: return true
+        case .solo: return false
+        }
+    }
 }

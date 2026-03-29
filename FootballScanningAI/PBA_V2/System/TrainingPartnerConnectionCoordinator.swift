@@ -17,14 +17,14 @@ final class TrainingPartnerConnectionCoordinator {
     /// Shared relay display session (join code + WebSocket). One instance per app run.
     let relayDisplaySession = PartnerRelayDisplaySession()
 
-    /// Shared coach `RemoteService` for relay (DEBUG). Same instance for all activity coach remotes.
+    /// Shared coach `RemoteService` for relay WebSocket. Same instance for all activity coach remotes.
     let coachRelayRemoteService = RemoteService(transport: TwoMinuteSessionTransport.makeInitial(for: .relayWebSocket))
 
     /// True after the first partner pairing starts; cleared only on ``endPartnerTrainingSession(reason:notifyPeer:)`` (explicit Leave,
     /// coach hub end, or ``AppRouter.popToRoot(endingPartnerSession: true)``). **Not** cleared on iOS background.
     private(set) var isPartnerTrainingSessionActive: Bool = false
 
-    /// Last join code the coach successfully used for the shared relay WebSocket (DEBUG). Each activity’s coach remote is a **new** SwiftUI view with empty ``@State`` for the text field — without this, switching e.g. Away From Pressure → Dribble or Pass could not auto-reconnect with the same code.
+    /// Last join code the coach successfully used for the shared relay WebSocket. Each activity’s coach remote is a **new** SwiftUI view with empty ``@State`` for the text field — without this, switching e.g. Away From Pressure → Dribble or Pass could not auto-reconnect with the same code.
     /// Cleared when pairing ends or when coach UI explicitly clears the join form after a real disconnect.
     private(set) var lastCoachRelayJoinCode: String?
 
@@ -74,9 +74,9 @@ final class TrainingPartnerConnectionCoordinator {
             return
         }
         relaySessionMutationToken += 1
-        #if DEBUG
         relayDisplaySession.tearDown()
         coachRelayRemoteService.disconnect()
+        #if DEBUG
         EndTrainingDebug.log("beginPartnerTrainingSessionIfNeeded — cleared stale relay transports before new run")
         #endif
         ConnectionManager.shared.stopHosting()
@@ -116,10 +116,8 @@ final class TrainingPartnerConnectionCoordinator {
                 #endif
                 return
             }
-            #if DEBUG
             self.relayDisplaySession.tearDown()
             self.coachRelayRemoteService.disconnect()
-            #endif
             ConnectionManager.shared.stopHosting()
             ConnectionManager.shared.stopBrowsing()
             #if DEBUG
@@ -155,18 +153,20 @@ final class TrainingPartnerConnectionCoordinator {
     /// Sends ``partnerTrainingEnded`` on whichever transport is connected, then invokes `completion` on the main queue.
     private func notifyPeerOfPartnerTrainingEndedIfNeeded(completion: @escaping @Sendable () -> Void) {
         let msg = TwoMinuteMessage.partnerTrainingEnded(timestamp: Date())
-        #if DEBUG
         if coachRelayRemoteService.connectionState == .connected {
+            #if DEBUG
             EndTrainingDebug.log("notifyPeer: sending partnerTrainingEnded via coach relay WebSocket")
+            #endif
             coachRelayRemoteService.send(msg, completion: completion)
             return
         }
         if relayDisplaySession.socketConnectionState == .connected {
+            #if DEBUG
             EndTrainingDebug.log("notifyPeer: sending partnerTrainingEnded via display relay WebSocket")
+            #endif
             relayDisplaySession.sendTwoMinuteMessage(msg, completion: completion)
             return
         }
-        #endif
         if ConnectionManager.shared.connectedPeerName != nil {
             #if DEBUG
             EndTrainingDebug.log("notifyPeer: sending partnerTrainingEnded via Multipeer")
@@ -227,8 +227,6 @@ final class TrainingPartnerConnectionCoordinator {
         #if DEBUG
         print("[Multipeer] TrainingPartnerSession: suspend for iOS background — keep pairing; relay soft disconnect only")
         #endif
-        #if DEBUG
         relayDisplaySession.suspendForAppBackground()
-        #endif
     }
 }

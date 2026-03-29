@@ -42,6 +42,9 @@ final class PBABeepSoundManager {
     /// AppStorage key for selected beep. Use with @AppStorage("selectedBeepSound").
     static let selectedBeepStorageKey = "selectedBeepSound"
 
+    /// New installs and invalid stored values: D (hybrid / signature in generated `pba_beep_d.wav`).
+    static let defaultSelectedBeepRawValue = PBABeepVariant.d.rawValue
+
     /// Preload the given variant so playback has minimal latency. Call on launch and when selection changes.
     func preload(variant: PBABeepVariant) {
         guard currentVariant != variant else { return }
@@ -67,8 +70,8 @@ final class PBABeepSoundManager {
 
     /// Preload using the current value from UserDefaults (selectedBeepSound). Call from app launch and when selector changes.
     func preloadCurrent() {
-        let raw = UserDefaults.standard.string(forKey: Self.selectedBeepStorageKey) ?? "A"
-        let variant = PBABeepVariant(rawValue: raw) ?? .a
+        let raw = UserDefaults.standard.string(forKey: Self.selectedBeepStorageKey) ?? Self.defaultSelectedBeepRawValue
+        let variant = PBABeepVariant(rawValue: raw) ?? .d
         preload(variant: variant)
     }
 
@@ -98,8 +101,8 @@ final class PBABeepSoundManager {
             #if DEBUG
             print("[PBA-Debug] Beep first play() returned false; reloading and retrying")
             #endif
-            let raw = UserDefaults.standard.string(forKey: Self.selectedBeepStorageKey) ?? "A"
-            let variant = PBABeepVariant(rawValue: raw) ?? .a
+            let raw = UserDefaults.standard.string(forKey: Self.selectedBeepStorageKey) ?? Self.defaultSelectedBeepRawValue
+            let variant = PBABeepVariant(rawValue: raw) ?? .d
             currentVariant = nil
             preload(variant: variant)
             player?.currentTime = 0

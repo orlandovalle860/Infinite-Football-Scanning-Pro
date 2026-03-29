@@ -43,12 +43,13 @@ enum ReportCardGrade: String {
     }
 
     /// Convert average decision window (seconds before arrival) to Decision Timing grade.
+    /// Bands aligned with ~10 yd travel (`DecisionTimingModel`); same tier semantics as prior ~6 yd bands.
     static func from(decisionWindowSeconds: Double) -> ReportCardGrade {
         switch decisionWindowSeconds {
-        case 0.25...: return .a
-        case 0.10..<0.25: return .b
-        case 0.00..<0.10: return .c
-        case -0.10..<0.00: return .d
+        case 0.68...: return .a
+        case 0.53..<0.68: return .b
+        case 0.43..<0.53: return .c
+        case 0.33..<0.43: return .d
         default: return .f
         }
     }
@@ -181,12 +182,12 @@ enum ReportCardGenerator {
             ]
         case "Developing":
             return [
-                "Decision window >= +0.10s",
+                "Decision window >= +0.53s",
                 "Accuracy >= 85%"
             ]
         case "Strong":
             return [
-                "Decision window >= +0.25s",
+                "Decision window >= +0.68s",
                 "Accuracy >= 90%"
             ]
         default:
@@ -248,13 +249,13 @@ enum ReportCardGenerator {
             return accs.reduce(0, +) / Double(accs.count)
         }()
 
-        if let accuracyPct, let avgTime, accuracyPct >= 0.80, avgTime > 1.10 {
+        if let accuracyPct, let avgTime, accuracyPct >= 0.80, avgTime > 1.53 {
             return "You're making good choices, but often too close to arrival."
         }
         if let accuracyPct, accuracyPct >= 0.80 {
             return "You're making strong decisions with good consistency."
         }
-        if let avgTime, avgTime > 1.20 {
+        if let avgTime, avgTime > 1.63 {
             return "Your decision window is late under pressure—commit earlier."
         }
         return "You're building your timing and decision quality."
@@ -291,9 +292,9 @@ enum ReportCardGenerator {
         let withTime = recent.compactMap(\.avgDecisionWindowSeconds)
         guard !withTime.isEmpty else { return "Next Target: Complete 3 timed sessions" }
         let avgTime = withTime.reduce(0, +) / Double(withTime.count)
-        if avgTime < -0.10 { return "Next Target: Decision window >= -0.10s" }
-        if avgTime < 0.00 { return "Next Target: Decision window >= 0.00s" }
-        if avgTime < 0.10 { return "Next Target: Decision window >= +0.10s" }
+        if avgTime < 0.33 { return "Next Target: Decision window >= +0.33s" }
+        if avgTime < 0.43 { return "Next Target: Decision window >= +0.43s" }
+        if avgTime < 0.53 { return "Next Target: Decision window >= +0.53s" }
         return "Next Target: Keep decision window positive consistently"
     }
 
@@ -305,19 +306,19 @@ enum ReportCardGenerator {
 
     private static func decisionSpeedZone(from avg: Double?) -> String {
         guard let avg else { return "No timing data yet" }
-        if avg >= 0.25 { return "Elite" }
-        if avg >= 0.10 { return "Advanced" }
-        if avg >= 0.00 { return "Competent" }
-        if avg >= -0.10 { return "Late" }
+        if avg >= 0.68 { return "Elite" }
+        if avg >= 0.53 { return "Advanced" }
+        if avg >= 0.43 { return "Competent" }
+        if avg >= 0.33 { return "Late" }
         return "Too Late"
     }
 
     private static func decisionSpeedTier(from avg: Double?) -> String {
         guard let avg else { return "Emerging" }
-        if avg >= 0.25 { return "Elite" }
-        if avg >= 0.10 { return "Strong" }
-        if avg >= 0.00 { return "Developing" }
-        if avg >= -0.10 { return "Emerging" }
+        if avg >= 0.68 { return "Elite" }
+        if avg >= 0.53 { return "Strong" }
+        if avg >= 0.43 { return "Developing" }
+        if avg >= 0.33 { return "Emerging" }
         return "Too Late"
     }
 

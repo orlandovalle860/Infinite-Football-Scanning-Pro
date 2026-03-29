@@ -10,40 +10,32 @@ import SwiftUI
 import UIKit
 
 enum TwoMinuteSlotPositions {
-    /// Positions for the 2-minute layout **in the same coordinate space** as `GeometryReader` content (size + safeAreaInsets).
-    /// Use this from `GeometryReader { geo in … }` so the ball and center X align; do not mix with `UIScreen` alone.
-    static func positions(in size: CGSize, safeAreaInsets: EdgeInsets) -> [Gate: CGPoint] {
-        let w = size.width
-        let h = size.height
-        let safeTop = safeAreaInsets.top
-        let safeBottom = safeAreaInsets.bottom
-        let safeLeading = safeAreaInsets.leading
-        let safeTrailing = safeAreaInsets.trailing
+    /// Horizontal: distance from leading/trailing edges of the **usable** rect (fraction of width).
+    private static let horizontalEdgeFraction: CGFloat = 0.10
 
-        let imageSize = responsiveImageSize(screenWidth: w, screenHeight: h)
-        let halfImageSize = imageSize / 2
-        let isLandscape = w > h
-
-        // Horizontal center of the layout rect; vertical center for left/right slots.
-        let midX = w / 2
-        let midY = h / 2
-
-        let top = CGPoint(x: midX, y: safeTop + halfImageSize + 20)
-        let bottom = CGPoint(x: midX, y: h - safeBottom - halfImageSize - 20)
-        let left: CGPoint
-        let right: CGPoint
-        if isLandscape {
-            left = CGPoint(x: max(safeLeading + halfImageSize + 20, halfImageSize + 40), y: midY)
-            right = CGPoint(x: min(w - safeTrailing - halfImageSize - 20, w - halfImageSize - 20), y: midY)
-        } else {
-            left = CGPoint(x: safeLeading + halfImageSize + 20, y: midY)
-            right = CGPoint(x: w - safeTrailing - halfImageSize - 20, y: midY)
-        }
-
-        return [.up: top, .down: bottom, .left: left, .right: right]
+    /// Vertical: distance from top/bottom of the **usable** rect (fraction of height). Landscape uses a slightly
+    /// tighter band so the “up” slot reads as upper field; final Y is still clamped so the ball stays on-screen.
+    private static func verticalEdgeFraction(isLandscape: Bool) -> CGFloat {
+        isLandscape ? 0.085 : 0.095
     }
 
-    /// Legacy: full-screen coordinates (can disagree with a `GeometryReader` inside navigation). Prefer `positions(in:safeAreaInsets:)`.
+    private static let ballEdgeMargin: CGFloat = 6
+
+    /// Positions for the 2-minute layout **in the same coordinate space** as `GeometryReader` content (size + safeAreaInsets).
+    /// Use this from `GeometryReader { geo in … }` so the ball and center X align; do not mix with `UIScreen` alone.
+    ///
+    /// `ballSideLength` must match the rendered ball frame so slot **centers** keep the full ball inside the usable rect.
+    static func positions(in size: CGSize, safeAreaInsets: EdgeInsets, ballSideLength: CGFloat) -> [Gate: CGPoint] {
+        let m = layoutMetrics(size: size, safeAreaInsets: safeAreaInsets, ballSideLength: ballSideLength)
+        return [
+            .up: CGPoint(x: m.cx, y: m.topY),
+            .down: CGPoint(x: m.cx, y: m.bottomY),
+            .left: CGPoint(x: m.leftX, y: m.midY),
+            .right: CGPoint(x: m.rightX, y: m.midY),
+        ]
+    }
+
+    /// Legacy: full-screen coordinates (can disagree with a `GeometryReader` inside navigation). Prefer `positions(in:safeAreaInsets:ballSideLength:)`.
     static func positionsForCurrentScreen() -> [Gate: CGPoint] {
         let b = UIScreen.main.bounds
         var top: CGFloat = 0, bottom: CGFloat = 0, leading: CGFloat = 0, trailing: CGFloat = 0
@@ -55,19 +47,83 @@ enum TwoMinuteSlotPositions {
             trailing = window.safeAreaInsets.right
         }
         let insets = EdgeInsets(top: top, leading: leading, bottom: bottom, trailing: trailing)
-        return positions(in: b.size, safeAreaInsets: insets)
+        let side = ballSideLength(in: b.size, safeAreaInsets: insets)
+        return positions(in: b.size, safeAreaInsets: insets, ballSideLength: side)
     }
 
-    static func centerPosition(in size: CGSize) -> CGPoint {
-        CGPoint(x: size.width / 2, y: size.height / 2)
+    /// Soccer ball side length: scales with the playable area so 11" vs 13" (and split view) stay consistent.
+    /// ~24% of the shorter usable dimension, clamped so very small or very large layouts stay readable.
+    static func ballSideLength(in size: CGSize, safeAreaInsets: EdgeInsets) -> CGFloat {
+        let w = size.width
+        let h = size.height
+        let t = safeAreaInsets.top
+        let b = safeAreaInsets.bottom
+        let l = safeAreaInsets.leading
+        let r = safeAreaInsets.trailing
+        let usableW = w - l - r
+        let usableH = h - t - b
+        let m = min(usableW, usableH)
+        let scaled = m * 0.24
+        return min(max(scaled, 120), 260)
     }
 
-    private static func responsiveImageSize(screenWidth: CGFloat, screenHeight: CGFloat) -> CGFloat {
-        let isIPad = UIDevice.current.userInterfaceIdiom == .pad
-        let isLandscape = screenWidth > screenHeight
-        if isIPad {
-            return isLandscape ? screenHeight * 0.30 : screenWidth * 0.30
+    /// Center of the playable band (matches the diamond’s vertical/horizontal midlines).
+    static func centerPosition(in size: CGSize, safeAreaInsets: EdgeInsets, ballSideLength: CGFloat) -> CGPoint {
+        let m = layoutMetrics(size: size, safeAreaInsets: safeAreaInsets, ballSideLength: ballSideLength)
+        return CGPoint(x: m.cx, y: m.midY)
+    }
+
+    private struct LayoutMetrics {
+        let cx: CGFloat
+        let topY: CGFloat
+        let bottomY: CGFloat
+        let midY: CGFloat
+        let leftX: CGFloat
+        let rightX: CGFloat
+    }
+
+    private static func layoutMetrics(size: CGSize, safeAreaInsets: EdgeInsets, ballSideLength: CGFloat) -> LayoutMetrics {
+        let w = size.width
+        let h = size.height
+        let t = safeAreaInsets.top
+        let b = safeAreaInsets.bottom
+        let l = safeAreaInsets.leading
+        let r = safeAreaInsets.trailing
+
+        let usableW = w - l - r
+        let usableH = h - t - b
+        let isLandscape = w > h
+        let vFrac = verticalEdgeFraction(isLandscape: isLandscape)
+        let hFrac = horizontalEdgeFraction
+
+        let half = ballSideLength / 2
+        let m = ballEdgeMargin
+        let minCY = t + half + m
+        let maxCY = t + usableH - half - m
+        let minCX = l + half + m
+        let maxCX = l + usableW - half - m
+
+        let cx = l + usableW / 2
+
+        var topY = t + usableH * vFrac
+        var bottomY = t + usableH * (1 - vFrac)
+        topY = max(topY, minCY)
+        bottomY = min(bottomY, maxCY)
+
+        if topY >= bottomY {
+            let mid = t + usableH / 2
+            let span = max(0, min(mid - minCY, maxCY - mid))
+            topY = mid - span
+            bottomY = mid + span
         }
-        return isLandscape ? screenHeight * 0.20 : screenWidth * 0.29
+
+        let midY = (topY + bottomY) / 2
+
+        var leftX = l + usableW * hFrac
+        var rightX = l + usableW * (1 - hFrac)
+        leftX = min(max(leftX, minCX), maxCX)
+        rightX = min(max(rightX, minCX), maxCX)
+
+        return LayoutMetrics(cx: cx, topY: topY, bottomY: bottomY, midY: midY, leftX: leftX, rightX: rightX)
     }
 }

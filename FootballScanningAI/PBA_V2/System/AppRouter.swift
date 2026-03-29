@@ -34,8 +34,10 @@ enum AppRoute: Hashable {
     case oneTouchPassingRoleSelection
     case oneTouchPassingTrainingModeSelection
     case oneTouchPassingSetup(mode: TrainingMode)
-    /// Tester mode only: debug menu reachable from Home via toolbar.
+#if DEBUG
+    /// Tester Tools: debug menu from Home toolbar (not in Release).
     case debugMenu
+#endif
 }
 
 @MainActor

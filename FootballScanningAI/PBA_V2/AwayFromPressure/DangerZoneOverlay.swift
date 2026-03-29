@@ -58,12 +58,15 @@ struct GateOutlineOverlay: View {
 
 // MARK: - Pressure wedge (directional, points toward player)
 
-private let pressureWedgeFadeInSeconds: Double = 0.06
+/// Grows the wedge from the screen edge toward the player (center).
+private let pressureWedgeRevealSeconds: Double = 0.42
 
 /// Red directional wedge indicating where pressure is coming from. Points toward the center (player).
 struct DangerZoneOverlay: View {
     let gate: Gate
     var style: WedgeCueStyle = WedgeCueStyle.style(for: 1)
+
+    @State private var revealProgress: CGFloat = 0
 
     var body: some View {
         GeometryReader { geo in
@@ -81,9 +84,47 @@ struct DangerZoneOverlay: View {
                         endPoint: wedgeGradientEnd
                     )
                 )
-                .transition(.opacity.animation(.linear(duration: pressureWedgeFadeInSeconds)))
         }
+        .scaleEffect(x: scaleX, y: scaleY, anchor: scaleAnchor)
+        .opacity(0.35 + 0.65 * Double(revealProgress))
         .allowsHitTesting(false)
+        .onAppear {
+            revealProgress = 0
+            withAnimation(.easeOut(duration: pressureWedgeRevealSeconds)) {
+                revealProgress = 1
+            }
+        }
+        .onChange(of: gate) { _, _ in
+            revealProgress = 0
+            withAnimation(.easeOut(duration: pressureWedgeRevealSeconds)) {
+                revealProgress = 1
+            }
+        }
+    }
+
+    /// Wedge grows from the edge where pressure originates toward the center.
+    private var scaleX: CGFloat {
+        switch gate {
+        case .left: return max(0.02, revealProgress)
+        case .right: return max(0.02, revealProgress)
+        case .up, .down: return 1
+        }
+    }
+
+    private var scaleY: CGFloat {
+        switch gate {
+        case .up, .down: return max(0.02, revealProgress)
+        case .left, .right: return 1
+        }
+    }
+
+    private var scaleAnchor: UnitPoint {
+        switch gate {
+        case .up: return .top
+        case .down: return .bottom
+        case .left: return .leading
+        case .right: return .trailing
+        }
     }
 
     private var wedgeGradientStart: UnitPoint {

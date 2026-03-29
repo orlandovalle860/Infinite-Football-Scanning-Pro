@@ -24,21 +24,15 @@ struct TwoMinuteCoachRemoteView: View {
     @State private var didNavigateBackToCoachHubAfterDisplayDisconnect = false
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
-    private static let partnerTransportMode = PartnerTransportPolicy.transportMode(for: .twoMinute)
+    private static let partnerTransportMode = PartnerTransportPolicy.coachRemoteTransportMode
 
-    #if DEBUG
     @ObservedObject private var relaySharedRemoteService = TrainingPartnerConnectionCoordinator.shared.coachRelayRemoteService
-    #endif
     @StateObject private var multipeerRemoteService = RemoteService(transport: TwoMinuteSessionTransport.makeInitial(for: .multipeer))
 
     private var remoteService: RemoteService {
         switch Self.partnerTransportMode {
         case .relayWebSocket:
-            #if DEBUG
             return relaySharedRemoteService
-            #else
-            return multipeerRemoteService
-            #endif
         case .multipeer:
             return multipeerRemoteService
         }
@@ -122,11 +116,9 @@ struct TwoMinuteCoachRemoteView: View {
             if Self.partnerTransportMode == .multipeer {
                 TrainingPartnerConnectionCoordinator.shared.prepareMultipeerCoachRemote(connectionManager: connectionManager)
             }
-            #if DEBUG
             if Self.partnerTransportMode == .relayWebSocket {
                 attemptCoachRelayAutoReconnectIfNeeded()
             }
-            #endif
         }
         .onDisappear {
             #if DEBUG
@@ -341,7 +333,6 @@ struct TwoMinuteCoachRemoteView: View {
 
     private var connectionSection: some View {
         Group {
-            #if DEBUG
             if Self.partnerTransportMode == .relayWebSocket {
                 VStack(spacing: 20) {
                     Text("Rep \(currentRepIndex + 1) of \(totalReps)")
@@ -355,7 +346,9 @@ struct TwoMinuteCoachRemoteView: View {
                         relayTransportConnected: remoteService.connectionState == .connected,
                         displayPeerJoined: coachRelayDisplayPeerJoined,
                         onJoin: {
+                            #if DEBUG
                             print("[RelayWS-DEBUG][Coach] Join session (button or auto-submit)")
+                            #endif
                             Task { await startCoachRelayJoin() }
                         }
                     )
@@ -366,9 +359,6 @@ struct TwoMinuteCoachRemoteView: View {
             } else {
                 multipeerConnectionScrollContent
             }
-            #else
-            multipeerConnectionScrollContent
-            #endif
         }
     }
 
@@ -449,12 +439,15 @@ struct TwoMinuteCoachRemoteView: View {
         .padding(.top, 60)
     }
 
-    #if DEBUG
     private func startCoachRelayJoin() async {
         let code = coachRelayJoinCodeInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        #if DEBUG
         print("[RelayWS-DEBUG][Coach] startCoachRelayJoin() entered joinCode=\(code)")
+        #endif
         guard !code.isEmpty else {
+            #if DEBUG
             print("[RelayWS-DEBUG][Coach] startCoachRelayJoin() early exit: empty join code")
+            #endif
             return
         }
         await MainActor.run {
@@ -464,13 +457,19 @@ struct TwoMinuteCoachRemoteView: View {
             coachRelayDisplayPeerJoined = false
         }
         do {
+            #if DEBUG
             print("[RelayWS-DEBUG][Coach] before HTTP POST /v1/sessions/join joinCode=\(code)")
+            #endif
             let joined = try await WebSocketSessionAPI.joinSession(joinCode: code)
+            #if DEBUG
             print("[RelayWS-DEBUG][Coach] after HTTP join success sessionId=\(joined.sessionId)")
             print("[RelayWS-DEBUG][Coach] coachToken present, wsUrl(base)=\(joined.wsUrl) expiresAt=\(joined.expiresAt ?? "nil")")
+            #endif
 
             let wsURL = try joined.webSocketURLForCoach()
+            #if DEBUG
             print("[RelayWS-DEBUG][Coach] WebSocket URL (with query)=\(wsURL.absoluteString)")
+            #endif
 
             let config = WebSocketSessionConfig(url: wsURL, sessionId: joined.sessionId, authToken: joined.coachToken)
             let transport = WebSocketRemoteTransport(config: config)
@@ -479,14 +478,19 @@ struct TwoMinuteCoachRemoteView: View {
             transport.onRawTextReceived = { text in
                 #if DEBUG
                 print("[RelayWS-DEBUG][Coach] received raw: \(text)")
+                #endif
                 if text.contains("peer_joined") {
+                    #if DEBUG
                     print("[RelayWS-DEBUG][Coach] (control.peer_joined in raw frame)")
+                    #endif
                     Task { @MainActor in
                         displayPeerJoinedBinding.wrappedValue = true
                     }
                 }
                 if text.lowercased().contains("peer_left") {
+                    #if DEBUG
                     print("[RelayWS-DEBUG][Coach] peer_left — disconnecting coach relay (display socket left room)")
+                    #endif
                     Task { @MainActor in
                         displayPeerJoinedBinding.wrappedValue = false
                         CoachPersistDebug.log("peer_left — before remote.disconnect", joinField: "", peerJoined: false)
@@ -494,10 +498,11 @@ struct TwoMinuteCoachRemoteView: View {
                         CoachPersistDebug.log("peer_left — after remote.disconnect", joinField: "", peerJoined: false)
                     }
                 }
-                #endif
             }
 
+            #if DEBUG
             print("[RelayWS-DEBUG][Coach] replaceTransport + connect via RemoteService")
+            #endif
             await MainActor.run {
                 TrainingPartnerConnectionCoordinator.shared.recordCoachRelayJoinCode(code)
                 remoteService.replaceTransport(transport)
@@ -506,7 +511,9 @@ struct TwoMinuteCoachRemoteView: View {
                 coachRelayJoinBusy = false
             }
         } catch {
+            #if DEBUG
             print("[RelayWS-DEBUG][Coach] after HTTP join failure (or post-join error): \(error)")
+            #endif
             await MainActor.run {
                 coachRelayJoinBusy = false
                 if let api = error as? WebSocketSessionAPIError {
@@ -533,7 +540,9 @@ struct TwoMinuteCoachRemoteView: View {
                     coachRelayJoinError = error.localizedDescription
                     coachRelayJoinBanner = error.localizedDescription
                 }
+                #if DEBUG
                 print("[RelayWS-DEBUG][Coach] join/connect failed (UI error set): \(error)")
+                #endif
             }
         }
     }
@@ -553,7 +562,6 @@ struct TwoMinuteCoachRemoteView: View {
         CoachPersistDebug.log("auto-reconnect starting with stored join code", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
         Task { await startCoachRelayJoin() }
     }
-    #endif
 
     private var volumeTriggerOverlay: some View {
         CoachRemoteVolumeTriggerView(

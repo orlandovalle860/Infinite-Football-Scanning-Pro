@@ -197,10 +197,9 @@ struct EmailAuthView: View {
         do {
             let list = try await SupabasePlayerService.shared.fetchPlayersForCurrentUser()
             await MainActor.run {
-                if list.isEmpty {
-                    showCreatePlayerAfterAuth = true
-                } else {
-                    hydrateStoresWithFetchedPlayers(list)
+                profileManager.reconcileWithSupabasePlayerList(list, playerStore: playerStore)
+                showCreatePlayerAfterAuth = profileManager.profiles.isEmpty
+                if !showCreatePlayerAfterAuth {
                     onComplete()
                 }
             }
@@ -211,23 +210,4 @@ struct EmailAuthView: View {
         }
     }
 
-    private func hydrateStoresWithFetchedPlayers(_ list: [SupabasePlayer]) {
-        let ids = list.compactMap(\.uuid)
-        for p in list {
-            guard let uuid = p.uuid else { continue }
-            if !profileManager.profiles.contains(where: { $0.id == uuid }) {
-                profileManager.addProfileById(uuid, name: p.name)
-            }
-            if !playerStore.players.contains(where: { $0.id == uuid }) {
-                playerStore.addPlayer(id: uuid, name: p.name)
-            }
-        }
-        SupabasePlayerService.shared.markPlayersAsSynced(ids)
-        if let firstId = ids.first,
-           let firstProfile = profileManager.profiles.first(where: { $0.id == firstId }) {
-            profileManager.switchToProfile(firstProfile)
-            playerStore.selectedPlayerId = firstId
-            playerStore.persist()
-        }
-    }
 }

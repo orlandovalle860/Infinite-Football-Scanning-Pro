@@ -6,4 +6,4 @@
 
 ## Layout and scrolling
 
-- **Opening screen only:** The intro screen (“Do you know your next action before you receive the ball?”) may use `ScrollView` on small devices so all content is visible. Other PBA/flow screens stay non-scrolling unless explicitly required.
+- **Opening screen only:** The intro screen (“Do you know what you'll do before the ball gets to you?”) may use `ScrollView` on small devices so all content is visible. Other PBA/flow screens stay non-scrolling unless explicitly required.

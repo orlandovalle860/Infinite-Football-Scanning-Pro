@@ -705,7 +705,7 @@ class UserProfileManager: ObservableObject {
         profile.sessionsThisMonth = monthlySessions.count
     }
     
-    private func saveProfiles() {
+    func saveProfiles() {
         if let encoded = try? JSONEncoder().encode(profiles) {
             userDefaults.set(encoded, forKey: profilesKey)
         }
@@ -741,6 +741,10 @@ class UserProfileManager: ObservableObject {
             currentProfile = nil
             isProfileCreated = false
         }
+
+#if DEBUG
+        ProfileLoadSourceLog.loadedFromDisk(profileCount: profiles.count)
+#endif
     }
 }
 

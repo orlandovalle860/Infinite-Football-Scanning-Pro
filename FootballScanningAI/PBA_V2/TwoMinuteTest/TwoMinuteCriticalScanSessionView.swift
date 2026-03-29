@@ -52,7 +52,9 @@ struct TwoMinuteCriticalScanSessionView: View {
     @State private var hasSentSessionEnded = false
     /// True while ``SessionCountdownModifier`` shows 3–2–1–Go; coach drill messages must not advance the engine until the drill is visible.
     @State private var blockCoachDrillDuringSessionCountdown = false
-    /// Display-side relay (join code, WebSocket, coach paired). Used when `partnerTransportMode == .relayWebSocket` (DEBUG).
+    /// Coach `nextRep` received during the countdown (otherwise dropped); applied when the overlay dismisses.
+    @State private var pendingCoachNextRepWhileCountdown: Int?
+    /// Display-side relay (join code, WebSocket, coach paired). Used when `partnerTransportMode == .relayWebSocket`.
     /// Conforms to ``PartnerRelayDisplayControlling``; concrete type is ``PartnerRelayDisplaySession``.
     @ObservedObject private var partnerRelaySession = TrainingPartnerConnectionCoordinator.shared.relayDisplaySession
 
@@ -66,7 +68,9 @@ struct TwoMinuteCriticalScanSessionView: View {
 
     private static let totalReps = 10
 
-    private static let partnerTransportMode = PartnerTransportPolicy.transportMode(for: .twoMinute)
+    private var sessionTransportMode: SessionTransportMode {
+        PartnerTransportPolicy.transportMode(for: .twoMinute, trainingMode: mode)
+    }
 
     private var isBallVisible: Bool {
         if case .ballVisible = engine.phase { return true }
@@ -89,7 +93,7 @@ struct TwoMinuteCriticalScanSessionView: View {
                 twoMinuteExitLogOverlay(repIndex: repIndex)
                     .zIndex(2)
             }
-            if mode == .partner {
+            if mode.requiresPhoneDisplayRelay {
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture { }
@@ -164,14 +168,25 @@ struct TwoMinuteCriticalScanSessionView: View {
             } message: {
                 Text("Your current block will not be saved.")
             }
-            .sessionCountdown(waitForPartnerReady: mode == .partner, partnerReady: partnerReadyForCountdown, suppressCoachMessagesDuringCountdown: $blockCoachDrillDuringSessionCountdown)
+            .sessionCountdown(waitForPartnerReady: mode.requiresPhoneDisplayRelay, partnerReady: partnerReadyForCountdown, suppressCoachMessagesDuringCountdown: $blockCoachDrillDuringSessionCountdown)
+            .onChange(of: blockCoachDrillDuringSessionCountdown) { old, new in
+                guard mode.requiresPhoneDisplayRelay, old == true, new == false else { return }
+                flushPendingCoachNextRepAfterCountdown()
+            }
     }
 
     private func handleTwoMinuteMessage(_ notification: Notification) {
-        guard mode == .partner, let msg = notification.object as? TwoMinuteMessage else { return }
-        if blockCoachDrillDuringSessionCountdown && msg.isDrillInteractionFromCoach { return }
+        guard mode.requiresPhoneDisplayRelay, let msg = notification.object as? TwoMinuteMessage else { return }
+        if PartnerCountdownCoachMessagePolicy.shouldDeferWhileCountdown(
+            msg: msg,
+            isBlockingDrillMessagesFromCoach: blockCoachDrillDuringSessionCountdown,
+            pendingNextRepIndex: &pendingCoachNextRepWhileCountdown
+        ) {
+            return
+        }
         switch msg {
         case .nextRep(let repIndex):
+            pendingCoachNextRepWhileCountdown = nil
             guard sessionManager.isConnected else { return }
             engine.onNextRep(repIndex: repIndex)
         case .passTriggered(let repIndex, let timestamp):
@@ -193,6 +208,13 @@ struct TwoMinuteCriticalScanSessionView: View {
         case .partnerTrainingEnded:
             break
         }
+    }
+
+    private func flushPendingCoachNextRepAfterCountdown() {
+        guard let idx = pendingCoachNextRepWhileCountdown else { return }
+        pendingCoachNextRepWhileCountdown = nil
+        guard sessionManager.isConnected else { return }
+        engine.onNextRep(repIndex: idx)
     }
 
     private func handlePhaseChange(_ oldPhase: CriticalScanPhase, _ newPhase: CriticalScanPhase) {
@@ -233,9 +255,9 @@ struct TwoMinuteCriticalScanSessionView: View {
         #endif
         onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
         hasSentSessionEnded = false
-        if mode == .partner {
+        if mode.requiresPhoneDisplayRelay {
             TrainingPartnerConnectionCoordinator.shared.beginPartnerTrainingSessionIfNeeded()
-            if Self.partnerTransportMode == .multipeer {
+            if sessionTransportMode == .multipeer {
                 TrainingPartnerConnectionCoordinator.shared.prepareMultipeerDisplayPartner(connectionManager: connectionManager)
             }
         }
@@ -243,9 +265,10 @@ struct TwoMinuteCriticalScanSessionView: View {
         subscribeToAudioInterruption()
         AnalyticsManager.shared.track(.twoMinuteTestStarted, playerId: playerStore.selectedPlayerId)
         // Relay: start join-code + WebSocket immediately (parallel with Supabase); no intentional delay before code.
-        #if DEBUG
-        if mode == .partner, Self.partnerTransportMode == .relayWebSocket {
+        if mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket {
+            #if DEBUG
             print("[RelayWS-DEBUG] about to start relay partner session")
+            #endif
             partnerRelaySession.onCoachPairingChanged = { connected in
                 sessionManager.setConnected(connected)
             }
@@ -255,11 +278,12 @@ struct TwoMinuteCriticalScanSessionView: View {
                     if partnerRelaySession.isCoachPaired {
                         sessionManager.setConnected(true)
                     }
+                    #if DEBUG
                     PartnerPersistDebug.log("TwoMinuteCriticalScanSessionView prepareRelayDisplayForActivity finished (synced sessionManager if relay already paired)")
+                    #endif
                 }
             }
         }
-        #endif
         Task {
             await sessionManager.startSession(
                 activity: .twoMinuteTest,
@@ -270,32 +294,31 @@ struct TwoMinuteCriticalScanSessionView: View {
     }
 
     private func handleOnDisappear() {
-        if mode == .partner {
+        pendingCoachNextRepWhileCountdown = nil
+        if mode.requiresPhoneDisplayRelay {
             // Do not send sessionEnded while persisting — coach app treats it as a full disconnect (clears join / hub).
             if TrainingPartnerConnectionCoordinator.shared.shouldPersistPartnerPairing {
                 #if DEBUG
-                if Self.partnerTransportMode == .relayWebSocket {
+                if sessionTransportMode == .relayWebSocket {
                     print("[RelayWS-DEBUG] persist partner pairing — skip sessionEnded + relay tearDown (Home / next activity)")
                 }
-                if Self.partnerTransportMode == .multipeer {
+                if sessionTransportMode == .multipeer {
                     print("[Multipeer] TrainingPartnerSession: display onDisappear — skip sessionEnded + stopHosting (training session active)")
                 }
                 #endif
             } else {
                 sendSessionEndedIfNeeded()
-                #if DEBUG
                 partnerRelaySession.tearDown()
-                #endif
-                if Self.partnerTransportMode == .multipeer {
+                if sessionTransportMode == .multipeer {
                     connectionManager.stopHosting()
                 }
             }
         }
         unsubscribeFromAudioInterruption()
         let preserveCoachConnection =
-            mode == .partner
+            mode.requiresPhoneDisplayRelay
             && TrainingPartnerConnectionCoordinator.shared.shouldPersistPartnerPairing
-            && Self.partnerTransportMode == .relayWebSocket
+            && sessionTransportMode == .relayWebSocket
             && partnerRelaySession.isCoachPaired
         #if DEBUG
         PartnerPersistDebug.log("TwoMinuteCriticalScanSessionView onDisappear — sessionManager.clear(preserveCoachConnection: \(preserveCoachConnection))")
@@ -312,7 +335,7 @@ struct TwoMinuteCriticalScanSessionView: View {
 
     /// iOS Home / app switcher: soft-suspend relay only (keep join code / pairing).
     private func scheduleTwoMinutePartnerSuspendForBackgroundNotification() {
-        guard mode == .partner else { return }
+        guard mode.requiresPhoneDisplayRelay else { return }
         var backgroundTaskId: UIBackgroundTaskIdentifier = .invalid
         backgroundTaskId = UIApplication.shared.beginBackgroundTask(withName: "TwoMinutePartnerSuspend") {
             if backgroundTaskId != .invalid {
@@ -327,7 +350,7 @@ struct TwoMinuteCriticalScanSessionView: View {
     }
 
     private func handleConnectedPeerChange(old: String?, name: String?) {
-        guard mode == .partner, Self.partnerTransportMode == .multipeer, name != nil else { return }
+        guard mode.requiresPhoneDisplayRelay, sessionTransportMode == .multipeer, name != nil else { return }
         sessionManager.setConnected(true)
         let flag = UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey)
         connectionManager.sendDisplaySessionInfo(hasCompletedInitialTest: flag)
@@ -430,7 +453,7 @@ struct TwoMinuteCriticalScanSessionView: View {
     }
 
     private var showExitLogButtons: Bool {
-        guard mode != .partner else { return false }
+        guard !mode.requiresPhoneDisplayRelay else { return false }
         if case .awaitingExitLog = engine.phase { return true }
         if case .ballVisible = engine.phase { return true }
         return false
@@ -518,8 +541,9 @@ struct TwoMinuteCriticalScanSessionView: View {
     /// Same layout as Dribble or Pass: center "X" marker, no players. Ball at one of four slots when visible.
     private var dribbleOrPassLayout: some View {
         GeometryReader { geo in
-            let positions = TwoMinuteSlotPositions.positions(in: geo.size, safeAreaInsets: geo.safeAreaInsets)
-            let center = TwoMinuteSlotPositions.centerPosition(in: geo.size)
+            let ballSide = TwoMinuteSlotPositions.ballSideLength(in: geo.size, safeAreaInsets: geo.safeAreaInsets)
+            let positions = TwoMinuteSlotPositions.positions(in: geo.size, safeAreaInsets: geo.safeAreaInsets, ballSideLength: ballSide)
+            let center = TwoMinuteSlotPositions.centerPosition(in: geo.size, safeAreaInsets: geo.safeAreaInsets, ballSideLength: ballSide)
 
             ZStack {
                 // Center marker (same as Dribble or Pass)
@@ -537,7 +561,7 @@ struct TwoMinuteCriticalScanSessionView: View {
                     Image("SoccerBall")
                         .resizable()
                         .scaledToFit()
-                        .frame(width: 200, height: 200)
+                        .frame(width: ballSide, height: ballSide)
                         .shadow(radius: 4)
                         .position(x: pt.x, y: pt.y)
                         .zIndex(1)
@@ -545,25 +569,25 @@ struct TwoMinuteCriticalScanSessionView: View {
             }
             .frame(width: geo.size.width, height: geo.size.height)
         }
+        // Full-screen geometry + `safeAreaInsets` so slot math matches the physical display (esp. landscape iPad).
+        .ignoresSafeArea()
     }
 
     private var twoMinutePartnerConnectionState: ConnectionState {
-        guard mode == .partner else { return connectionManager.connectionState }
-        #if DEBUG
-        if Self.partnerTransportMode == .relayWebSocket {
+        guard mode.requiresPhoneDisplayRelay else { return connectionManager.connectionState }
+        if sessionTransportMode == .relayWebSocket {
             // Do not treat “relay WebSocket open” as coach paired — only `peer_joined` sets relay paired state.
             return PartnerRelayDisplayUI.statusConnectionState(
                 socketState: partnerRelaySession.socketConnectionState,
                 isCoachPairedWithRelay: partnerRelaySession.isCoachPaired
             )
         }
-        #endif
         return connectionManager.connectionState
     }
 
     private var connectionStatusContent: some View {
         Group {
-            if mode == .partner {
+            if mode.requiresPhoneDisplayRelay {
                 CoachRemoteConnectionStatusView(connectionState: twoMinutePartnerConnectionState)
             } else {
                 Text(mode == .solo ? "Tap screen or volume to trigger" : "Volume button to trigger")
@@ -575,8 +599,8 @@ struct TwoMinuteCriticalScanSessionView: View {
 
     /// Partner “waiting for coach” overlay: show until the coach is paired (Multipeer peer or relay `peer_joined`).
     private var shouldShowWaitingForCoachOverlay: Bool {
-        guard mode == .partner else { return false }
-        if Self.partnerTransportMode == .relayWebSocket {
+        guard mode.requiresPhoneDisplayRelay else { return false }
+        if sessionTransportMode == .relayWebSocket {
             return !partnerRelaySession.isCoachPaired
         }
         return !sessionManager.isConnected
@@ -584,8 +608,8 @@ struct TwoMinuteCriticalScanSessionView: View {
 
     /// Partner: 3–2–1–Go only after coach is connected (same signal as waiting overlay). Solo: always ready.
     private var partnerReadyForCountdown: Bool {
-        guard mode == .partner else { return true }
-        if Self.partnerTransportMode == .relayWebSocket {
+        guard mode.requiresPhoneDisplayRelay else { return true }
+        if sessionTransportMode == .relayWebSocket {
             return partnerRelaySession.isCoachPaired
         }
         return sessionManager.isConnected
@@ -594,7 +618,7 @@ struct TwoMinuteCriticalScanSessionView: View {
     private var waitingForCoachOverlay: some View {
         Group {
             if shouldShowWaitingForCoachOverlay {
-                if mode == .partner, Self.partnerTransportMode == .relayWebSocket {
+                if mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket {
                     PartnerRelayDisplayWaitingWithSessionErrorOverlay(
                         joinCode: partnerRelaySession.joinCode,
                         isDatabaseSessionCreating: sessionManager.isCreating,
@@ -668,7 +692,7 @@ struct TwoMinuteCriticalScanSessionView: View {
     /// Relay error overlay needs Retry taps; other waiting states pass touches through.
     private var waitingCoachOverlayAllowsHitTesting: Bool {
         guard shouldShowWaitingForCoachOverlay else { return false }
-        if mode == .partner, Self.partnerTransportMode == .relayWebSocket,
+        if mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket,
            let err = sessionManager.creationError, !err.isEmpty {
             return true
         }
@@ -690,7 +714,7 @@ struct TwoMinuteCriticalScanSessionView: View {
     @ViewBuilder
     private var phaseStatusContent: some View {
         if shouldShowWaitingForCoachOverlay {
-            if Self.partnerTransportMode == .relayWebSocket {
+            if sessionTransportMode == .relayWebSocket {
                 phaseVStack(title: "Waiting for Coach (Relay)…", subtitle: "Enter the join code on the coach device")
             } else {
                 phaseVStack(title: "Waiting for Coach Remote…", subtitle: "On the coach device: tap Connect to Display, then select this device.")
@@ -698,7 +722,7 @@ struct TwoMinuteCriticalScanSessionView: View {
         } else {
             switch engine.phase {
             case .waitingForNextRep:
-                if mode == .partner {
+                if mode.requiresPhoneDisplayRelay {
                     phaseVStack(
                         title: "Waiting for coach…",
                         subtitle: "\(ActivityInstructionData.partnerCoachSetupLine)\n\(ActivityInstructionData.partnerCoachBallLine)"
@@ -707,7 +731,7 @@ struct TwoMinuteCriticalScanSessionView: View {
                     phaseVStack(title: "Waiting for coach…", subtitle: "Keep moving. Check both shoulders.")
                 }
             case .armedScanning:
-                if mode == .partner {
+                if mode.requiresPhoneDisplayRelay {
                     phaseVStack(
                         title: "Scan",
                         subtitle: "\(ActivityInstructionData.partnerPlayerBeepLine)\n\(ActivityInstructionData.timingLine)"
@@ -716,13 +740,13 @@ struct TwoMinuteCriticalScanSessionView: View {
                     phaseVStack(title: "Keep moving. Check both shoulders.", subtitle: "Beep is coming.")
                 }
             case .beepedAwaitingPass:
-                if mode == .partner {
+                if mode.requiresPhoneDisplayRelay {
                     phaseVStack(title: "Ball is coming", subtitle: ActivityInstructionData.partnerCoachPassTimingLine)
                 } else {
                     phaseVStack(title: "Ball is coming. Check again.", subtitle: "Coach: press PASS when it leaves your foot.")
                 }
             case .awaitingExitLog:
-                if mode == .partner {
+                if mode.requiresPhoneDisplayRelay {
                     phaseVStack(title: "Play the rep.", subtitle: "Coach: log the direction that matches the ball (first decision).")
                 } else {
                     phaseVStack(title: "Play the rep.", subtitle: "Waiting for coach log…")
@@ -749,7 +773,7 @@ struct TwoMinuteCriticalScanSessionView: View {
     /// Rep count and timer visible only after connection event (State 2). Hidden in State 1 (waiting for pairing).
     private var repCountOverlay: some View {
         Group {
-            if mode != .partner || sessionManager.isConnected {
+            if !mode.requiresPhoneDisplayRelay || sessionManager.isConnected {
                 VStack {
                     HStack {
                         Text(repCountText)
@@ -768,7 +792,7 @@ struct TwoMinuteCriticalScanSessionView: View {
 
     private var repCountText: String {
         let rep: String
-        if mode == .partner, !sessionManager.isConnected {
+        if mode.requiresPhoneDisplayRelay, !sessionManager.isConnected {
             rep = "—"
         } else {
             switch engine.phase {
@@ -842,12 +866,10 @@ struct TwoMinuteCriticalScanSessionView: View {
     private func sendSessionEndedIfNeeded() {
         guard !hasSentSessionEnded else { return }
         hasSentSessionEnded = true
-        #if DEBUG
-        if mode == .partner, Self.partnerTransportMode == .relayWebSocket {
+        if mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket {
             partnerRelaySession.sendTwoMinuteMessage(.sessionEnded(timestamp: Date()))
             return
         }
-        #endif
         connectionManager.sendTwoMinuteMessage(.sessionEnded(timestamp: Date()))
     }
 

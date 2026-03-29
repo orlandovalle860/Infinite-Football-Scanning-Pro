@@ -298,7 +298,7 @@ enum PBAPostSessionNarrativeBuilder {
     }
 
     private static func headlineForFirstTwoMinute(playerType: PlayerType, accuracyPercent: Int, decisionWindowSeconds: Double) -> String {
-        if accuracyPercent >= 80, decisionWindowSeconds >= 0.08 {
+        if accuracyPercent >= 80, decisionWindowSeconds >= 0.51 {
             return "Strong first look — you're ahead of the ball"
         }
         switch playerType {
@@ -327,11 +327,11 @@ enum PBAPostSessionNarrativeBuilder {
             if acc < 70 { return "Fix decision quality first — \(baseHeadline)" }
             return baseHeadline
         case .oneTouchPassing:
-            if window >= 0.10 { return "One-touch timing is ahead of arrival — \(baseHeadline)" }
+            if window >= 0.53 { return "One-touch timing is ahead of arrival — \(baseHeadline)" }
             if window < 0.0 { return "One-touch timing is still late — \(baseHeadline)" }
             return baseHeadline
         case .twoMinuteTest:
-            if acc >= 80, window >= 0.08 { return "Balanced test: timing and choices both improved — \(baseHeadline)" }
+            if acc >= 80, window >= 0.51 { return "Balanced test: timing and choices both improved — \(baseHeadline)" }
             return baseHeadline
         }
     }

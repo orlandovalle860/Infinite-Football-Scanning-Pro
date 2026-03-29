@@ -9,7 +9,7 @@ import SwiftUI
 import AVFoundation
 
 struct PBABeepSelectorView: View {
-    @AppStorage(PBABeepSoundManager.selectedBeepStorageKey) private var selectedBeepSound: String = "A"
+    @AppStorage(PBABeepSoundManager.selectedBeepStorageKey) private var selectedBeepSound: String = PBABeepSoundManager.defaultSelectedBeepRawValue
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {

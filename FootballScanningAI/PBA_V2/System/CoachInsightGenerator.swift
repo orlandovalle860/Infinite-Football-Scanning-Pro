@@ -166,9 +166,9 @@ enum CoachInsightGenerator {
         let accuracy = Double(result.correctCount) / Double(total)
         let window = result.avgDecisionWindowSeconds ?? -0.9
         let state: PlayerState = {
-            if accuracy >= 0.80 && window >= 0.08 { return .sharp }
-            if accuracy >= 0.75 && window < 0.08 { return .lateCorrect }
-            if accuracy < 0.70 && window >= 0.05 { return .fastIncorrect }
+            if accuracy >= 0.80 && window >= 0.51 { return .sharp }
+            if accuracy >= 0.75 && window < 0.51 { return .lateCorrect }
+            if accuracy < 0.70 && window >= 0.48 { return .fastIncorrect }
             return .lateIncorrect
         }()
 
@@ -221,9 +221,9 @@ enum CoachInsightGenerator {
         let slowRate = Double(session.speedCounts.slow) / Double(total)
         let window = session.avgDecisionWindowSeconds ?? -0.9
         if isInconsistent(session: session, previous: nil) { return .inconsistent }
-        if accuracy >= 0.80 && window >= 0.08 { return .sharp }
-        if accuracy >= 0.75 && (window < 0.08 || slowRate >= 0.35) { return .lateCorrect }
-        if accuracy < 0.70 && window >= 0.05 { return .fastIncorrect }
+        if accuracy >= 0.80 && window >= 0.51 { return .sharp }
+        if accuracy >= 0.75 && (window < 0.51 || slowRate >= 0.35) { return .lateCorrect }
+        if accuracy < 0.70 && window >= 0.48 { return .fastIncorrect }
         return .lateIncorrect
     }
 

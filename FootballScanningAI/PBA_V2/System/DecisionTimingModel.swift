@@ -10,21 +10,22 @@
 import Foundation
 
 enum DecisionTimingModel {
-    // Practical v1 assumptions by activity (seconds). Tune later with field data.
+    /// Expected ground-pass flight time (seconds) for partner/coach delivery. Calibrated for ~10 yd;
+    /// prior values (~0.58–0.68 s) matched a shorter setup (~6 yd). Scale factor 10/6.
     private static let travelByActivity: [ActivityKind: Double] = [
-        .awayFromPressure: 0.62,
-        .dribbleOrPass: 0.68,
-        .oneTouchPassing: 0.58,
-        .twoMinuteTest: 0.64,
+        .awayFromPressure: 1.03,
+        .dribbleOrPass: 1.13,
+        .oneTouchPassing: 0.97,
+        .twoMinuteTest: 1.07,
     ]
 
     static func expectedBallTravelTime(activity: ActivityKind, difficulty: TestDifficulty? = nil) -> Double {
-        let base = travelByActivity[activity] ?? 0.64
+        let base = travelByActivity[activity] ?? 1.07
         guard let difficulty else { return base }
         switch difficulty {
-        case .beginner: return base + 0.05
+        case .beginner: return base + 0.08
         case .standard: return base
-        case .advanced: return max(0.45, base - 0.04)
+        case .advanced: return max(0.75, base - 0.07)
         }
     }
 

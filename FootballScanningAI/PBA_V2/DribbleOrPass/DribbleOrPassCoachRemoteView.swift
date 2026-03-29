@@ -24,21 +24,15 @@ struct DribbleOrPassCoachRemoteView: View {
     @State private var didNavigateBackToCoachHubAfterDisplayDisconnect = false
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
-    private static let partnerTransportMode = PartnerTransportPolicy.transportMode(for: .dribbleOrPass)
+    private static let partnerTransportMode = PartnerTransportPolicy.coachRemoteTransportMode
 
-    #if DEBUG
     @ObservedObject private var relaySharedRemoteService = TrainingPartnerConnectionCoordinator.shared.coachRelayRemoteService
-    #endif
     @StateObject private var multipeerRemoteService = RemoteService(transport: TwoMinuteSessionTransport.makeInitial(for: .multipeer))
 
     private var remoteService: RemoteService {
         switch Self.partnerTransportMode {
         case .relayWebSocket:
-            #if DEBUG
             return relaySharedRemoteService
-            #else
-            return multipeerRemoteService
-            #endif
         case .multipeer:
             return multipeerRemoteService
         }
@@ -120,11 +114,9 @@ struct DribbleOrPassCoachRemoteView: View {
             if Self.partnerTransportMode == .multipeer {
                 TrainingPartnerConnectionCoordinator.shared.prepareMultipeerCoachRemote(connectionManager: connectionManager)
             }
-            #if DEBUG
             if Self.partnerTransportMode == .relayWebSocket {
                 attemptCoachRelayAutoReconnectIfNeeded()
             }
-            #endif
         }
         .onDisappear {
             #if DEBUG
@@ -321,7 +313,6 @@ struct DribbleOrPassCoachRemoteView: View {
 
     private var connectionSection: some View {
         Group {
-            #if DEBUG
             if Self.partnerTransportMode == .relayWebSocket {
                 VStack(spacing: 20) {
                     Text("Rep \(currentRepIndex + 1) of \(totalReps)")
@@ -346,9 +337,6 @@ struct DribbleOrPassCoachRemoteView: View {
             } else {
                 multipeerConnectionScrollContent
             }
-            #else
-            multipeerConnectionScrollContent
-            #endif
         }
     }
 
@@ -429,7 +417,12 @@ struct DribbleOrPassCoachRemoteView: View {
         .padding(.top, 60)
     }
 
-    #if DEBUG
+    private func dopCoachRelayLog(_ message: String) {
+        #if DEBUG
+        print("[RelayWS-DEBUG][DOP Coach] \(message)")
+        #endif
+    }
+
     private func startDOPCoachRelayJoin() async {
         let code = coachRelayJoinCodeInput.trimmingCharacters(in: .whitespacesAndNewlines)
         dopCoachRelayLog("join HTTP: start joinCode=\(code)")
@@ -457,7 +450,6 @@ struct DribbleOrPassCoachRemoteView: View {
             // otherwise stay `.connected` until TCP times out, so the UI must react to control frames explicitly.
             let remote = remoteService
             transport.onRawTextReceived = { text in
-                #if DEBUG
                 if text.contains("peer_joined") {
                     dopCoachRelayLog("peer_joined detected (raw frame)")
                     Task { @MainActor in
@@ -473,7 +465,6 @@ struct DribbleOrPassCoachRemoteView: View {
                         CoachPersistDebug.log("peer_left — after remote.disconnect", joinField: "", peerJoined: false)
                     }
                 }
-                #endif
             }
 
             dopCoachRelayLog("RemoteService.replaceTransport + connect()")
@@ -516,11 +507,6 @@ struct DribbleOrPassCoachRemoteView: View {
         }
     }
 
-    /// Concise DEBUG relay QA line (coach). No-op in non-DEBUG builds via `#if` at call sites.
-    private func dopCoachRelayLog(_ message: String) {
-        print("[RelayWS-DEBUG][DOP Coach] \(message)")
-    }
-
     private func attemptCoachRelayAutoReconnectIfNeeded() {
         guard !didAttemptCoachRelayAutoReconnect else { return }
         let coord = TrainingPartnerConnectionCoordinator.shared
@@ -536,7 +522,6 @@ struct DribbleOrPassCoachRemoteView: View {
         CoachPersistDebug.log("auto-reconnect starting with stored join code", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
         Task { await startDOPCoachRelayJoin() }
     }
-    #endif
 
     private var volumeTriggerOverlay: some View {
         CoachRemoteVolumeTriggerView(

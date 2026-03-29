@@ -127,6 +127,11 @@ final class SupabasePlayerService {
         syncedPlayerIds = set
     }
 
+    /// True if this player id was previously confirmed on the server (insert, fetch, or mark).
+    func isPlayerSynced(_ id: UUID) -> Bool {
+        syncedPlayerIds.contains(id)
+    }
+
     /// Mark multiple player ids as synced (e.g. after fetching from Supabase so we don't re-insert).
     func markPlayersAsSynced(_ ids: [UUID]) {
         var set = syncedPlayerIds

@@ -216,4 +216,11 @@ final class ProgressStore: ObservableObject {
         let speed = last.speedBucket?.rawValue.capitalized ?? "—"
         return "\(label) • \(speed)"
     }
+
+    /// Clears all locally persisted session records (account sign-out). Does not delete remote Supabase rows.
+    func clearAllSessionsForSignOut() {
+        sessions = []
+        persist()
+        recalculateProgress()
+    }
 }

@@ -59,7 +59,6 @@ struct CoachRemoteVolumeTriggerView: UIViewRepresentable {
     func updateUIView(_ uiView: UIView, context: Context) {
         guard connected, enabled else {
             context.coordinator.stopPolling()
-            onVolumeEdgeWarningChange?(false)
             return
         }
         context.coordinator.onTrigger = onTrigger
@@ -101,14 +100,22 @@ struct CoachRemoteVolumeTriggerView: UIViewRepresentable {
             timer?.invalidate()
             timer = nil
             lastEdgeWarning = nil
-            onVolumeEdgeWarningChange?(false)
+            notifyVolumeEdgeWarning(false)
+        }
+
+        /// Defer to the next main run loop turn so we never mutate SwiftUI `@State` during `updateUIView` / layout.
+        private func notifyVolumeEdgeWarning(_ edge: Bool) {
+            guard let cb = onVolumeEdgeWarningChange else { return }
+            DispatchQueue.main.async {
+                cb(edge)
+            }
         }
 
         private func publishEdgeIfNeeded(for v: Float) {
             let edge = CoachRemoteVolumeTriggerConfig.isNearVolumeEdge(v)
             if lastEdgeWarning != edge {
                 lastEdgeWarning = edge
-                onVolumeEdgeWarningChange?(edge)
+                notifyVolumeEdgeWarning(edge)
             }
         }
 

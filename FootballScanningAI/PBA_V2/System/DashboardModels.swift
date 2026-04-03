@@ -44,6 +44,18 @@ struct DailyTargetState {
         formatter.timeZone = TimeZone.current
         return formatter.string(from: date)
     }
+
+    /// Clears per-player daily block counts (account switch).
+    static func clearForPlayer(_ id: UUID) {
+        UserDefaults.standard.removeObject(forKey: "\(countKey)_\(id.uuidString)")
+        UserDefaults.standard.removeObject(forKey: "\(dateKey)_\(id.uuidString)")
+    }
+
+    /// Clears legacy keys without a player suffix.
+    static func clearLegacyDailyKeys() {
+        UserDefaults.standard.removeObject(forKey: countKey)
+        UserDefaults.standard.removeObject(forKey: dateKey)
+    }
 }
 
 // MARK: - Daily Decision Goal (36 decisions per day = 3 blocks of 12)
@@ -84,6 +96,12 @@ struct DailyDecisionProgress {
     static func clearForPlayer(_ id: UUID) {
         UserDefaults.standard.removeObject(forKey: "\(dateKeyPrefix)_\(id.uuidString)")
         UserDefaults.standard.removeObject(forKey: "\(countKeyPrefix)_\(id.uuidString)")
+    }
+
+    /// Clears legacy daily decision keys without a player id.
+    static func clearLegacyDailyKeys() {
+        UserDefaults.standard.removeObject(forKey: dateKeyPrefix)
+        UserDefaults.standard.removeObject(forKey: countKeyPrefix)
     }
 
     private static func dateKeyString(_ date: Date) -> String {

@@ -214,6 +214,25 @@ class UserProfileManager: ObservableObject {
         )
     }
 
+    /// Merges session rows loaded from Supabase after login (no XP, badges, or curriculum side effects).
+    @discardableResult
+    func mergeHydratedSessionResults(_ newResults: [SessionResult], forPlayerId playerId: UUID) -> Int {
+        guard let index = profiles.firstIndex(where: { $0.id == playerId }) else { return 0 }
+        var profile = profiles[index]
+        let existingIds = Set(profile.sessionResults.map(\.id))
+        let toAdd = newResults.filter { !existingIds.contains($0.id) }
+        guard !toAdd.isEmpty else { return 0 }
+        for r in toAdd.sorted(by: { $0.date < $1.date }) {
+            profile.sessionResults.insert(r, at: 0)
+        }
+        profiles[index] = profile
+        if currentProfile?.id == playerId {
+            currentProfile = profile
+        }
+        saveProfiles()
+        return toAdd.count
+    }
+
     private func unlockBadges(for result: SessionResult, profile: inout UserProfile) -> [PlayerBadge] {
         var unlockedNow: [PlayerBadge] = []
         var unlockedSet = Set(profile.unlockedBadges)
@@ -538,6 +557,24 @@ class UserProfileManager: ObservableObject {
             sentences.append("Keep training. Consistency will show up in your next report.")
         }
         return sentences.prefix(2).joined(separator: " ")
+    }
+
+    /// Clears current profile selection and any in-flight training session settings (Switch Player). Does not remove profiles or sign out.
+    func clearCurrentSelectionForSwitchPlayer() {
+        currentSessionSettings = nil
+        currentProfile = nil
+        if !profiles.isEmpty {
+            isProfileCreated = true
+        }
+        saveProfiles()
+    }
+
+    /// Clears all profiles and persisted keys (account sign-out). Does not delete remote Supabase players.
+    func clearAllForSignOut() {
+        profiles = []
+        currentProfile = nil
+        isProfileCreated = false
+        saveProfiles()
     }
 
     func deleteProfile(_ profile: UserProfile) {

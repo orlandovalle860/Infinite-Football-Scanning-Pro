@@ -408,7 +408,7 @@ struct TwoMinuteResultsView: View {
                 .padding(.top, 8)
 
                 VStack(spacing: 12) {
-                    if !UserDefaults.standard.bool(forKey: "hasCompletedInitialTest") {
+                    if !UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey) {
                         Button {
                             navigateToCreateProfile = true
                         } label: {
@@ -424,7 +424,7 @@ struct TwoMinuteResultsView: View {
                     }
 
                     Button {
-                        if !UserDefaults.standard.bool(forKey: "hasCompletedInitialTest") {
+                        if !UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey) {
                             navigateToCreateProfile = true
                             return
                         }
@@ -440,7 +440,7 @@ struct TwoMinuteResultsView: View {
                     }
                     .buttonStyle(PlainButtonStyle())
                     Button {
-                        if !UserDefaults.standard.bool(forKey: "hasCompletedInitialTest") {
+                        if !UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey) {
                             navigateToCreateProfile = true
                             return
                         }
@@ -458,7 +458,7 @@ struct TwoMinuteResultsView: View {
                         .padding(.horizontal, 16)
 
                     Button {
-                        if !UserDefaults.standard.bool(forKey: "hasCompletedInitialTest") {
+                        if !UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey) {
                             navigateToCreateProfile = true
                             return
                         }

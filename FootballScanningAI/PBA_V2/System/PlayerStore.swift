@@ -155,6 +155,12 @@ final class PlayerStore: ObservableObject {
         persist()
     }
 
+    /// Clears the selected player only (Switch Player). Keeps the player list for the same account/device.
+    func clearSelectedPlayerOnly() {
+        selectedPlayerId = nil
+        persist()
+    }
+
     var selectedPlayer: Player? {
         players.first(where: { $0.id == selectedPlayerId })
     }

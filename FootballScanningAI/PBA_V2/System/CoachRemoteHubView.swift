@@ -11,6 +11,7 @@ struct CoachRemoteHubView: View {
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
     @EnvironmentObject private var router: AppRouter
+    @AppStorage(AppRole.storageKey) private var appRoleRaw: String = AppRole.player.rawValue
     @State private var partnerSessionActive = false
     @State private var showDisconnectCoachConfirm = false
 
@@ -97,6 +98,22 @@ struct CoachRemoteHubView: View {
         )
         .navigationTitle("Coach Remote")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button("Switch to Player Mode") {
+                        let old = appRoleRaw
+                        appRoleRaw = AppRole.player.rawValue
+                        router.popToRoot()
+                        AppRoleDebug.log("role_change reason=switch_to_player old=\(old) new=\(AppRole.player.rawValue) routing=player_flow")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .foregroundColor(.white.opacity(0.9))
+                }
+                .accessibilityLabel("Device role options")
+            }
+        }
         .preferredColorScheme(.dark)
         .onAppear {
             partnerSessionActive = TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive

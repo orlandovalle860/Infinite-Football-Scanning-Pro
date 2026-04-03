@@ -20,6 +20,8 @@ struct ProgressLineChartView: View {
     let points: [ChartDataPoint]
     let valueLabel: String  // e.g. "%", "s"
     let yAxisRange: (min: Double, max: Double)?  // nil = auto from data
+    /// Optional horizontal reference (same units as points), e.g. 80 for 80% on a percent chart.
+    var referenceLineY: Double? = nil
     /// When points.count < 2, show this instead of the chart. Nil = use default generic message.
     var emptyStateMessage: String? = nil
 
@@ -116,6 +118,17 @@ struct ProgressLineChartView: View {
                         p.addLine(to: CGPoint(x: paddingLeft + chartW, y: yZero))
                     }
                     .stroke(Color.white.opacity(0.22), style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+                }
+
+                // Optional target / reference line (e.g. 80% on 0–100 scale).
+                if let refY = referenceLineY, refY >= range.min, refY <= range.max {
+                    let scaleY = range.max > range.min ? chartH / CGFloat(range.max - range.min) : 1
+                    let yRef = paddingTop + CGFloat(range.max - refY) * scaleY
+                    Path { p in
+                        p.move(to: CGPoint(x: paddingLeft, y: yRef))
+                        p.addLine(to: CGPoint(x: paddingLeft + chartW, y: yRef))
+                    }
+                    .stroke(Color.white.opacity(0.28), style: StrokeStyle(lineWidth: 1, lineCap: .round, dash: [5, 5]))
                 }
 
                 // Line path

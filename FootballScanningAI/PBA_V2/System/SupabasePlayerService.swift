@@ -60,6 +60,12 @@ final class SupabasePlayerService {
 
     init() {}
 
+    /// Clears local synced/pending-delete caches so the next account does not inherit the previous user’s ids.
+    func clearLocalSyncCachesForSignOut() {
+        UserDefaults.standard.removeObject(forKey: syncedIdsKey)
+        UserDefaults.standard.removeObject(forKey: pendingDeleteIdsKey)
+    }
+
     /// Persisted set of player IDs that have been successfully synced to Supabase.
     private var syncedPlayerIds: Set<UUID> {
         get {
@@ -190,9 +196,8 @@ final class SupabasePlayerService {
         }
     }
 
-    /// Fetch all players for the current authenticated user. Returns empty if not host or not logged in.
+    /// Fetch all players for the current authenticated user. Not gated on Multipeer host/display role.
     func fetchPlayersForCurrentUser() async throws -> [SupabasePlayer] {
-        guard ConnectionManager.shared.isHost else { return [] }
         guard let userId = AuthManager.shared.currentUserId else { return [] }
         let client = SupabaseClientManager.client
         let userIdStr = userId.uuidString.lowercased()

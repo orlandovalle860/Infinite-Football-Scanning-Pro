@@ -78,6 +78,25 @@ final class AuthManager: ObservableObject {
         await MainActor.run { isRestoring = false }
     }
 
+    /// Reloads the current session from the Supabase client (e.g. after `auth.update` or to refresh JWT user_metadata).
+    /// Not gated on Multipeer role — account state must load on every device.
+    func refreshSessionFromSupabase() async {
+        let client = SupabaseClientManager.client
+        do {
+            let session = try await client.auth.refreshSession()
+            await MainActor.run { currentSession = session }
+            return
+        } catch {
+            // e.g. missing refresh token — fall back to reading stored session
+        }
+        do {
+            let session = try await client.auth.session
+            await MainActor.run { currentSession = session }
+        } catch {
+            // Keep existing session; caller may log.
+        }
+    }
+
     /// Sign up with email and password. No-op on coach remote (non-host).
     func signUp(email: String, password: String) async {
         guard ConnectionManager.shared.isHost else { return }
@@ -91,6 +110,7 @@ final class AuthManager: ObservableObject {
                     lastError = nil
                     AnalyticsManager.shared.track(.accountCreated, userId: session.user.id)
                 }
+                print("[AuthFlow-Debug] auth operation=signUp email=\(email.trimmingCharacters(in: .whitespacesAndNewlines)) auth.uid=\(session.user.id.uuidString.lowercased())")
             } else {
                 // Email confirmation required
                 await MainActor.run {
@@ -114,6 +134,7 @@ final class AuthManager: ObservableObject {
                 currentSession = session
                 lastError = nil
             }
+            print("[AuthFlow-Debug] auth operation=signInWithPassword email=\(email.trimmingCharacters(in: .whitespacesAndNewlines)) auth.uid=\(session.user.id.uuidString.lowercased())")
         } catch {
             await MainActor.run { lastError = error.localizedDescription }
         }
@@ -181,17 +202,14 @@ final class AuthManager: ObservableObject {
                 lastError = nil
                 AnalyticsManager.shared.track(.accountCreated, userId: session.user.id)
             }
+            print("[AuthFlow-Debug] auth operation=signInWithApple auth.uid=\(session.user.id.uuidString.lowercased()) email=\(session.user.email ?? "nil")")
         } catch {
             await MainActor.run { lastError = error.localizedDescription }
         }
     }
 
-    /// Sign out. Clears session; UI should switch to login. No-op on coach remote (non-host).
+    /// Sign out. Clears Supabase session from keychain and local state so another account can sign in.
     func signOut() async {
-        guard ConnectionManager.shared.isHost else {
-            await MainActor.run { currentSession = nil; lastError = nil }
-            return
-        }
         let client = SupabaseClientManager.client
         do {
             try await client.auth.signOut()

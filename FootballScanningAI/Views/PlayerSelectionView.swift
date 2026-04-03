@@ -12,9 +12,11 @@ struct PlayerSelectionView: View {
     @ObservedObject var playerStore: PlayerStore
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var router: AppRouter
+    @Binding var signOutUXPhase: SignOutUXPhase
     @EnvironmentObject private var progressStore: ProgressStore
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
 
+    @State private var showSignOutConfirmation = false
     @State private var remotePlayers: [SupabasePlayer] = []
     @State private var isLoading = true
     @State private var loadError: String?
@@ -113,10 +115,28 @@ struct PlayerSelectionView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Sign Out") {
-                    Task { await AuthManager.shared.signOut() }
+                    showSignOutConfirmation = true
                 }
                 .foregroundColor(.white.opacity(0.9))
+                .disabled(signOutUXPhase != .idle)
             }
+        }
+        .alert("Sign Out?", isPresented: $showSignOutConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Sign Out", role: .destructive) {
+                print("[SignOut-UX] sign-out confirm tapped")
+                Task {
+                    await SignOutUXRunner.run(
+                        phase: $signOutUXPhase,
+                        profileManager: profileManager,
+                        playerStore: playerStore,
+                        progressStore: progressStore,
+                        router: router
+                    )
+                }
+            }
+        } message: {
+            Text("You’ll return to the sign-in screen and can use a different account.")
         }
         .onAppear { loadPlayers() }
         .sheet(isPresented: $showAddPlayer) {

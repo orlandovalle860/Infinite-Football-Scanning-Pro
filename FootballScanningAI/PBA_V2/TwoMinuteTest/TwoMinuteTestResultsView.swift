@@ -2,19 +2,10 @@
 //  TwoMinuteTestResultsView.swift
 //  FootballScanningAI
 //
-//  PBA V2 — Unique result screen: Player Type, metrics, coach insight, recommended next, Start Training CTA.
+//  PBA V2 — Coaching-style 2-Minute Test results: identity, clarity, next action.
 //
 
 import SwiftUI
-
-private func activityDisplayName(_ kind: ActivityKind) -> String {
-    switch kind {
-    case .twoMinuteTest: return "2-Minute Test"
-    case .awayFromPressure: return "Playing Away From Pressure"
-    case .dribbleOrPass: return "Dribble or Pass"
-    case .oneTouchPassing: return "One-Touch Passing"
-    }
-}
 
 struct TwoMinuteTestResultsView: View {
     let result: TwoMinuteTestResult
@@ -39,6 +30,8 @@ struct TwoMinuteTestResultsView: View {
     @State private var navigateToEmailAuth = false
     @State private var navigateToCreateProfile = false
     @State private var navigateToPlayerReport = false
+    @State private var navigateToTrainingRecommendation = false
+    @State private var didScheduleTrainingRecommendationNavigation = false
     private let plannedTestReps: Int = 10
     private var loggedReps: Int { result.totalReps }
 
@@ -51,45 +44,100 @@ struct TwoMinuteTestResultsView: View {
             slow: result.slowCount
         )
     }
-    private var bias: Gate? { result.biasDirection }
-    private static func formatDecisionTime(_ seconds: Double?) -> String {
-        guard let s = seconds else { return "—" }
-        return String(format: "%.2f seconds", s)
-    }
-
     /// Onboarding: no profiles yet or first-time test not completed.
     private var isOnboarding: Bool {
-        profileManager.profiles.isEmpty || !UserDefaults.standard.bool(forKey: "hasCompletedInitialTest")
+        profileManager.profiles.isEmpty || !UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey)
     }
 
-    private var postSessionNarrative: PBAPostSessionNarrative {
-        PBAPostSessionNarrativeBuilder.fromTwoMinuteTestResult(
-            result,
-            playerType: type,
-            previousTwoMinute: progressStore.previous(.twoMinuteTest, playerId: profileManager.currentProfile?.id ?? playerStore.selectedPlayerId),
-            progressStore: progressStore,
-            playerId: profileManager.currentProfile?.id ?? playerStore.selectedPlayerId
-        )
+    /// Behavior timing from per-rep logs (nil when preview / no logs).
+    private var behaviorBadgeEvaluation: TwoMinuteBehaviorBadgeEvaluation? {
+        guard let logs = repLogs, !logs.isEmpty else { return nil }
+        return TwoMinuteBehaviorBadgeEvaluator.evaluate(logs: logs, difficulty: result.difficulty)
+    }
+
+    private var primaryProfileTitle: String {
+        if let ev = behaviorBadgeEvaluation {
+            return TwoMinuteBehaviorBadgeEvaluator.primaryProfileTitle(evaluation: ev)
+        }
+        return type.title
+    }
+
+    private var headerSubtext: String {
+        if let ev = behaviorBadgeEvaluation {
+            return TwoMinuteBehaviorBadgeEvaluator.resultsHeaderSubtext(evaluation: ev)
+        }
+        if let avg = result.avgDecisionWindowSeconds {
+            return "Avg decision window: \(DecisionTimingModel.summaryText(windowSeconds: avg))"
+        }
+        return "Connect a full session with rep logs to see early / on-time / late breakdown."
+    }
+
+    private var earlyCount: Int { behaviorBadgeEvaluation?.earlyCount ?? 0 }
+    private var idealCount: Int { behaviorBadgeEvaluation?.idealCount ?? 0 }
+    private var lateCount: Int { behaviorBadgeEvaluation?.lateCount ?? 0 }
+    private var totalCount: Int { behaviorBadgeEvaluation?.total ?? 0 }
+
+    private var insightBlocks: [(title: String, body: String)] {
+        if let ev = behaviorBadgeEvaluation {
+            return TwoMinuteBehaviorBadgeEvaluator.resultsInsightBlocks(evaluation: ev)
+        }
+        return [("Next step", "Run the test with a connected session to unlock per-rep timing insights.")]
+    }
+
+    private var nextFocusBody: String {
+        if let ev = behaviorBadgeEvaluation {
+            return TwoMinuteBehaviorBadgeEvaluator.nextFocusBody(evaluation: ev)
+        }
+        return "Decide earlier — aim to know your action before the ball travels."
     }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(spacing: 24) {
                 if isOnboarding {
                     onboardingResultSummary
                     onboardingAccountCTA
                 }
-                PBAPostSessionNarrativeStack(narrative: postSessionNarrative)
-                Text("Your numbers")
-                    .font(.title3.weight(.bold))
-                    .foregroundColor(.white.opacity(0.95))
-                Text("Reference only — your coach debrief is above.")
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.55))
-                metricsCard
-                buttonsSection
+
+                // 1. Header
+                headerSection
+
+                // 2. Visual chart
+                DecisionTimingDonutChart(
+                    earlyCount: earlyCount,
+                    idealCount: idealCount,
+                    lateCount: lateCount,
+                    totalCount: totalCount
+                )
+                .frame(maxWidth: .infinity)
+
+                // 3. Breakdown
+                breakdownSection
+
+                // 4. Insight blocks (max 2 from model)
+                insightSection
+
+                // 5. Next focus
+                nextFocusSection
+
+                if !isOnboarding {
+                    Button {
+                        navigateToTrainingRecommendation = true
+                    } label: {
+                        Text("Your next step")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.yellow)
+                    .foregroundStyle(.black)
+                }
+
+                // 6. Action buttons + existing nav
+                actionButtonsSection
             }
-            .padding(20)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 20)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
@@ -117,7 +165,15 @@ struct TwoMinuteTestResultsView: View {
             }
         }
         .onAppear {
+            logResultsUIDebug()
+            AuthFlowOnboardingSync.markLocalBaselineCompleted()
             saveProgressIfNeeded()
+            if !isOnboarding, !didScheduleTrainingRecommendationNavigation {
+                didScheduleTrainingRecommendationNavigation = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) {
+                    navigateToTrainingRecommendation = true
+                }
+            }
         }
         .navigationDestination(item: $trainingTarget) { activity in
             roleSelectionView(for: activity)
@@ -185,6 +241,202 @@ struct TwoMinuteTestResultsView: View {
         .navigationDestination(isPresented: $navigateToPlayerReport) {
             PlayerReportView(content: PlayerReportGenerator.report(from: result))
         }
+        .navigationDestination(isPresented: $navigateToTrainingRecommendation) {
+            TrainingRecommendationView(
+                primaryProfileTitle: primaryProfileTitle,
+                earlyCount: earlyCount,
+                idealCount: idealCount,
+                lateCount: lateCount,
+                onStartTrainingAFP: {
+                    navigateToTrainingRecommendation = false
+                    if let onStartTraining = onStartTraining {
+                        onStartTraining(.awayFromPressure)
+                    } else {
+                        trainingTarget = .awayFromPressure
+                    }
+                },
+                onRunTestAgain: {
+                    navigateToTrainingRecommendation = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        navigateToTestAgain = true
+                    }
+                }
+            )
+        }
+    }
+
+    private func logResultsUIDebug() {
+        print("[ResultsUI-Debug] earlyCount=\(earlyCount) idealCount=\(idealCount) lateCount=\(lateCount) totalCount=\(totalCount) primaryProfileTitle=\(primaryProfileTitle)")
+    }
+
+    // MARK: - Sections
+
+    private var headerSection: some View {
+        VStack(spacing: 8) {
+            Text("Your Decision Profile")
+                .font(.title2)
+                .fontWeight(.semibold)
+                .foregroundColor(.white.opacity(0.95))
+            Text(primaryProfileTitle)
+                .font(.system(size: 32, weight: .bold))
+                .foregroundColor(.white)
+                .multilineTextAlignment(.center)
+            Text(headerSubtext)
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity)
+        .multilineTextAlignment(.center)
+    }
+
+    private var breakdownSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Your Decisions")
+                .font(.headline)
+                .foregroundColor(.white.opacity(0.95))
+            HStack {
+                Text("Early")
+                    .foregroundColor(.white.opacity(0.9))
+                Spacer()
+                Text(totalCount > 0 ? "\(earlyCount)" : "—")
+                    .foregroundColor(.white.opacity(0.9))
+            }
+            HStack {
+                Text("On Time")
+                    .foregroundColor(.white.opacity(0.9))
+                Spacer()
+                Text(totalCount > 0 ? "\(idealCount)" : "—")
+                    .foregroundColor(.white.opacity(0.9))
+            }
+            HStack {
+                Text("Late")
+                    .foregroundColor(.white.opacity(0.9))
+                Spacer()
+                Text(totalCount > 0 ? "\(lateCount)" : "—")
+                    .foregroundColor(.white.opacity(0.9))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var insightSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(Array(insightBlocks.enumerated()), id: \.offset) { _, block in
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(block.title)
+                        .font(.headline)
+                        .foregroundColor(.white.opacity(0.95))
+                    Text(block.body)
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.88))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.white.opacity(0.05))
+                .cornerRadius(12)
+            }
+        }
+    }
+
+    private var nextFocusSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Next Focus")
+                .font(.headline)
+                .foregroundColor(.white.opacity(0.95))
+            Text(nextFocusBody)
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.88))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var actionButtonsSection: some View {
+        VStack(spacing: 12) {
+            if !isOnboarding {
+                if profileManager.profiles.isEmpty {
+                    Button {
+                        if Config.isSupabaseConfigured {
+                            navigateToAccountPrompt = true
+                        } else {
+                            navigateToCreateProfile = true
+                        }
+                    } label: {
+                        Text("Save your results and track your improvement.")
+                            .font(.headline)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.yellow)
+                    .foregroundStyle(.black)
+                } else if !UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey) {
+                    Button {
+                        if Config.isSupabaseConfigured {
+                            navigateToAccountPrompt = true
+                        } else {
+                            navigateToCreateProfile = true
+                        }
+                    } label: {
+                        Text("Continue to Home")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.yellow)
+                    .foregroundStyle(.black)
+                }
+            }
+
+            Button {
+                navigateToTestAgain = true
+            } label: {
+                Text("Run It Again")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.yellow)
+            .foregroundStyle(.black)
+
+            Button {
+                if let onStartTraining = onStartTraining {
+                    onStartTraining(.awayFromPressure)
+                } else {
+                    trainingTarget = .awayFromPressure
+                }
+            } label: {
+                Text("Start Training")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .tint(.white)
+
+            Button {
+                navigateToPlayerReport = true
+            } label: {
+                Text("View Player Report")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.9))
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                popToRootTrigger.request = true
+                onDismissCover?()
+                router.popToRoot()
+            } label: {
+                Text("Back to Home")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.8))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.top, 8)
     }
 
     /// Top-of-screen result for onboarding: decisions count, average speed, elite benchmark.
@@ -258,133 +510,6 @@ struct TwoMinuteTestResultsView: View {
             RoundedRectangle(cornerRadius: 18)
                 .stroke(Color.white.opacity(0.08), lineWidth: 1)
         )
-    }
-
-    private var metricsCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            row("Receiving profile", type.title)
-            row("Completed reps", "\(loggedReps) / \(plannedTestReps)")
-            row("Correct decisions", "\(result.correctCount) / \(loggedReps)")
-            row("Decision window", result.avgDecisionWindowSeconds.map { DecisionTimingModel.summaryText(windowSeconds: $0) } ?? "—")
-            row("Tempo mix", "Fast \(result.fastCount) • Med \(result.mediumCount) • Slow \(result.slowCount)")
-            row("Bias", bias?.userFacingName ?? "None")
-            if loggedReps < plannedTestReps {
-                Text("\(plannedTestReps - loggedReps) \(plannedTestReps - loggedReps == 1 ? "rep was" : "reps were") not completed or recorded.")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.7))
-            }
-        }
-        .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.05))
-        .cornerRadius(18)
-        .overlay(
-            RoundedRectangle(cornerRadius: 18)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        )
-    }
-
-    private var buttonsSection: some View {
-        VStack(spacing: 12) {
-            // Primary account CTA is in onboardingAccountCTA when isOnboarding
-            if !isOnboarding {
-                if profileManager.profiles.isEmpty {
-                    Button {
-                        if Config.isSupabaseConfigured {
-                            navigateToAccountPrompt = true
-                        } else {
-                            navigateToCreateProfile = true
-                        }
-                    } label: {
-                        Text("Save your results and track your improvement.")
-                            .font(.headline)
-                            .foregroundColor(.black)
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 16)
-                            .background(Color.yellow)
-                            .cornerRadius(14)
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                } else if !UserDefaults.standard.bool(forKey: "hasCompletedInitialTest") {
-                    Button {
-                        if Config.isSupabaseConfigured {
-                            navigateToAccountPrompt = true
-                        } else {
-                            navigateToCreateProfile = true
-                        }
-                    } label: {
-                        Text("Continue to Home")
-                            .font(.headline)
-                            .foregroundColor(.black)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 16)
-                            .background(Color.yellow)
-                            .cornerRadius(14)
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                }
-            }
-
-            Button {
-                if let onStartTraining = onStartTraining {
-                    onStartTraining(.awayFromPressure)
-                } else {
-                    trainingTarget = .awayFromPressure
-                }
-            } label: {
-                Text("Start Training")
-                    .font(.headline)
-                    .foregroundColor(.black)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
-                    .background(Color.yellow)
-                    .cornerRadius(14)
-            }
-            .buttonStyle(PlainButtonStyle())
-
-            Button {
-                navigateToTestAgain = true
-            } label: {
-                Text("Run Test Again")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.9))
-            }
-            .buttonStyle(PlainButtonStyle())
-
-            Button {
-                navigateToPlayerReport = true
-            } label: {
-                Text("View Player Report")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.9))
-            }
-            .buttonStyle(PlainButtonStyle())
-
-            Button {
-                popToRootTrigger.request = true
-                onDismissCover?()
-                router.popToRoot()
-            } label: {
-                Text("Back to Home")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.8))
-            }
-            .buttonStyle(PlainButtonStyle())
-        }
-        .padding(.top, 8)
-    }
-
-    private func row(_ label: String, _ value: String) -> some View {
-        HStack {
-            Text(label)
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.8))
-            Spacer()
-            Text(value)
-                .font(.subheadline.weight(.medium))
-                .foregroundColor(.white)
-        }
     }
 
     @ViewBuilder
@@ -502,6 +627,61 @@ struct TwoMinuteTestResultsView: View {
     }
 }
 
+// MARK: - Donut chart
+
+private struct DecisionTimingDonutChart: View {
+    let earlyCount: Int
+    let idealCount: Int
+    let lateCount: Int
+    let totalCount: Int
+
+    private var earlyFrac: CGFloat {
+        guard totalCount > 0 else { return 0 }
+        return CGFloat(earlyCount) / CGFloat(totalCount)
+    }
+    private var idealFrac: CGFloat {
+        guard totalCount > 0 else { return 0 }
+        return CGFloat(idealCount) / CGFloat(totalCount)
+    }
+    private var lateFrac: CGFloat {
+        guard totalCount > 0 else { return 0 }
+        return CGFloat(lateCount) / CGFloat(totalCount)
+    }
+
+    var body: some View {
+        ZStack {
+            if totalCount == 0 {
+                Circle()
+                    .stroke(Color.white.opacity(0.2), style: StrokeStyle(lineWidth: 22, lineCap: .butt))
+                    .frame(width: 160, height: 160)
+                Text("No timing data")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.5))
+            } else {
+                let e = earlyFrac
+                let i = idealFrac
+                let l = lateFrac
+                Circle()
+                    .trim(from: 0, to: e)
+                    .stroke(Color.green, style: StrokeStyle(lineWidth: 22, lineCap: .butt))
+                    .rotationEffect(.degrees(-90))
+                    .frame(width: 160, height: 160)
+                Circle()
+                    .trim(from: e, to: e + i)
+                    .stroke(Color.yellow, style: StrokeStyle(lineWidth: 22, lineCap: .butt))
+                    .rotationEffect(.degrees(-90))
+                    .frame(width: 160, height: 160)
+                Circle()
+                    .trim(from: e + i, to: e + i + l)
+                    .stroke(Color.red, style: StrokeStyle(lineWidth: 22, lineCap: .butt))
+                    .rotationEffect(.degrees(-90))
+                    .frame(width: 160, height: 160)
+            }
+        }
+        .frame(width: 160, height: 160)
+    }
+}
+
 #Preview {
     NavigationStack {
         TwoMinuteTestResultsView(
@@ -522,5 +702,6 @@ struct TwoMinuteTestResultsView: View {
         .environmentObject(ProgressStore())
         .environmentObject(PlayerStore())
         .environmentObject(PopToRootTrigger())
+        .environmentObject(AppRouter())
     }
 }

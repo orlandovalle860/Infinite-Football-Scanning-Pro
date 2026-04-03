@@ -240,13 +240,16 @@ enum TrainingRecommendation {
         lastAFPSessionResult: SessionResult? = nil,
         decisionConsistency: DecisionConsistencyLabel? = nil
     ) -> TrainingRecommendationResult {
+        // Guest / merged account: baseline may be complete locally while no two_minute row exists for this playerId yet.
         if progressStore.last(.twoMinuteTest, playerId: playerId) == nil {
-            return TrainingRecommendationResult(
-                activity: .twoMinuteTest,
-                focusLine: "Establish your baseline decision speed.",
-                coachTip: "Take the 2-Minute Test before starting training.",
-                reason: "Take the 2-Minute Test first."
-            )
+            if !hasCompletedInitialTest {
+                return TrainingRecommendationResult(
+                    activity: .twoMinuteTest,
+                    focusLine: "Establish your baseline decision speed.",
+                    coachTip: "Take the 2-Minute Test before starting training.",
+                    reason: "Take the 2-Minute Test first."
+                )
+            }
         }
 
         let speed = decisionSpeed(from: last5)

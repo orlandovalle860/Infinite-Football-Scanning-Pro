@@ -23,7 +23,6 @@ struct CreatePlayerProfileAfterTestView: View {
     var twoMinuteTestResult: TwoMinuteTestResult? = nil
     /// When set (e.g. from 2-min results in fullScreenCover), called after save/skip so the cover can dismiss.
     var onComplete: (() -> Void)? = nil
-    @AppStorage("hasCompletedInitialTest") private var hasCompletedInitialTest = false
 
     @State private var name: String = ""
     @State private var age: String = ""
@@ -145,7 +144,7 @@ struct CreatePlayerProfileAfterTestView: View {
             saveTestResultToProfile(r, playerId: newProfile.id)
         }
         AnalyticsManager.shared.track(.playerCreated, playerId: newProfile.id)
-        hasCompletedInitialTest = true
+        AuthFlowOnboardingSync.markLocalAndSyncRemoteCompleted()
         onComplete?()
     }
 
@@ -165,7 +164,7 @@ struct CreatePlayerProfileAfterTestView: View {
             saveTestResultToProfile(r, playerId: newProfile.id)
         }
         AnalyticsManager.shared.track(.playerCreated, playerId: newProfile.id)
-        hasCompletedInitialTest = true
+        AuthFlowOnboardingSync.markLocalAndSyncRemoteCompleted()
         onComplete?()
     }
 

@@ -49,6 +49,9 @@ final class SupabaseDecisionService {
     /// Only inserts when the session exists in Supabase: requires CurrentSessionStore.sessionId to match decision.sessionId (session must be created first). Skips if not host. Runs async.
     func saveDecision(_ decision: Decision) {
         guard ConnectionManager.shared.isHost else { return }
+        guard AuthManager.shared.currentSession != nil else {
+            return
+        }
         guard let currentSessionId = CurrentSessionStore.shared.sessionId else {
             return
         }
@@ -86,9 +89,9 @@ final class SupabaseDecisionService {
         }
     }
 
-    /// Returns true if decisions can be saved (session was created in Supabase and stored in CurrentSessionStore).
+    /// Returns true if decisions can be uploaded (signed in + session id in CurrentSessionStore).
     static var canSaveDecisions: Bool {
-        CurrentSessionStore.shared.sessionId != nil
+        AuthManager.shared.currentSession != nil && CurrentSessionStore.shared.sessionId != nil
     }
 
     private static let pendingDecisionsKey = "pba_pending_decisions"

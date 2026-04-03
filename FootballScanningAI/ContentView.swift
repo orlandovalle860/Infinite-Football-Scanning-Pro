@@ -322,7 +322,7 @@ struct ContentView: View {
     @ObservedObject private var progressStore = ProgressStore.shared
     @StateObject private var playerStore = PlayerStore()
     @StateObject private var popToRootTrigger = PopToRootTrigger()
-    @AppStorage("hasCompletedInitialTest") private var hasCompletedInitialTest = false
+    @AppStorage(hasCompletedInitialTestKey) private var hasCompletedInitialTest = false
     /// When this changes, MainAppView’s navigation stack is recreated so Home/Leave actually pops to root.
     @ObservedObject private var authManager = AuthManager.shared
     @EnvironmentObject private var connectionManager: ConnectionManager
@@ -356,6 +356,8 @@ struct PostAuthView: View {
 
     @State private var hasFetched = false
     @State private var showCreatePlayer = false
+    @State private var playerFetchFailed = false
+    @State private var loadGeneration = 0
 
     var body: some View {
         Group {
@@ -366,6 +368,26 @@ struct PostAuthView: View {
                         ProgressView().progressViewStyle(CircularProgressViewStyle(tint: .white)).scaleEffect(1.2)
                         Text("Loading…").font(.subheadline).foregroundColor(.white.opacity(0.8))
                     }
+                }
+            } else if playerFetchFailed {
+                ZStack {
+                    Color(red: 0.05, green: 0.05, blue: 0.1).ignoresSafeArea()
+                    VStack(spacing: 16) {
+                        Text("Couldn’t load your player profile.")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                            .multilineTextAlignment(.center)
+                        Text("Check your connection and try again.")
+                            .font(.subheadline)
+                            .foregroundColor(.white.opacity(0.8))
+                        Button("Retry") {
+                            playerFetchFailed = false
+                            hasFetched = false
+                            loadGeneration += 1
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .padding(24)
                 }
             } else if showCreatePlayer {
                 CreatePlayerAfterAuthView(
@@ -392,22 +414,29 @@ struct PostAuthView: View {
         .environmentObject(router)
         .environmentObject(ConnectionManager.shared)
         .environmentObject(multipeerManager)
-        .onAppear {
+        .task(id: loadGeneration) {
             guard !hasFetched else { return }
-            Task {
-                do {
-                    let list = try await SupabasePlayerService.shared.fetchPlayersForCurrentUser()
-                    await MainActor.run {
-                        hasFetched = true
-                        profileManager.reconcileWithSupabasePlayerList(list, playerStore: playerStore)
-                        showCreatePlayer = profileManager.profiles.isEmpty
-                    }
-                } catch {
-                    await MainActor.run {
-                        hasFetched = true
-                        showCreatePlayer = true
-                    }
+            do {
+                let list = try await SupabasePlayerService.shared.fetchPlayersForCurrentUser()
+                await MainActor.run {
+                    hasFetched = true
+                    playerFetchFailed = false
+                    profileManager.reconcileWithSupabasePlayerList(list, playerStore: playerStore)
+                    showCreatePlayer = profileManager.profiles.isEmpty
                 }
+                await AuthFlowOnboardingSync.resolveAndApplyOnboardingStateAfterLogin(
+                    email: AuthManager.shared.currentUserEmail,
+                    playerList: list,
+                    context: "post_auth",
+                    profileManager: profileManager
+                )
+            } catch {
+                await MainActor.run {
+                    hasFetched = true
+                    playerFetchFailed = true
+                    showCreatePlayer = false
+                }
+                print("[AuthFlow-Debug] context=post_auth fetchPlayers failed error=\(error.localizedDescription) routing=show_retry (not treating as empty roster)")
             }
         }
     }
@@ -432,6 +461,10 @@ struct MainAppView: View {
     @State private var hasHydratedPlayersForSession: Bool = false
     @AppStorage(hasCompletedInitialTestKey) private var hasCompletedInitialTest = false
     @AppStorage(coachDeviceShownHomeKey) private var coachDeviceShownHome = false
+    @AppStorage(AppRole.storageKey) private var appRoleRaw: String = AppRole.player.rawValue
+    @State private var signOutUXPhase: SignOutUXPhase = .idle
+
+    private var resolvedAppRole: AppRole { AppRole.resolved(from: appRoleRaw) }
 
     /// After reinstall, local stores are empty but Supabase session may still restore from keychain; players then load asynchronously. Don't flash Intro until we know remote is empty too (signed-in + host).
     private var shouldWaitForRemoteHydration: Bool {
@@ -451,12 +484,22 @@ struct MainAppView: View {
         }
     }
 
-    /// Launch: auth/bootstrap → Intro until initial test is completed (`hasCompletedInitialTest`) so remote hydration cannot skip first-run; then Home / player pick.
+    /// Coach Remote devices: root is ``CoachRemoteHubView`` (skips player Home). See ``AppRole``.
+    @ViewBuilder
+    private var coachRemoteRootView: some View {
+        CoachRemoteHubView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+            .environmentObject(popToRootTrigger)
+            .environmentObject(router)
+    }
+
+    /// Launch: auth/bootstrap → Intro until baseline is done locally or in Supabase user_metadata (see `AuthFlowOnboardingSync`); then Home / player pick.
     @ViewBuilder
     private var rootView: some View {
         Group {
             if authManager.isRestoring {
                 launchBootstrapPlaceholder
+            } else if resolvedAppRole == .coachRemote {
+                coachRemoteRootView
             } else if shouldWaitForRemoteHydration {
                 launchBootstrapPlaceholder
             } else if !hasCompletedInitialTest {
@@ -465,24 +508,47 @@ struct MainAppView: View {
                     settingsViewModel: settingsViewModel,
                     profileManager: profileManager
                 )
-            } else if playerStore.players.isEmpty, profileManager.profiles.isEmpty {
-                IntroOnboardingView(
+            } else if playerStore.players.isEmpty, profileManager.profiles.isEmpty,
+                      Config.isSupabaseConfigured, authManager.currentSession != nil {
+                // Signed in with baseline done remotely but no local profiles yet (reinstall / coach device): pick or add a player — not the first-run 2-min intro.
+                PlayerSelectionView(
+                    profileManager: profileManager,
+                    playerStore: playerStore,
                     settingsViewModel: settingsViewModel,
-                    profileManager: profileManager
+                    router: router,
+                    signOutUXPhase: $signOutUXPhase
                 )
+            } else if playerStore.players.isEmpty, profileManager.profiles.isEmpty {
+                if hasCompletedInitialTest {
+                    // Baseline already done (e.g. guest); do not send user through first-run 2-min intro again.
+                    HomeDashboardView(
+                        profileManager: profileManager,
+                        settingsViewModel: settingsViewModel,
+                        showsTopToggle: $showsTopToggle,
+                        showLoginSheet: $showLoginSheet,
+                        signOutUXPhase: $signOutUXPhase
+                    )
+                } else {
+                    IntroOnboardingView(
+                        settingsViewModel: settingsViewModel,
+                        profileManager: profileManager
+                    )
+                }
             } else if Config.isSupabaseConfigured, authManager.currentSession != nil, playerStore.selectedPlayerId == nil {
                 PlayerSelectionView(
                     profileManager: profileManager,
                     playerStore: playerStore,
                     settingsViewModel: settingsViewModel,
-                    router: router
+                    router: router,
+                    signOutUXPhase: $signOutUXPhase
                 )
             } else {
                 HomeDashboardView(
                     profileManager: profileManager,
                     settingsViewModel: settingsViewModel,
                     showsTopToggle: $showsTopToggle,
-                    showLoginSheet: $showLoginSheet
+                    showLoginSheet: $showLoginSheet,
+                    signOutUXPhase: $signOutUXPhase
                 )
             }
         }
@@ -495,8 +561,13 @@ struct MainAppView: View {
     private func logLaunchRouting(reason: String) {
         let route: String = {
             if authManager.isRestoring { return "bootstrap_auth_restoring" }
+            if resolvedAppRole == .coachRemote { return "coach_remote_root" }
             if shouldWaitForRemoteHydration { return "bootstrap_wait_remote_hydration" }
             if !hasCompletedInitialTest { return "intro_first_run_incomplete_test" }
+            if hasCompletedInitialTest, playerStore.players.isEmpty, profileManager.profiles.isEmpty,
+               Config.isSupabaseConfigured, authManager.currentSession != nil {
+                return "player_selection_signed_in_no_local"
+            }
             if playerStore.players.isEmpty, profileManager.profiles.isEmpty { return "intro_no_local_identity" }
             if Config.isSupabaseConfigured, authManager.currentSession != nil, playerStore.selectedPlayerId == nil {
                 return "player_selection"
@@ -508,6 +579,7 @@ struct MainAppView: View {
         LaunchProfileDebug.log("session authenticated=\(authManager.currentSession != nil) isRestoring=\(authManager.isRestoring)")
         LaunchProfileDebug.log("local playerCount=\(playerStore.players.count) profileCount=\(profileManager.profiles.count)")
         LaunchProfileDebug.log("remote hydrate hasHydratedPlayersForSession=\(hasHydratedPlayersForSession) shouldWaitRemote=\(shouldWaitForRemoteHydration)")
+        AppRoleDebug.log("routing_decision reason=\(reason) appRole=\(resolvedAppRole.rawValue) route=\(route)")
     }
 
     private func refreshCoachingTrainingNudgesIfNeeded() {
@@ -528,6 +600,10 @@ struct MainAppView: View {
                     }
             }
         }
+        .overlay {
+            SignOutUXBlockingOverlay(phase: signOutUXPhase)
+        }
+        .animation(.easeInOut(duration: 0.2), value: signOutUXPhase)
         .environmentObject(connectionManager)
         .environmentObject(multipeerManager)
         .environmentObject(progressStore)
@@ -574,6 +650,7 @@ struct MainAppView: View {
                     playerStore.addPlayer(id: current.id, name: current.name)
                 }
             }
+            AppRoleDebug.log("launch appRole=\(resolvedAppRole.rawValue)")
             logLaunchRouting(reason: "MainAppView.onAppear_before_hydrate")
             hydratePlayersIfNeeded()
             logLaunchRouting(reason: "MainAppView.onAppear_after_hydrate_scheduled")
@@ -606,8 +683,10 @@ struct MainAppView: View {
             }
         }
         .onChange(of: authManager.currentSession != nil) { _, hasSession in
-            if !hasSession { hasHydratedPlayersForSession = false }
-            else { hydratePlayersIfNeeded() }
+            if !hasSession {
+                hasHydratedPlayersForSession = false
+                showCreatePlayerAfterAuth = false
+            } else { hydratePlayersIfNeeded() }
             logLaunchRouting(reason: "session_changed hasSession=\(hasSession)")
         }
         .onChange(of: hasHydratedPlayersForSession) { _, v in
@@ -615,6 +694,11 @@ struct MainAppView: View {
         }
         .onChange(of: hasCompletedInitialTest) { _, v in
             logLaunchRouting(reason: "hasCompletedInitialTest=\(v)")
+        }
+        .onChange(of: appRoleRaw) { oldValue, newValue in
+            AppRoleDebug.log("role_change old=\(oldValue) new=\(newValue) routing=\(AppRole.resolved(from: newValue) == .coachRemote ? "coach_remote_root" : "player_flow")")
+            router.popToRoot()
+            logLaunchRouting(reason: "app_role_storage_changed")
         }
         .onReceive(NetworkReachabilityObserver.shared.reachableSubject) { _ in
             SupabaseSessionService.shared.retryPendingSessions(progressStore: progressStore)
@@ -639,15 +723,30 @@ struct MainAppView: View {
                     LaunchProfileDebug.log("hydrate_success remoteRowCount=\(list.count) — reconciling local stores")
                     hasHydratedPlayersForSession = true
                     profileManager.reconcileWithSupabasePlayerList(list, playerStore: playerStore)
-                    showCreatePlayerAfterAuth = profileManager.profiles.isEmpty
+                    // Use remote row count — reconcile may no-op on non-display devices, leaving locals empty while server has players.
+                    showCreatePlayerAfterAuth = list.isEmpty
                     logLaunchRouting(reason: "after_reconcile remoteRows=\(list.count) localProfiles=\(profileManager.profiles.count)")
                 }
+                await AuthFlowOnboardingSync.resolveAndApplyOnboardingStateAfterLogin(
+                    email: authManager.currentUserEmail,
+                    playerList: list,
+                    context: "hydrate",
+                    profileManager: profileManager
+                )
             } catch {
                 await MainActor.run {
                     LaunchProfileDebug.log("hydrate_failed error=\(error.localizedDescription)")
                     hasHydratedPlayersForSession = true
+                    showCreatePlayerAfterAuth = false
                     logLaunchRouting(reason: "hydrate_catch")
                 }
+                print("[AuthFlow-Debug] context=hydrate fetchPlayers failed error=\(error.localizedDescription) routing=keep_local_state (not opening create_player)")
+                await AuthFlowOnboardingSync.resolveAndApplyOnboardingStateAfterLogin(
+                    email: authManager.currentUserEmail,
+                    playerList: [],
+                    context: "hydrate_error",
+                    profileManager: profileManager
+                )
             }
         }
     }
@@ -849,7 +948,9 @@ struct IntroOnboardingView: View {
     @EnvironmentObject private var playerStore: PlayerStore
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
     @EnvironmentObject private var router: AppRouter
+    @AppStorage(AppRole.storageKey) private var appRoleRaw: String = AppRole.player.rawValue
     @State private var showHowItWorks = false
+    @State private var showAccountSignIn = false
 
     var body: some View {
         ScrollView {
@@ -907,13 +1008,37 @@ struct IntroOnboardingView: View {
                 }
                 .buttonStyle(PlainButtonStyle())
                 .padding(.horizontal, 28)
+                if Config.isSupabaseConfigured {
+                    Button {
+                        print("[IntroSignIn-Debug] sign-in tapped from intro")
+                        showAccountSignIn = true
+                        print("[IntroSignIn-Debug] auth flow presented (AccountPromptView)")
+                    } label: {
+                        HStack(alignment: .firstTextBaseline, spacing: 0) {
+                            Text("Already have an account? ")
+                                .font(.subheadline)
+                                .foregroundColor(.white.opacity(0.52))
+                            Text("Sign in")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundColor(.white.opacity(0.78))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 14)
+                        .padding(.bottom, 4)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .padding(.horizontal, 28)
+                    .accessibilityLabel("Already have an account? Sign in")
+                }
                 Button {
                     UserDefaults.standard.set(true, forKey: coachDeviceShownHomeKey)
-                    router.push(.coachRemote)
+                    let old = appRoleRaw
+                    appRoleRaw = AppRole.coachRemote.rawValue
+                    AppRoleDebug.log("role_change reason=intro_coach_button old=\(old) new=\(AppRole.coachRemote.rawValue) routing=coach_remote_root")
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "hand.raised.fill")
-                            .font(.body.weight(.medium))
+                        .font(.body.weight(.medium))
                         Text("I'm the coach — open Coach Remote")
                             .font(.system(size: 16, weight: .semibold, design: .rounded))
                     }
@@ -964,6 +1089,25 @@ struct IntroOnboardingView: View {
         .sheet(isPresented: $showHowItWorks) {
             HowItWorksView()
         }
+        .fullScreenCover(isPresented: $showAccountSignIn) {
+            AccountPromptView(
+                profileManager: profileManager,
+                playerStore: playerStore,
+                twoMinuteTestResult: nil,
+                onContinueWithoutAccount: {
+                    showAccountSignIn = false
+                },
+                onAccountComplete: {
+                    showAccountSignIn = false
+                    let baseline = UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey)
+                    let uid = AuthManager.shared.currentUserId?.uuidString ?? "nil"
+                    print("[IntroSignIn-Debug] auth success uid=\(uid) hasCompletedInitialTest(local)=\(baseline)")
+                    print("[IntroSignIn-Debug] routing decision after login: root re-evaluates per AuthFlowOnboardingSync — baseline complete → Home or Player Selection; else → intro/test")
+                    router.popToRoot(endingPartnerSession: false)
+                }
+            )
+            .environmentObject(progressStore)
+        }
     }
 }
 
@@ -994,6 +1138,7 @@ struct IntroView: View {
     @ObservedObject var settingsViewModel: SettingsViewModel
     @Binding var showsTopToggle: Bool
     @Binding var showLoginSheet: Bool
+    @Binding var signOutUXPhase: SignOutUXPhase
     @ObservedObject private var authManager = AuthManager.shared
     @EnvironmentObject private var progressStore: ProgressStore
     @EnvironmentObject private var playerStore: PlayerStore
@@ -1023,6 +1168,8 @@ struct IntroView: View {
     )
     @State private var currentPlayerIdentity: PlayerIdentity?
     @State private var trendingIdentity: PlayerIdentity?
+    @State private var showSignOutConfirmation = false
+    @State private var showSwitchPlayerConfirmation = false
 
     private enum ProgressModalType: Identifiable {
         case levelUp(previousTier: String, newTier: String, previousAvg: Double?, newAvg: Double?, previousAccuracy: Int?, newAccuracy: Int?)
@@ -1117,6 +1264,7 @@ struct IntroView: View {
     /// Recommended: 3 sessions (full blocks) per week.
     private static let weeklySessionGoal: Int = 3
     @AppStorage(hasCompletedInitialTestKey) private var hasCompletedInitialTest = false
+    @AppStorage(AppRole.storageKey) private var appRoleRaw: String = AppRole.player.rawValue
 
     private var lastAFPSessionResult: SessionResult? {
         profileManager.recentTrainSessions(limit: 20).first { $0.activityType == .awayFromPressure }
@@ -1210,7 +1358,7 @@ struct IntroView: View {
         case .decisionRate:
             return "\(RecommendationEngine.activityTitle(snapshotTrendActivity)) — Correct Decision Trend"
         case .decisionWindow:
-            return "\(RecommendationEngine.activityTitle(snapshotTrendActivity)) — Decision Window Trend"
+            return "\(RecommendationEngine.activityTitle(snapshotTrendActivity)) — Decision Timing Trend"
         case .balanced:
             return "\(RecommendationEngine.activityTitle(snapshotTrendActivity)) — Balanced Scan Trend"
         }
@@ -1231,20 +1379,22 @@ struct IntroView: View {
         }
     }
 
+    private func snapshotTrendMetricValue(_ session: SessionResult) -> Double? {
+        switch snapshotTrendMetric {
+        case .escapeRate, .decisionRate:
+            return sessionAccuracyPercent(session)
+        case .decisionWindow:
+            return session.avgDecisionWindowSeconds
+        case .balanced:
+            return sessionBalancedScore(session)
+        }
+    }
+
     /// Up to 7 points for current focus activity, based on its primary metric emphasis.
     private var snapshotTrendPoints: [ChartDataPoint] {
         let lastSeven = Array(snapshotTrendActivitySessions.suffix(7))
         return lastSeven.enumerated().compactMap { index, session in
-            let value: Double?
-            switch snapshotTrendMetric {
-            case .escapeRate, .decisionRate:
-                value = sessionAccuracyPercent(session)
-            case .decisionWindow:
-                value = session.avgDecisionWindowSeconds
-            case .balanced:
-                value = sessionBalancedScore(session)
-            }
-            guard let value else { return nil }
+            guard let value = snapshotTrendMetricValue(session) else { return nil }
             return ChartDataPoint(sessionIndex: index + 1, value: value)
         }
     }
@@ -1267,7 +1417,7 @@ struct IntroView: View {
         switch snapshotTrendMetric {
         case .escapeRate: return "Correct first decisions"
         case .decisionRate: return "Correct decisions"
-        case .decisionWindow: return "Decision window"
+        case .decisionWindow: return "Decision timing"
         case .balanced: return "Balanced score"
         }
     }
@@ -1292,12 +1442,126 @@ struct IntroView: View {
         case .decisionWindow:
             if delta > 0.04 { return "You're deciding earlier relative to arrival in recent \(title) sessions." }
             if delta < -0.04 { return "You were later relative to arrival last \(title) session — reset early scans next block." }
-            return "Your decision window is stable in recent \(title) sessions."
+            return "Your decision timing is stable in recent \(title) sessions."
         case .balanced:
             if delta >= 3 { return "Your timing and selection are improving together in recent test blocks." }
             if delta <= -3 { return "Your balance of timing and selection dipped in the latest test — reset and re-center next block." }
             return "Your timing-selection balance is stable across recent test sessions."
         }
+    }
+
+    /// Six chronological values (oldest → newest) for the current graph metric, for “Your Trend” (last 3 vs previous 3).
+    private var lastSixMetricValuesForGraphInsight: [Double] {
+        let sessions = snapshotTrendActivitySessions
+        var collected: [Double] = []
+        for s in sessions.reversed() {
+            guard let v = snapshotTrendMetricValue(s) else { continue }
+            collected.append(v)
+            if collected.count == 6 { break }
+        }
+        guard collected.count == 6 else { return [] }
+        return collected.reversed()
+    }
+
+    private struct HomeGraphInsight: Equatable {
+        let recentAvg: Double
+        let previousAvg: Double
+        let trendLabel: String
+        let interpretation: String
+    }
+
+    /// Trend from last six sessions: recentAvg = last 3, previousAvg = the three before that.
+    private var homeGraphInsight: HomeGraphInsight? {
+        let values = lastSixMetricValuesForGraphInsight
+        guard values.count == 6 else { return nil }
+        let previousAvg = (values[0] + values[1] + values[2]) / 3.0
+        let recentAvg = (values[3] + values[4] + values[5]) / 3.0
+        let higherIsBetter = snapshotTrendMetric != .decisionWindow
+        let diff = recentAvg - previousAvg
+        let threshold: Double = snapshotTrendMetric == .decisionWindow ? 0.04 : 3.0
+        let trendLabel: String
+        if abs(diff) <= threshold {
+            trendLabel = "Inconsistent"
+        } else if higherIsBetter {
+            trendLabel = diff > 0 ? "Improving" : "Declining"
+        } else {
+            trendLabel = diff < 0 ? "Improving" : "Declining"
+        }
+        let interpretation: String
+        switch trendLabel {
+        case "Improving":
+            interpretation = "You're recognizing the right option earlier — this leads to faster play under pressure."
+        case "Inconsistent":
+            interpretation = "You see the right option sometimes, but not consistently under pressure."
+        default:
+            interpretation = "Decisions are happening later — this will lead to turnovers in games."
+        }
+        return HomeGraphInsight(recentAvg: recentAvg, previousAvg: previousAvg, trendLabel: trendLabel, interpretation: interpretation)
+    }
+
+    /// Dashed reference at 80 on the 0–100 axis for first-decision and decision-correctness % charts only.
+    /// Omitted for decision timing (seconds) and for balanced scan score (composite 0–100 — “80%” would misread as accuracy).
+    private var graphTargetReferenceY: Double? {
+        switch snapshotTrendMetric {
+        case .escapeRate, .decisionRate: return 80
+        case .balanced, .decisionWindow: return nil
+        }
+    }
+
+    /// Shown only when `graphTargetReferenceY` is non-nil; wording matches the active `HomeTrendMetric`.
+    private var graphTargetLabelText: String? {
+        guard graphTargetReferenceY != nil else { return nil }
+        switch snapshotTrendMetric {
+        case .escapeRate:
+            return "Target: 80% correct first decisions"
+        case .decisionRate:
+            return "Target: 80% correct decisions"
+        case .balanced, .decisionWindow:
+            return nil
+        }
+    }
+
+    private func logGraphTargetLabelDebug() {
+        let ref = graphTargetReferenceY
+        let label = graphTargetLabelText
+        let metricName: String = {
+            switch snapshotTrendMetric {
+            case .escapeRate: return "correct_first_decisions_pct"
+            case .decisionRate: return "correct_decisions_pct"
+            case .balanced: return "balanced_scan_score"
+            case .decisionWindow: return "decision_window_seconds"
+            }
+        }()
+        print("[GraphTargetLabel-Debug] metric=\(metricName) targetValue=\(ref.map { String($0) } ?? "nil") targetLabel=\(label ?? "nil") referenceLineShown=\(ref != nil)")
+    }
+
+    /// One short line under the Home graph (player-friendly; no formulas).
+    private var homeGraphMicroExplanationPrimaryLine: String? {
+        guard snapshotTrendPoints.count >= 2 else { return nil }
+        switch snapshotTrendMetric {
+        case .escapeRate:
+            return ChartMetricDescriptions.correctFirstDecisionTrend
+        case .decisionRate:
+            return ChartMetricDescriptions.correctDecisionTrend
+        case .decisionWindow:
+            return ChartMetricDescriptions.decisionTiming
+        case .balanced:
+            return ChartMetricDescriptions.balancedScanTrend
+        }
+    }
+
+    private func logGraphClarityDebug() {
+        guard snapshotTrendPoints.count >= 2 else { return }
+        let graphType: String = {
+            switch snapshotTrendMetric {
+            case .escapeRate: return "correct_first_decision_trend"
+            case .decisionRate: return "correct_decision_trend"
+            case .decisionWindow: return "decision_timing"
+            case .balanced: return "balanced_scan_trend"
+            }
+        }()
+        let text = homeGraphMicroExplanationPrimaryLine ?? ""
+        print("[GraphClarityRefine-Debug] graphType=\(graphType) explanation=\"\(text)\"")
     }
 
     private var currentFocusActivitySessionsNewestFirst: [SessionResult] {
@@ -1403,7 +1667,9 @@ struct IntroView: View {
     private var wedgeDifficultyLevel: Int { WedgeDifficultyEngine.currentLevel(playerId: playerId) }
     #endif
     /// True when this player has no completed sessions in ProgressStore yet.
+    /// Uses `hasCompletedInitialTest` so a guest baseline (or merged account flag) still skips the first-run card after sign-in when ProgressStore rows are keyed to another id.
     private var needsBaselineAssessment: Bool {
+        if hasCompletedInitialTest { return false }
         let hasTrainingSessions = progressStore.sessions.contains { $0.playerId == playerId }
         let baselineCompleted = GuidedCurriculumEngine.hasCompletedBaseline(playerId: playerId)
         return !hasTrainingSessions && !baselineCompleted
@@ -1512,6 +1778,73 @@ struct IntroView: View {
                 }
             }
 #endif
+            ToolbarItem(placement: .topBarLeading) {
+                Menu {
+                    Button("Switch to Coach Remote") {
+                        let old = appRoleRaw
+                        appRoleRaw = AppRole.coachRemote.rawValue
+                        router.popToRoot()
+                        AppRoleDebug.log("role_change reason=home_menu_coach old=\(old) new=\(AppRole.coachRemote.rawValue) routing=coach_remote_root")
+                    }
+                } label: {
+                    Image(systemName: "arrow.left.arrow.right.circle")
+                        .foregroundColor(.white.opacity(0.9))
+                }
+                .accessibilityLabel("Switch device role")
+            }
+            if Config.isSupabaseConfigured, authManager.currentSession != nil {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showSwitchPlayerConfirmation = true
+                    } label: {
+                        Label("Switch Player", systemImage: "person.2")
+                    }
+                    .labelStyle(.titleAndIcon)
+                    .foregroundColor(.white.opacity(0.9))
+                    .accessibilityLabel("Switch Player")
+                    .disabled(signOutUXPhase != .idle)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showSignOutConfirmation = true
+                    } label: {
+                        Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+                    }
+                    .labelStyle(.titleAndIcon)
+                    .foregroundColor(.white.opacity(0.9))
+                    .accessibilityLabel("Use a Different Account")
+                    .disabled(signOutUXPhase != .idle)
+                }
+            }
+        }
+        .alert("Switch Player?", isPresented: $showSwitchPlayerConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Switch Player") {
+                SwitchPlayerService.performSwitchPlayer(
+                    profileManager: profileManager,
+                    playerStore: playerStore,
+                    router: router
+                )
+            }
+        } message: {
+            Text("You’ll return to player selection so another player can continue.")
+        }
+        .alert("Sign Out?", isPresented: $showSignOutConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Sign Out", role: .destructive) {
+                print("[SignOut-UX] sign-out confirm tapped")
+                Task {
+                    await SignOutUXRunner.run(
+                        phase: $signOutUXPhase,
+                        profileManager: profileManager,
+                        playerStore: playerStore,
+                        progressStore: progressStore,
+                        router: router
+                    )
+                }
+            }
+        } message: {
+            Text("You’ll return to the sign-in screen and can use a different account.")
         }
         .alert(snapshotMetricInfoToShow?.title ?? "", isPresented: Binding(
             get: { snapshotMetricInfoToShow != nil },
@@ -2580,7 +2913,7 @@ struct IntroView: View {
     private func personalBestDecisionSpeedRow(session: SessionResult?) -> some View {
         let window = session?.avgDecisionWindowSeconds
         return HStack(alignment: .top) {
-            Text("Best Decision Window")
+            Text("Best decision timing")
                 .font(.subheadline)
                 .foregroundColor(.white.opacity(0.9))
             Spacer(minLength: 8)
@@ -2635,7 +2968,33 @@ struct IntroView: View {
                     .cornerRadius(10)
                 }
                 .buttonStyle(PlainButtonStyle())
+                .accessibilityLabel("Selected player profile")
                 Spacer()
+            }
+            /// Distinct from profile name: this device is in **player training** mode until user switches to Coach Remote.
+            HStack(alignment: .center, spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("This device")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundColor(.white.opacity(0.55))
+                    Text("Player mode")
+                        .font(.caption.weight(.medium))
+                        .foregroundColor(.white.opacity(0.9))
+                }
+                Spacer(minLength: 8)
+                Button {
+                    let old = appRoleRaw
+                    appRoleRaw = AppRole.coachRemote.rawValue
+                    router.popToRoot()
+                    AppRoleDebug.log("role_change reason=home_device_role_coach old=\(old) new=\(AppRole.coachRemote.rawValue) routing=coach_remote_root")
+                } label: {
+                    Text("Use as Coach Remote")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.yellow)
+                .foregroundStyle(.black)
+                .accessibilityLabel("Switch to Coach Remote mode")
             }
             if let identity = currentPlayerIdentity {
                 VStack(alignment: .leading, spacing: 2) {
@@ -2671,22 +3030,45 @@ struct IntroView: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(.white)
             }
+            if let insight = homeGraphInsight {
+                Text("Your Trend: \(insight.trendLabel)")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                Text(insight.interpretation)
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if snapshotTrendPoints.count >= 2 {
                 ProgressLineChartView(
                     title: "",
                     points: snapshotTrendPoints,
                     valueLabel: snapshotTrendValueLabel,
                     yAxisRange: snapshotTrendYAxisRange,
+                    referenceLineY: graphTargetReferenceY,
                     emptyStateMessage: nil
                 )
                 .padding(.horizontal, -16)
-                .padding(.vertical, -8)
+                if let hint = homeGraphMicroExplanationPrimaryLine {
+                    Text(hint)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 6)
+                }
+                if let targetLabel = graphTargetLabelText {
+                    Text(targetLabel)
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.6))
+                }
                 Text("Showing last \(snapshotTrendPoints.count) \(snapshotTrendPoints.count == 1 ? "session" : "sessions") for \(activityTitle).")
                     .font(.caption2)
                     .foregroundColor(.white.opacity(0.65))
-                Text(snapshotTrendInsightLine)
-                    .font(.caption)
-                    .foregroundColor(.yellow.opacity(0.9))
+                if homeGraphInsight == nil {
+                    Text(snapshotTrendInsightLine)
+                        .font(.caption)
+                        .foregroundColor(.yellow.opacity(0.9))
+                }
             } else {
                 Text("Complete at least 2 \(activityTitle) sessions to see trends.")
                     .font(.caption)
@@ -2694,6 +3076,19 @@ struct IntroView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear {
+            logGraphTargetLabelDebug()
+            logGraphClarityDebug()
+        }
+        .onChange(of: snapshotTrendActivity) { _, _ in
+            logGraphTargetLabelDebug()
+            logGraphClarityDebug()
+        }
+        .onChange(of: homeGraphInsight) { _, new in
+            if let g = new {
+                print("[GraphInsight-Debug] recentAvg=\(g.recentAvg) previousAvg=\(g.previousAvg) trend=\(g.trendLabel)")
+            }
+        }
     }
 
     private var coachInsightSection: some View {

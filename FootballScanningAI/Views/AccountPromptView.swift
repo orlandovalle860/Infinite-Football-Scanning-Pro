@@ -114,6 +114,10 @@ struct AccountPromptView: View {
     /// After auth: fetch players for current user. If none → Create Player. If any → hydrate stores and go to Home.
     private func checkExistingPlayersAndRoute() {
         guard AuthManager.shared.currentSession != nil else { return }
+        // Guest may have completed baseline locally; sync flag + metadata even when twoMinuteTestResult isn't passed through.
+        if twoMinuteTestResult != nil || UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey) {
+            AuthFlowOnboardingSync.markLocalAndSyncRemoteCompleted()
+        }
         isCheckingPlayers = true
         Task {
             defer { Task { @MainActor in isCheckingPlayers = false } }
@@ -126,10 +130,18 @@ struct AccountPromptView: View {
                         onAccountComplete?()
                     }
                 }
+                await AuthFlowOnboardingSync.resolveAndApplyOnboardingStateAfterLogin(
+                    email: AuthManager.shared.currentUserEmail,
+                    playerList: list,
+                    context: "apple_auth",
+                    profileManager: profileManager
+                )
             } catch {
                 await MainActor.run {
-                    showCreatePlayerAfterAuth = true
+                    auth.lastError = "Could not load your players. Check your connection and try again."
+                    showCreatePlayerAfterAuth = false
                 }
+                print("[AuthFlow-Debug] context=apple_auth fetchPlayers failed error=\(error.localizedDescription) routing=show_error (not treating as empty roster)")
             }
         }
     }
@@ -341,7 +353,6 @@ struct CreatePlayerAfterAuthView: View {
     var twoMinuteTestResult: TwoMinuteTestResult? = nil
     var onComplete: () -> Void
     @EnvironmentObject private var progressStore: ProgressStore
-    @AppStorage(hasCompletedInitialTestKey) private var hasCompletedInitialTest = false
 
     @State private var playerName = ""
     @State private var ageText = ""
@@ -447,22 +458,58 @@ struct CreatePlayerAfterAuthView: View {
                         isLoading = false
                         onComplete()
                     }
+                    await AuthFlowOnboardingSync.resolveAndApplyOnboardingStateAfterLogin(
+                        email: AuthManager.shared.currentUserEmail,
+                        playerList: existing,
+                        context: "create_player_existing_row",
+                        profileManager: profileManager
+                    )
                     return
                 }
-                let playerId = UUID()
-                try await SupabasePlayerService.shared.insertPlayer(
-                    id: playerId,
-                    name: name,
-                    age: enteredAge,
-                    team: enteredTeam.isEmpty ? nil : enteredTeam,
-                    position: enteredPosition.isEmpty ? nil : enteredPosition
-                )
+                guard let uid = AuthManager.shared.currentUserId else {
+                    await MainActor.run {
+                        errorMessage = "You must be signed in to create a player."
+                        isLoading = false
+                    }
+                    return
+                }
+                let playerId = uid
+                do {
+                    try await SupabasePlayerService.shared.insertPlayer(
+                        id: playerId,
+                        name: name,
+                        age: enteredAge,
+                        team: enteredTeam.isEmpty ? nil : enteredTeam,
+                        position: enteredPosition.isEmpty ? nil : enteredPosition
+                    )
+                } catch {
+                    let listRetry = try? await SupabasePlayerService.shared.fetchPlayersForCurrentUser()
+                    if let first = listRetry?.first, let existingId = first.uuid {
+                        await MainActor.run {
+                            hydrateWithPlayer(id: existingId, name: first.name)
+                            isLoading = false
+                            onComplete()
+                        }
+                        await AuthFlowOnboardingSync.resolveAndApplyOnboardingStateAfterLogin(
+                            email: AuthManager.shared.currentUserEmail,
+                            playerList: listRetry ?? [],
+                            context: "create_player_insert_conflict",
+                            profileManager: profileManager
+                        )
+                        return
+                    }
+                    await MainActor.run {
+                        errorMessage = error.localizedDescription
+                        isLoading = false
+                    }
+                    return
+                }
                 await MainActor.run {
                     profileManager.addProfileWithId(playerId, name: name)
                     playerStore.addPlayer(id: playerId, name: name)
                     playerStore.selectedPlayerId = playerId
                     playerStore.persist()
-                    hasCompletedInitialTest = true
+                    AuthFlowOnboardingSync.markLocalAndSyncRemoteCompleted()
                     saveTwoMinuteTestSessionIfNeeded(playerId: playerId)
                     AnalyticsManager.shared.track(.playerCreated, playerId: playerId)
                     isLoading = false

@@ -162,7 +162,7 @@ struct PlayerDashboardView: View {
         switch latestActivity {
         case .awayFromPressure: return "Correct First-Decision Trend"
         case .dribbleOrPass: return "Correct Decision Trend"
-        case .oneTouchPassing: return "Decision Window Trend"
+        case .oneTouchPassing: return "Decision Timing Trend"
         case .twoMinuteTest: return "2-Minute Balanced Trend"
         case .none: return "Primary Trend"
         }
@@ -181,7 +181,7 @@ struct PlayerDashboardView: View {
     }
     private var secondaryTrendTitle: String {
         switch latestActivity {
-        case .awayFromPressure, .dribbleOrPass, .twoMinuteTest: return "Decision Window (Secondary)"
+        case .awayFromPressure, .dribbleOrPass, .twoMinuteTest: return "Decision Timing (Secondary)"
         case .oneTouchPassing: return "Correct Decisions (Secondary)"
         case .none: return "Secondary Trend"
         }
@@ -204,6 +204,85 @@ struct PlayerDashboardView: View {
         switch latestActivity {
         case .oneTouchPassing: return (0, 100)
         default: return nil
+        }
+    }
+
+    // MARK: - Chart targets (aligned with Home quick snapshot: 80% on 0–100 accuracy-style charts; no line for timing seconds or ambiguous 2‑min score blend)
+
+    private var primaryReferenceY: Double? {
+        switch latestActivity {
+        case .awayFromPressure, .dribbleOrPass: return 80
+        case .oneTouchPassing, .twoMinuteTest, .none: return nil
+        }
+    }
+
+    private var primaryTargetLabelText: String? {
+        guard primaryReferenceY != nil else { return nil }
+        switch latestActivity {
+        case .awayFromPressure: return "Target: 80% correct first decisions"
+        case .dribbleOrPass: return "Target: 80% correct decisions"
+        default: return nil
+        }
+    }
+
+    /// One friendly line above each Player Dashboard chart (no formulas).
+    private var primaryChartDescription: String? {
+        guard primaryTrendPoints.count >= 2, let a = latestActivity else { return nil }
+        switch a {
+        case .awayFromPressure:
+            return ChartMetricDescriptions.correctFirstDecisionTrend
+        case .dribbleOrPass:
+            return ChartMetricDescriptions.correctDecisionTrend
+        case .oneTouchPassing:
+            return ChartMetricDescriptions.decisionTiming
+        case .twoMinuteTest:
+            return ChartMetricDescriptions.balancedScanTrend
+        }
+    }
+
+    private var secondaryChartDescription: String? {
+        guard secondaryTrendPoints.count >= 2, let a = latestActivity else { return nil }
+        switch a {
+        case .awayFromPressure, .dribbleOrPass, .twoMinuteTest:
+            return ChartMetricDescriptions.decisionTiming
+        case .oneTouchPassing:
+            return ChartMetricDescriptions.correctDecisionTrend
+        }
+    }
+
+    private var forwardThinkingChartDescription: String? {
+        guard forwardIntentPoints.count >= 2 else { return nil }
+        return ChartMetricDescriptions.forwardThinking
+    }
+
+    private var secondaryReferenceY: Double? {
+        switch latestActivity {
+        case .oneTouchPassing: return 80
+        default: return nil
+        }
+    }
+
+    private var secondaryTargetLabelText: String? {
+        guard secondaryReferenceY != nil else { return nil }
+        if latestActivity == .oneTouchPassing {
+            return "Target: 80% correct decisions"
+        }
+        return nil
+    }
+
+    private let forwardThinkingReferenceY: Double = 80
+    private let forwardThinkingTargetLabel = "Target: 80% forward choices"
+
+    private func logDashboardGraphClarityDebug() {
+        guard chartSessions.count >= 2 else { return }
+        if let p = primaryChartDescription {
+            print("[GraphClarityRefine-Debug] graphType=player_dashboard_primary explanation=\"\(p)\"")
+        }
+        if let s = secondaryChartDescription {
+            print("[GraphClarityRefine-Debug] graphType=player_dashboard_secondary explanation=\"\(s)\"")
+        }
+        if let f = forwardThinkingChartDescription {
+            print("[GraphClarityRefine-Debug] graphType=player_dashboard_forward_thinking explanation=\"\(f)\"")
         }
     }
 
@@ -321,7 +400,7 @@ struct PlayerDashboardView: View {
 
     private var decisionSpeedHeadline: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Decision Window")
+            Text("Decision timing")
                 .font(.subheadline.weight(.medium))
                 .foregroundColor(.white.opacity(0.9))
             if let sec = decisionWindowSeconds {
@@ -405,9 +484,71 @@ struct PlayerDashboardView: View {
                     .foregroundColor(.white.opacity(0.7))
                     .padding(.vertical, 12)
             } else {
-                ProgressLineChartView(title: primaryTrendTitle, points: primaryTrendPoints, valueLabel: primaryTrendValueLabel, yAxisRange: primaryTrendAxis)
-                ProgressLineChartView(title: secondaryTrendTitle, points: secondaryTrendPoints, valueLabel: secondaryTrendValueLabel, yAxisRange: secondaryTrendAxis, emptyStateMessage: "Complete at least 2 sessions to see your trend.")
-                ProgressLineChartView(title: "Forward Thinking", points: forwardIntentPoints, valueLabel: "%", yAxisRange: (0, 100), emptyStateMessage: "Complete at least 2 Dribble or Pass or One-Touch Passing sessions (with forward opportunities) to see your trend.")
+                VStack(alignment: .leading, spacing: 6) {
+                    ProgressLineChartView(
+                        title: primaryTrendTitle,
+                        points: primaryTrendPoints,
+                        valueLabel: primaryTrendValueLabel,
+                        yAxisRange: primaryTrendAxis,
+                        referenceLineY: primaryTrendPoints.count >= 2 ? primaryReferenceY : nil
+                    )
+                    if let desc = primaryChartDescription {
+                        Text(desc)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, 4)
+                    }
+                    if primaryTrendPoints.count >= 2, let target = primaryTargetLabelText {
+                        Text(target)
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.6))
+                    }
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    ProgressLineChartView(
+                        title: secondaryTrendTitle,
+                        points: secondaryTrendPoints,
+                        valueLabel: secondaryTrendValueLabel,
+                        yAxisRange: secondaryTrendAxis,
+                        referenceLineY: secondaryTrendPoints.count >= 2 ? secondaryReferenceY : nil,
+                        emptyStateMessage: "Complete at least 2 sessions to see your trend."
+                    )
+                    if let desc = secondaryChartDescription {
+                        Text(desc)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, 4)
+                    }
+                    if secondaryTrendPoints.count >= 2, let target = secondaryTargetLabelText {
+                        Text(target)
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.6))
+                    }
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    ProgressLineChartView(
+                        title: "Forward Thinking",
+                        points: forwardIntentPoints,
+                        valueLabel: "%",
+                        yAxisRange: (0, 100),
+                        referenceLineY: forwardIntentPoints.count >= 2 ? forwardThinkingReferenceY : nil,
+                        emptyStateMessage: "Complete at least 2 Dribble or Pass or One-Touch Passing sessions (with forward opportunities) to see your trend."
+                    )
+                    if let desc = forwardThinkingChartDescription {
+                        Text(desc)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, 4)
+                    }
+                    if forwardIntentPoints.count >= 2 {
+                        Text(forwardThinkingTargetLabel)
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.6))
+                    }
+                }
             }
         }
         .padding(18)
@@ -418,6 +559,7 @@ struct PlayerDashboardView: View {
             RoundedRectangle(cornerRadius: 18)
                 .stroke(Color.white.opacity(0.08), lineWidth: 1)
         )
+        .onAppear { logDashboardGraphClarityDebug() }
     }
 
     private var trainingRecommendationCard: some View {

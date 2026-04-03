@@ -24,6 +24,7 @@ final class TwoMinuteSessionManager: ObservableObject {
     init() {}
 
     /// Creates a session in Supabase (no pairing code), then creates a session_activity row. On success, updates CurrentSessionStore.
+    /// When not signed in (e.g. new user after sign-out), cloud insert is not possible; uses a local-only session id so relay + drill can still run.
     func startSession(activity: ActivityKind, blockSize: Int, playerId: UUID?) async {
         guard !isCreating else { return }
         isCreating = true
@@ -41,6 +42,7 @@ final class TwoMinuteSessionManager: ObservableObject {
                 blockNumber: 1
             )
         }
+        let noSupabaseAuth = await MainActor.run { AuthManager.shared.currentSession == nil }
         await MainActor.run {
             isCreating = false
             if let sid = sessionIdCreated {
@@ -49,6 +51,14 @@ final class TwoMinuteSessionManager: ObservableObject {
                 if let id = sessionActivityId {
                     CurrentSessionStore.shared.setCurrentSessionActivityId(id)
                 }
+                creationError = nil
+            } else if noSupabaseAuth {
+                let localId = UUID()
+                sessionId = localId
+                CurrentSessionStore.shared.clear()
+                CurrentSessionStore.shared.setSessionIdOnly(localId)
+                creationError = nil
+                print("[TwoMinuteSession] local-only session id=\(localId.uuidString) (no Supabase auth); relay/drill proceed without cloud session row")
             } else {
                 creationError = "Couldn't create session. Check network."
             }

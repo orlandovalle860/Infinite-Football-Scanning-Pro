@@ -184,7 +184,7 @@ struct TwoMinuteCoachRemoteView: View {
         }
         .onChange(of: state) { _, newState in
             if case .complete = newState {
-                UserDefaults.standard.set(true, forKey: "hasCompletedInitialTest")
+                AuthFlowOnboardingSync.markLocalAndSyncRemoteCompleted()
             }
         }
         .preferredColorScheme(.dark)

@@ -192,6 +192,10 @@ struct EmailAuthView: View {
     /// After auth: fetch players for current user. If none → Create Player. If any → hydrate stores and go to Home.
     private func checkExistingPlayersAndRoute() async {
         guard auth.currentSession != nil else { return }
+        // Guest may have finished baseline locally without this sheet carrying twoMinuteTestResult (e.g. email login from Home).
+        if twoMinuteTestResult != nil || UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey) {
+            AuthFlowOnboardingSync.markLocalAndSyncRemoteCompleted()
+        }
         await MainActor.run { isCheckingPlayers = true }
         defer { Task { @MainActor in isCheckingPlayers = false } }
         do {
@@ -203,10 +207,18 @@ struct EmailAuthView: View {
                     onComplete()
                 }
             }
+            await AuthFlowOnboardingSync.resolveAndApplyOnboardingStateAfterLogin(
+                email: auth.currentUserEmail,
+                playerList: list,
+                context: "email_auth",
+                profileManager: profileManager
+            )
         } catch {
             await MainActor.run {
-                showCreatePlayerAfterAuth = true
+                attemptError = "Could not load your players. Check your connection and try again."
+                showCreatePlayerAfterAuth = false
             }
+            print("[AuthFlow-Debug] context=email_auth fetchPlayers failed error=\(error.localizedDescription) routing=show_error (not treating as empty roster)")
         }
     }
 

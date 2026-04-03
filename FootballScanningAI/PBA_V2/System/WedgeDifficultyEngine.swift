@@ -65,4 +65,11 @@ enum WedgeDifficultyEngine {
         defaults.set(newest, forKey: dateKey)
         return level > previousLevel
     }
+
+    /// Removes wedge difficulty UserDefaults for a player (account sign-out).
+    static func clearStoredKeys(forPlayerId id: UUID) {
+        let pid = id.uuidString
+        UserDefaults.standard.removeObject(forKey: "\(levelKeyPrefix)_\(pid)")
+        UserDefaults.standard.removeObject(forKey: "\(lastEvalDateKeyPrefix)_\(pid)")
+    }
 }

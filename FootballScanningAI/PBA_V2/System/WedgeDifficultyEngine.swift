@@ -2,21 +2,43 @@ import Foundation
 import CoreGraphics
 
 struct WedgeCueStyle {
+    /// Fraction of the active edge length for wedge / green-rectangle base (centered on that edge). Wider than a sliver, but clamped below full edge.
     let laneSpan: CGFloat
     let depthFraction: CGFloat
     let centerGapFraction: CGFloat
     let opacity: CGFloat
 
+    /// Slight inward offset from the field border so cues read from the field interior, not the bezel.
+    static let edgeInsetFraction: CGFloat = 0.018
+
     static func style(for level: Int) -> WedgeCueStyle {
         switch max(1, min(3, level)) {
         case 1:
-            return WedgeCueStyle(laneSpan: 0.78, depthFraction: 0.24, centerGapFraction: 0.20, opacity: 0.86)
+            return WedgeCueStyle(laneSpan: 0.50, depthFraction: 0.24, centerGapFraction: 0.20, opacity: 0.86)
         case 2:
             // Subtle increase in challenge: slightly narrower + slightly farther from center.
-            return WedgeCueStyle(laneSpan: 0.70, depthFraction: 0.22, centerGapFraction: 0.23, opacity: 0.84)
+            return WedgeCueStyle(laneSpan: 0.46, depthFraction: 0.22, centerGapFraction: 0.23, opacity: 0.84)
         default:
-            return WedgeCueStyle(laneSpan: 0.64, depthFraction: 0.20, centerGapFraction: 0.26, opacity: 0.82)
+            return WedgeCueStyle(laneSpan: 0.42, depthFraction: 0.20, centerGapFraction: 0.26, opacity: 0.82)
         }
+    }
+
+    /// Span along the edge the wedge sits on (horizontal length for top/bottom, vertical length for left/right), clamped to ~38–58% so bases are wide but never full edge.
+    func spanAlongEdge(for gate: Gate, fieldWidth w: CGFloat, fieldHeight h: CGFloat) -> CGFloat {
+        let edge: CGFloat
+        let raw: CGFloat
+        switch gate {
+        case .up, .down:
+            edge = w
+            let base = w * laneSpan
+            let aspect = h / max(w, 1)
+            let reduction = max(0.78, min(1.0, aspect * 0.95))
+            raw = base * reduction
+        case .left, .right:
+            edge = h
+            raw = h * laneSpan
+        }
+        return min(edge * 0.58, max(edge * 0.38, raw))
     }
 }
 
@@ -71,5 +93,11 @@ enum WedgeDifficultyEngine {
         let pid = id.uuidString
         UserDefaults.standard.removeObject(forKey: "\(levelKeyPrefix)_\(pid)")
         UserDefaults.standard.removeObject(forKey: "\(lastEvalDateKeyPrefix)_\(pid)")
+    }
+}
+
+enum WedgeClarityDebugLog {
+    static func log(side: String, widthPts: CGFloat, position: String) {
+        print("[WedgeClarity-Debug] side=\(side) widthPts=\(String(format: "%.2f", widthPts)) position=\(position)")
     }
 }

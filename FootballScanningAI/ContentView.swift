@@ -1583,12 +1583,11 @@ struct IntroView: View {
     }
 
     private func sessionRecord(from session: SessionResult) -> SessionRecord {
-        let speedBucket: SpeedBucket = {
-            let counts = session.speedCounts
-            if counts.fast >= counts.medium && counts.fast >= counts.slow { return .fast }
-            if counts.slow >= counts.fast && counts.slow >= counts.medium { return .slow }
-            return .medium
-        }()
+        let speedBucket = UniversalBlockSummaryHeadline.resolve(
+            fast: session.speedCounts.fast,
+            medium: session.speedCounts.medium,
+            slow: session.speedCounts.slow
+        ).bucket
         return SessionRecord(
             id: session.id,
             date: session.date,

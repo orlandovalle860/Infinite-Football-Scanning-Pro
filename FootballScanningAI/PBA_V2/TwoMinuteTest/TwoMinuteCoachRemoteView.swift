@@ -255,7 +255,13 @@ struct TwoMinuteCoachRemoteView: View {
                         .foregroundColor(.orange.opacity(0.95))
                 }
                 CoachRemoteFeedbackTap(kind: .pass, clipCornerRadius: 16) {
+                    #if DEBUG
+                    let t = Date()
+                    DecisionSpeedDebugLog.logCoachPassSend(activity: .twoMinuteTest, repIndex: repIndex, embeddedTimestamp: t)
+                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: t)
+                    #else
                     remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
+                    #endif
                 } label: {
                     Text("PASS")
                         .font(.system(size: 30, weight: .bold, design: .rounded))
@@ -570,7 +576,13 @@ struct TwoMinuteCoachRemoteView: View {
             repIndex: { if case .logging(let r) = state { return r }; return nil },
             onTrigger: {
                 if case .logging(let repIndex) = state {
+                    #if DEBUG
+                    let t = Date()
+                    DecisionSpeedDebugLog.logCoachPassSend(activity: .twoMinuteTest, repIndex: repIndex, embeddedTimestamp: t)
+                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: t)
+                    #else
                     remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
+                    #endif
                 }
             },
             onVolumeEdgeWarningChange: { showVolumeEdgeWarning = $0 }
@@ -610,7 +622,13 @@ struct TwoMinuteCoachRemoteView: View {
 
     private func logExit(_ gate: Gate) {
         if case .logging(let repIndex) = state {
+            #if DEBUG
+            let t = Date()
+            DecisionSpeedDebugLog.logCoachExitSend(activity: .twoMinuteTest, repIndex: repIndex, gate: gate, embeddedTimestamp: t)
+            remoteService.sendExitLogged(repIndex: repIndex, gate: gate, timestamp: t)
+            #else
             remoteService.sendExitLogged(repIndex: repIndex, gate: gate, timestamp: Date())
+            #endif
             currentRepIndex = repIndex + 1
             state = currentRepIndex >= totalReps ? .complete : .ready
         }
@@ -618,7 +636,13 @@ struct TwoMinuteCoachRemoteView: View {
 
     private func logIncorrect() {
         if case .logging(let repIndex) = state {
+            #if DEBUG
+            let t = Date()
+            DecisionSpeedDebugLog.logCoachIncorrectSend(activity: .twoMinuteTest, repIndex: repIndex, embeddedTimestamp: t)
+            remoteService.sendIncorrectDecision(repIndex: repIndex, timestamp: t)
+            #else
             remoteService.sendIncorrectDecision(repIndex: repIndex, timestamp: Date())
+            #endif
             currentRepIndex = repIndex + 1
             state = currentRepIndex >= totalReps ? .complete : .ready
         }

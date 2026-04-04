@@ -360,10 +360,8 @@ struct PBAProgressView: View {
     }
 
     private func sessionSpeedLabel(_ session: SessionResult) -> String {
-        let f = session.speedCounts.fast, m = session.speedCounts.medium, s = session.speedCounts.slow
-        if f >= m && f >= s { return "Fast" }
-        if s >= f && s >= m { return "Slow" }
-        return "Medium"
+        let c = session.speedCounts
+        return UniversalBlockSummaryHeadline.headlineLabel(fast: c.fast, medium: c.medium, slow: c.slow)
     }
 
     private var last5Training: [SessionRecord] { progressStore.last5TrainingBlocks(playerId: selectedPlayerId) }

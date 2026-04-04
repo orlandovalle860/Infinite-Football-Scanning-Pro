@@ -28,12 +28,6 @@ struct SessionReportView: View {
         f.dateStyle = .medium
         return f.string(from: session.date)
     }
-    private var decisionSpeedLabel: String {
-        let (f, m, s) = (session.speedCounts.fast, session.speedCounts.medium, session.speedCounts.slow)
-        if f >= m && f >= s { return "Fast" }
-        if s >= f && s >= m { return "Slow" }
-        return "Medium"
-    }
     private var firstTouchCommitmentPercent: Int? {
         guard let match = session.firstTouchMatchCount, session.totalReps > 0 else { return nil }
         return Int(round(Double(match) / Double(session.totalReps) * 100.0))
@@ -84,7 +78,7 @@ struct SessionReportView: View {
                 Text("Key Metrics")
                     .font(.headline)
                     .foregroundColor(.black)
-                reportRow("Decision speed", value: decisionSpeedLabel)
+                decisionSpeedReportBlock
                 if let pct = preReceiveRatePercent {
                     reportRow("Pre-receive decision rate", value: "\(pct)%")
                 }
@@ -116,6 +110,37 @@ struct SessionReportView: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color.black.opacity(0.12), lineWidth: 1)
         )
+    }
+
+    private var decisionSpeedReportBlock: some View {
+        let c = session.speedCounts
+        let bucket = UniversalBlockSummaryHeadline.resolve(fast: c.fast, medium: c.medium, slow: c.slow).bucket
+        let line = BlockSummarySpeedCountsFormatting.summaryLine(fast: c.fast, medium: c.medium, slow: c.slow)
+        return HStack(alignment: .top, spacing: 12) {
+            Text("Decision speed")
+                .font(.subheadline)
+                .foregroundColor(.black.opacity(0.75))
+            Spacer()
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(bucket.rawValue.capitalized)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.black)
+                Text(line)
+                    .font(.caption2)
+                    .foregroundColor(.black.opacity(0.55))
+                    .onAppear {
+                        #if DEBUG
+                        SummaryCountsLineDebugLog.log(
+                            activity: session.activityType,
+                            fast: c.fast,
+                            medium: c.medium,
+                            slow: c.slow,
+                            renderedLine: line
+                        )
+                        #endif
+                    }
+            }
+        }
     }
 
     private func reportRow(_ label: String, value: String) -> some View {

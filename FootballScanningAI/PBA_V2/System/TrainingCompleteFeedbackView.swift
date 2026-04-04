@@ -155,6 +155,9 @@ struct TrainingCompleteFeedbackView: View {
                     .foregroundColor(.white.opacity(0.55))
 
                 VStack(alignment: .leading, spacing: 14) {
+                    if let s = sessionResultForDebrief {
+                        trainingCompleteDecisionSpeedBlock(session: s)
+                    }
                     row(primaryMetricLabel, primaryMetricValue)
                     if let avg = avgDecisionTimeSeconds {
                         let window = DecisionTimingModel.decisionWindow(rawRepInterval: avg, activity: activityKind)
@@ -219,6 +222,22 @@ struct TrainingCompleteFeedbackView: View {
             Text(value)
                 .font(.subheadline.weight(.medium))
                 .foregroundColor(.white)
+        }
+    }
+
+    private func trainingCompleteDecisionSpeedBlock(session: SessionResult) -> some View {
+        let c = session.speedCounts
+        let bucket = UniversalBlockSummaryHeadline.resolve(fast: c.fast, medium: c.medium, slow: c.slow).bucket
+        return VStack(alignment: .leading, spacing: 4) {
+            Text("Decision speed: \(bucket.rawValue.capitalized)")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.white.opacity(0.92))
+            BlockSummarySpeedCountsSubline(
+                fast: c.fast,
+                medium: c.medium,
+                slow: c.slow,
+                debugActivity: session.activityType
+            )
         }
     }
 

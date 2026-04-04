@@ -259,8 +259,12 @@ struct OneTouchPassingCoachRemoteView: View {
                     if Self.partnerTransportMode == .relayWebSocket {
                         otpCoachRelayLog("send passTriggered repIndex=\(repIndex)")
                     }
-                    #endif
+                    let t = Date()
+                    DecisionSpeedDebugLog.logCoachPassSend(activity: .oneTouchPassing, repIndex: repIndex, embeddedTimestamp: t)
+                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: t)
+                    #else
                     remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
+                    #endif
                 } label: {
                     Text("PASS")
                         .font(.system(size: 30, weight: .bold, design: .rounded))
@@ -515,8 +519,12 @@ struct OneTouchPassingCoachRemoteView: View {
                     if Self.partnerTransportMode == .relayWebSocket {
                         otpCoachRelayLog("send passTriggered (volume) repIndex=\(repIndex)")
                     }
-                    #endif
+                    let t = Date()
+                    DecisionSpeedDebugLog.logCoachPassSend(activity: .oneTouchPassing, repIndex: repIndex, embeddedTimestamp: t)
+                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: t)
+                    #else
                     remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
+                    #endif
                 }
             },
             onVolumeEdgeWarningChange: { showVolumeEdgeWarning = $0 }
@@ -569,8 +577,12 @@ struct OneTouchPassingCoachRemoteView: View {
         if Self.partnerTransportMode == .relayWebSocket {
             otpCoachRelayLog("send exitLogged repIndex=\(repIndex) gate=\(gate)")
         }
-        #endif
+        let t = Date()
+        DecisionSpeedDebugLog.logCoachExitSend(activity: .oneTouchPassing, repIndex: repIndex, gate: gate, embeddedTimestamp: t)
+        remoteService.sendExitLogged(repIndex: repIndex, gate: gate, timestamp: t)
+        #else
         remoteService.sendExitLogged(repIndex: repIndex, gate: gate, timestamp: Date())
+        #endif
         currentRepIndex = repIndex + 1
         state = currentRepIndex >= totalReps ? .blockComplete : .ready
     }
@@ -581,8 +593,12 @@ struct OneTouchPassingCoachRemoteView: View {
         if Self.partnerTransportMode == .relayWebSocket {
             otpCoachRelayLog("send incorrectDecision repIndex=\(repIndex)")
         }
-        #endif
+        let t = Date()
+        DecisionSpeedDebugLog.logCoachIncorrectSend(activity: .oneTouchPassing, repIndex: repIndex, embeddedTimestamp: t)
+        remoteService.sendIncorrectDecision(repIndex: repIndex, timestamp: t)
+        #else
         remoteService.sendIncorrectDecision(repIndex: repIndex, timestamp: Date())
+        #endif
         currentRepIndex = repIndex + 1
         state = currentRepIndex >= totalReps ? .blockComplete : .ready
     }

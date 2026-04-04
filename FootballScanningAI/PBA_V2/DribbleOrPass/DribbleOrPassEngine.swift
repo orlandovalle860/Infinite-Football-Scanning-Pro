@@ -95,7 +95,16 @@ final class DribbleOrPassEngine: ObservableObject {
         revealedGates = []
         cancelTimers()
 
-        let delay = config.scanWindowSeconds
+        let delay = UnifiedScanToBeepTiming.randomDelaySeconds()
+        #if DEBUG
+        UnifiedScanToBeepTiming.logSchedule(
+            activity: "dribbleOrPass",
+            delaySeconds: delay,
+            difficulty: config.difficulty,
+            loopLevel: config.curriculumLoopLevel,
+            model: .unified
+        )
+        #endif
         let endsAt = Date().addingTimeInterval(delay)
         phase = .armedScanning(repIndex: repIndex, endsAt: endsAt)
         updateInstructions()
@@ -118,6 +127,9 @@ final class DribbleOrPassEngine: ObservableObject {
         guard repIndex == currentRepIndex else { return }
         guard case .beepedAwaitingPass(let r) = phase, r == repIndex else { return }
         passTriggeredAt = timestamp
+        #if DEBUG
+        DecisionSpeedDebugLog.logEngineRepLive(activity: .dribbleOrPass, repIndex: repIndex, passEmbeddedStored: timestamp)
+        #endif
         cancelTimers()
         _ = plan[repIndex]
         let gates: [Gate] = [.up, .down, .left, .right]
@@ -240,6 +252,18 @@ final class DribbleOrPassEngine: ObservableObject {
         let pending = pendingFirstTouchByRep[repIndex]
         pendingFirstTouchByRep[repIndex] = nil
         let speed = TimingThresholds.dribblePassDecisionSpeed(for: reactionTimeSeconds)
+        #if DEBUG
+        let engineWallEntry = Date()
+        DecisionSpeedDebugLog.logScoredRep(
+            activity: .dribbleOrPass,
+            repIndex: repIndex,
+            passTimestamp: triggerTime,
+            directionLogTimestamp: timestamp,
+            rawDeltaSeconds: reactionTimeSeconds,
+            difficulty: config.difficulty,
+            engineEntryWallTime: engineWallEntry
+        )
+        #endif
         let decisionPoints = dribbleOrPassDecisionPoints(plan: p, chosenGate: gate)
         let timingBonus = dribbleOrPassTimingBonus(speed)
         let result = DribbleOrPassRepResult(
@@ -290,6 +314,18 @@ final class DribbleOrPassEngine: ObservableObject {
         let p = plan[repIndex]
         pendingFirstTouchByRep[repIndex] = nil
         let speed = TimingThresholds.dribblePassDecisionSpeed(for: reactionTimeSeconds)
+        #if DEBUG
+        let engineWallEntryIncorrect = Date()
+        DecisionSpeedDebugLog.logScoredRep(
+            activity: .dribbleOrPass,
+            repIndex: repIndex,
+            passTimestamp: triggerTime,
+            directionLogTimestamp: timestamp,
+            rawDeltaSeconds: reactionTimeSeconds,
+            difficulty: config.difficulty,
+            engineEntryWallTime: engineWallEntryIncorrect
+        )
+        #endif
         let result = DribbleOrPassRepResult(
             repIndex: repIndex,
             correct: false,

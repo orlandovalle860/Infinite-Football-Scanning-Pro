@@ -2,7 +2,7 @@
 //  OneTouchPassingConfig.swift
 //  FootballScanningAI
 //
-//  PBA V2 — Activity 4: Difficulty presets only (no sliders). CHECK delay range, reveal style, cue visible.
+//  PBA V2 — Activity 4: Difficulty presets only (no sliders). CHECK delay uses unified scan timing; reveal style / cue duration vary by difficulty.
 //
 
 import Foundation
@@ -16,60 +16,62 @@ enum OneTouchRevealStyle: String, Codable {
 
 struct OneTouchPassingConfig {
     let difficulty: TestDifficulty
-    /// Random delay (seconds) before CHECK cue; range per difficulty.
-    let checkDelayMin: Double
-    let checkDelayMax: Double
     let revealStyle: OneTouchRevealStyle
     let revealSpacingSeconds: Double
     let cueVisibleSeconds: Double
+    /// Curriculum loop (1...3); for logging only — does **not** scale scan→CHECK delay.
+    let curriculumLoopLevel: Int
 
     static func defaultConfig(for difficulty: TestDifficulty) -> OneTouchPassingConfig {
-        switch difficulty {
-        case .beginner:
-            return OneTouchPassingConfig(
-                difficulty: difficulty,
-                checkDelayMin: 6,
-                checkDelayMax: 9,
-                revealStyle: .simultaneous,
-                revealSpacingSeconds: 0.30,
-                cueVisibleSeconds: 1.0
-            )
-        case .standard:
-            return OneTouchPassingConfig(
-                difficulty: difficulty,
-                checkDelayMin: 4,
-                checkDelayMax: 7,
-                revealStyle: .twoStage,
-                revealSpacingSeconds: 0.20,
-                cueVisibleSeconds: 0.75
-            )
-        case .advanced:
-            return OneTouchPassingConfig(
-                difficulty: difficulty,
-                checkDelayMin: 3,
-                checkDelayMax: 5,
-                revealStyle: .sequential,
-                revealSpacingSeconds: 0.12,
-                cueVisibleSeconds: 0.5
-            )
-        }
+        defaultConfig(for: difficulty, loopLevel: 1)
     }
 
-    /// Loop scaling for guided curriculum (v1 supports loops 1...3).
-    /// Loop 1 = default, loop 2/3 = faster tempo + shorter windows.
+    /// Loop scaling applies to reveal style / cue duration / spacing — **not** scan→CHECK timing.
     static func defaultConfig(for difficulty: TestDifficulty, loopLevel: Int) -> OneTouchPassingConfig {
-        let base = defaultConfig(for: difficulty)
-        switch max(1, min(3, loopLevel)) {
+        let base: OneTouchPassingConfig
+        switch difficulty {
+        case .beginner:
+            base = OneTouchPassingConfig(
+                difficulty: difficulty,
+                revealStyle: .simultaneous,
+                revealSpacingSeconds: 0.30,
+                cueVisibleSeconds: 1.0,
+                curriculumLoopLevel: 1
+            )
+        case .standard:
+            base = OneTouchPassingConfig(
+                difficulty: difficulty,
+                revealStyle: .twoStage,
+                revealSpacingSeconds: 0.20,
+                cueVisibleSeconds: 0.75,
+                curriculumLoopLevel: 1
+            )
+        case .advanced:
+            base = OneTouchPassingConfig(
+                difficulty: difficulty,
+                revealStyle: .sequential,
+                revealSpacingSeconds: 0.12,
+                cueVisibleSeconds: 0.5,
+                curriculumLoopLevel: 1
+            )
+        }
+        let level = max(1, min(3, loopLevel))
+        switch level {
         case 1:
-            return base
+            return OneTouchPassingConfig(
+                difficulty: difficulty,
+                revealStyle: base.revealStyle,
+                revealSpacingSeconds: base.revealSpacingSeconds,
+                cueVisibleSeconds: base.cueVisibleSeconds,
+                curriculumLoopLevel: level
+            )
         case 2:
             return OneTouchPassingConfig(
                 difficulty: difficulty,
-                checkDelayMin: max(1.8, base.checkDelayMin * 0.9),
-                checkDelayMax: max(2.6, base.checkDelayMax * 0.9),
                 revealStyle: base.revealStyle,
                 revealSpacingSeconds: max(0.08, base.revealSpacingSeconds * 0.9),
-                cueVisibleSeconds: max(0.40, base.cueVisibleSeconds * 0.9)
+                cueVisibleSeconds: max(0.40, base.cueVisibleSeconds * 0.9),
+                curriculumLoopLevel: level
             )
         default:
             let advancedStyle: OneTouchRevealStyle
@@ -80,17 +82,11 @@ struct OneTouchPassingConfig {
             }
             return OneTouchPassingConfig(
                 difficulty: difficulty,
-                checkDelayMin: max(1.6, base.checkDelayMin * 0.8),
-                checkDelayMax: max(2.2, base.checkDelayMax * 0.8),
                 revealStyle: advancedStyle,
                 revealSpacingSeconds: max(0.07, base.revealSpacingSeconds * 0.8),
-                cueVisibleSeconds: max(0.35, base.cueVisibleSeconds * 0.8)
+                cueVisibleSeconds: max(0.35, base.cueVisibleSeconds * 0.8),
+                curriculumLoopLevel: level
             )
         }
-    }
-
-    /// Random delay for this rep within the difficulty range.
-    func randomCheckDelay() -> Double {
-        Double.random(in: checkDelayMin...checkDelayMax)
     }
 }

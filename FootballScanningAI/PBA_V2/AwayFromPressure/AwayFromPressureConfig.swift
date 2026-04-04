@@ -9,39 +9,39 @@ import Foundation
 
 struct AwayFromPressureConfig {
     let difficulty: TestDifficulty
+    /// Documentary range; per-rep delay is always `UnifiedScanToBeepTiming.randomDelaySeconds()` (not difficulty-based).
     let scanDelayRange: ClosedRange<Double>
     let markerVisibleSeconds: Double
+    /// Curriculum loop (1...3); for logging only — does **not** scale scan→beep delay.
+    let curriculumLoopLevel: Int
 
     static func config(for difficulty: TestDifficulty) -> AwayFromPressureConfig {
-        switch difficulty {
-        case .beginner:
-            return AwayFromPressureConfig(difficulty: difficulty, scanDelayRange: 6 ... 8, markerVisibleSeconds: 0.8)
-        case .standard:
-            return AwayFromPressureConfig(difficulty: difficulty, scanDelayRange: 4 ... 6, markerVisibleSeconds: 0.65)
-        case .advanced:
-            return AwayFromPressureConfig(difficulty: difficulty, scanDelayRange: 3 ... 5, markerVisibleSeconds: 0.5)
-        }
+        config(for: difficulty, loopLevel: 1)
     }
 
-    /// Loop scaling for guided curriculum (v1 supports loops 1...3).
-    /// Loop 1 = default, loop 2/3 = slightly faster tempo + shorter decision window.
+    /// Loop scaling applies to **marker / decision window** only, not scan→beep timing.
     static func config(for difficulty: TestDifficulty, loopLevel: Int) -> AwayFromPressureConfig {
-        let base = config(for: difficulty)
-        switch max(1, min(3, loopLevel)) {
-        case 1:
-            return base
-        case 2:
-            return AwayFromPressureConfig(
-                difficulty: difficulty,
-                scanDelayRange: (base.scanDelayRange.lowerBound * 0.9)...(base.scanDelayRange.upperBound * 0.9),
-                markerVisibleSeconds: max(0.45, base.markerVisibleSeconds * 0.9)
-            )
-        default:
-            return AwayFromPressureConfig(
-                difficulty: difficulty,
-                scanDelayRange: (base.scanDelayRange.lowerBound * 0.8)...(base.scanDelayRange.upperBound * 0.8),
-                markerVisibleSeconds: max(0.40, base.markerVisibleSeconds * 0.82)
-            )
+        let baseMarker: Double
+        switch difficulty {
+        case .beginner: baseMarker = 0.8
+        case .standard: baseMarker = 0.65
+        case .advanced: baseMarker = 0.5
         }
+        let level = max(1, min(3, loopLevel))
+        let marker: Double
+        switch level {
+        case 1:
+            marker = baseMarker
+        case 2:
+            marker = max(0.45, baseMarker * 0.9)
+        default:
+            marker = max(0.40, baseMarker * 0.82)
+        }
+        return AwayFromPressureConfig(
+            difficulty: difficulty,
+            scanDelayRange: UnifiedScanToBeepTiming.delayRangeSeconds,
+            markerVisibleSeconds: marker,
+            curriculumLoopLevel: level
+        )
     }
 }

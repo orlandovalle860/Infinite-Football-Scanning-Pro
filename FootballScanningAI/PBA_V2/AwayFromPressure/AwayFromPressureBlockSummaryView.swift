@@ -69,9 +69,14 @@ struct AwayFromPressureBlockSummaryView: View {
         guard !times.isEmpty else { return nil }
         return times.reduce(0, +) / Double(times.count)
     }
+    private var headlineSpeedResolution: UniversalBlockSummaryHeadline.Resolution {
+        let c = speedCounts
+        return UniversalBlockSummaryHeadline.resolve(fast: c.fast, medium: c.medium, slow: c.slow)
+    }
+
+    /// Block headline: dominant per-rep bucket (tie → worse bucket). Average latency is shown separately, not used for this label.
     private var speedBucket: SpeedBucket {
-        guard let avg = avgLatency else { return .medium }
-        return TimingThresholds.pressureSpeedBucket(for: avg)
+        headlineSpeedResolution.bucket
     }
     private var biasString: String {
         var c: [Gate: Int] = [.up: 0, .down: 0, .left: 0, .right: 0]
@@ -265,6 +270,26 @@ struct AwayFromPressureBlockSummaryView: View {
         }
         .onAppear {
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
+            #if DEBUG
+            if !didSave {
+                DecisionSpeedDebugLog.logAwayFromPressureAggregate(logs: logs, difficulty: config.difficulty)
+                let repLabels = logs.map { log -> String in
+                    guard let t = log.decisionTimeSeconds else { return "none" }
+                    return TimingThresholds.pressureSpeedBucket(for: t).rawValue
+                }
+                let c = speedCounts
+                UniversalSummaryBucketDebugLog.log(
+                    activity: .awayFromPressure,
+                    perRepBucketLabels: repLabels,
+                    fast: c.fast,
+                    medium: c.medium,
+                    slow: c.slow,
+                    avgRawDeltaSeconds: avgLatency,
+                    headline: speedBucket,
+                    tieBreakApplied: headlineSpeedResolution.tieBreakApplied
+                )
+            }
+            #endif
             AnalyticsManager.shared.track(.trainingSessionCompleted, playerId: playerStore.selectedPlayerId)
             guard !didSave else {
                 #if DEBUG
@@ -424,6 +449,18 @@ struct AwayFromPressureBlockSummaryView: View {
                     Text("Correct first decisions: \(correctCount)/12")
                         .font(.subheadline)
                         .foregroundColor(.white.opacity(0.7))
+                    VStack(spacing: 4) {
+                        Text("Decision speed: \(speedBucket.rawValue.capitalized)")
+                            .font(.subheadline)
+                            .foregroundColor(.white.opacity(0.7))
+                        BlockSummarySpeedCountsSubline(
+                            fast: speedCounts.fast,
+                            medium: speedCounts.medium,
+                            slow: speedCounts.slow,
+                            debugActivity: .awayFromPressure
+                        )
+                    }
+                    .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity)
 
@@ -445,10 +482,18 @@ struct AwayFromPressureBlockSummaryView: View {
                             Spacer()
                             Text(avgLatencyString)
                         }
-                        HStack {
+                        HStack(alignment: .top) {
                             Text("Speed")
                             Spacer()
-                            Text(speedBucket.rawValue.capitalized)
+                            VStack(alignment: .trailing, spacing: 4) {
+                                Text(speedBucket.rawValue.capitalized)
+                                BlockSummarySpeedCountsSubline(
+                                    fast: speedCounts.fast,
+                                    medium: speedCounts.medium,
+                                    slow: speedCounts.slow,
+                                    foregroundColor: .white.opacity(0.5)
+                                )
+                            }
                         }
                         HStack {
                             Text("Bias")

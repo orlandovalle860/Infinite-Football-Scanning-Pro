@@ -92,9 +92,11 @@ struct TwoMinuteTestResult: Identifiable, Hashable {
 
         for log in logs {
             let t = log.exitLoggedAt.timeIntervalSince(log.passTriggeredAt ?? log.infoShownAt)
-            if t < 1.5 { fast += 1 }
-            else if t < 3.0 { medium += 1 }
-            else { slow += 1 }
+            switch TimingThresholds.speedBucket(for: t, activity: .twoMinuteTest) {
+            case .fast: fast += 1
+            case .medium: medium += 1
+            case .slow: slow += 1
+            }
             directionCounts[log.exitedGate, default: 0] += 1
             if log.passTriggeredAt != nil {
                 totalTime += log.exitLoggedAt.timeIntervalSince(log.passTriggeredAt!)

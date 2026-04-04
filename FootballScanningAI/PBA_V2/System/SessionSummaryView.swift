@@ -300,10 +300,7 @@ struct SessionSummaryView: View {
                 if session.activityType != .awayFromPressure && session.activityType != .dribbleOrPass {
                     yourNumbersRow(label: "Correct decisions", value: accuracyDisplayText)
                 }
-                yourNumbersRow(
-                    label: "Tempo mix",
-                    value: "Fast \(session.speedCounts.fast) · Med \(session.speedCounts.medium) · Slow \(session.speedCounts.slow)"
-                )
+                yourNumbersDecisionSpeedBlock
                 if let score = displayDecisionSpeedScore {
                     yourNumbersRow(label: "Decision Speed Score", value: "\(score)")
                 }
@@ -328,6 +325,30 @@ struct SessionSummaryView: View {
             }
         }
         .padding(.top, 4)
+    }
+
+    private var yourNumbersDecisionSpeedBlock: some View {
+        let c = session.speedCounts
+        let bucket = UniversalBlockSummaryHeadline.resolve(fast: c.fast, medium: c.medium, slow: c.slow).bucket
+        return HStack(alignment: .top, spacing: 12) {
+            Text("Decision speed")
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.78))
+            Spacer(minLength: 12)
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(bucket.rawValue.capitalized)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                BlockSummarySpeedCountsSubline(
+                    fast: c.fast,
+                    medium: c.medium,
+                    slow: c.slow,
+                    foregroundColor: .white.opacity(0.55),
+                    textAlignment: .trailing,
+                    debugActivity: session.activityType
+                )
+            }
+        }
     }
 
     private func yourNumbersRow(label: String, value: String) -> some View {
@@ -421,7 +442,7 @@ struct SessionSummaryView: View {
             "\(playerName) — Session Summary",
             activityName,
             "Correct: \(session.correctCount)/\(session.totalReps)",
-            "Speed: Fast \(session.speedCounts.fast) / Med \(session.speedCounts.medium) / Slow \(session.speedCounts.slow)",
+            "Rep tempo: \(BlockSummarySpeedCountsFormatting.summaryLine(fast: session.speedCounts.fast, medium: session.speedCounts.medium, slow: session.speedCounts.slow))",
             "Bias: \(session.biasDirection != nil ? biasLabel(session.biasDirection) : "none")",
             "Coach insight: \(postSessionNarrative.coachInsight)"
         ]

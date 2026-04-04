@@ -25,6 +25,16 @@ extension Gate {
         case .right: return .left
         }
     }
+
+    /// Screen-edge names for wedge / gate clarity logging (top, bottom, left, right).
+    var wedgeClaritySideLabel: String {
+        switch self {
+        case .up: return "top"
+        case .down: return "bottom"
+        case .left: return "left"
+        case .right: return "right"
+        }
+    }
 }
 
 /// Plan for one rep: which gate shows the ball.

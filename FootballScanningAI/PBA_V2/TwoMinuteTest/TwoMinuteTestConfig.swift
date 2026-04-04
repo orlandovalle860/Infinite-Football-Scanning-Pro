@@ -2,12 +2,13 @@
 //  TwoMinuteTestConfig.swift
 //  FootballScanningAI
 //
-//  PBA V2 — Config for 2-Minute Critical Scan test. Baseline is fixed for comparable results; training activities use TestDifficulty.
+//  PBA V2 — Config for 2-Minute Critical Scan. Beep delay is unified (not difficulty-based);
+//  difficulty affects ball visibility and other presentation, not scan-to-beep timing.
 //
 
 import Foundation
 
-/// Difficulty level: scan window and ball visibility duration. Used by training activities (AFP, DOP, OTP); 2-minute test uses baseline only.
+/// Difficulty level: primarily ball-on-screen duration and presentation complexity for 2-Minute test; also used app-wide for other activities.
 enum TestDifficulty: String, CaseIterable, Hashable, Codable {
     case beginner
     case standard
@@ -16,24 +17,53 @@ enum TestDifficulty: String, CaseIterable, Hashable, Codable {
 
 struct TwoMinuteTestConfig {
     let difficulty: TestDifficulty
+    /// Documentary range matching unified beep timing; actual per-rep delay uses `randomTwoMinuteBeepDelaySeconds`.
     let scanDelayRange: ClosedRange<Double>
     let ballVisibleSeconds: Double
 
-    /// Fixed configuration for the 2-minute baseline test. Same for all users so decision speed and accuracy are comparable.
+    /// Same base range as all PBA scan→beep timing (`UnifiedScanToBeepTiming`).
+    static let twoMinuteUnifiedBeepDelayRange: ClosedRange<Double> = UnifiedScanToBeepTiming.delayRangeSeconds
+
+    /// Random delay (seconds) after next rep before beep: mostly unified 2–4 s; occasionally a shorter burst for variety (not tied to difficulty).
+    static func randomTwoMinuteBeepDelaySeconds(difficulty: TestDifficulty) -> Double {
+        let delay: Double
+        if Double.random(in: 0...1) < 0.12 {
+            delay = Double.random(in: 1.35...1.99)
+        } else {
+            delay = Double.random(in: twoMinuteUnifiedBeepDelayRange)
+        }
+        #if DEBUG
+        UnifiedScanToBeepTiming.logSchedule(
+            activity: "twoMinuteCriticalScan",
+            delaySeconds: delay,
+            difficulty: difficulty,
+            loopLevel: 1,
+            model: .unified
+        )
+        #endif
+        return delay
+    }
+
+    /// Baseline assessment: same beep timing model as training presets; ball visibility fixed for comparability.
     static let baseline: TwoMinuteTestConfig = TwoMinuteTestConfig(
         difficulty: .standard,
-        scanDelayRange: 5 ... 7,
+        scanDelayRange: twoMinuteUnifiedBeepDelayRange,
         ballVisibleSeconds: 0.8
     )
 
     static func config(for difficulty: TestDifficulty) -> TwoMinuteTestConfig {
+        TwoMinuteTestConfig(
+            difficulty: difficulty,
+            scanDelayRange: twoMinuteUnifiedBeepDelayRange,
+            ballVisibleSeconds: ballVisibleSecondsForDifficulty(difficulty)
+        )
+    }
+
+    private static func ballVisibleSecondsForDifficulty(_ difficulty: TestDifficulty) -> Double {
         switch difficulty {
-        case .beginner:
-            return TwoMinuteTestConfig(difficulty: difficulty, scanDelayRange: 7 ... 9, ballVisibleSeconds: 1.0)
-        case .standard:
-            return TwoMinuteTestConfig(difficulty: difficulty, scanDelayRange: 5 ... 7, ballVisibleSeconds: 0.8)
-        case .advanced:
-            return TwoMinuteTestConfig(difficulty: difficulty, scanDelayRange: 3 ... 5, ballVisibleSeconds: 0.6)
+        case .beginner: return 1.0
+        case .standard: return 0.8
+        case .advanced: return 0.6
         }
     }
 }

@@ -116,13 +116,19 @@ struct OneTouchPassingDisplaySessionView: View {
                 if sessionTransportMode == .relayWebSocket {
                     otpRelayDisplayLog("incoming passTriggered repIndex=\(repIndex)")
                 }
+                let displayReceiveWall = Date()
+                DecisionSpeedDebugLog.logDisplayRelayIngress(activity: .oneTouchPassing, kind: "passTriggered", repIndex: repIndex, embeddedTimestamp: timestamp, displayReceiveWallTime: displayReceiveWall)
                 #endif
-                engine.onPassTrigger(repIndex: repIndex, timestamp: timestamp)
+                otpApplyPassTrigger(repIndex: repIndex, passTimestamp: timestamp)
             case .exitLogged(let repIndex, let gate, let timestamp):
                 #if DEBUG
                 if sessionTransportMode == .relayWebSocket {
                     otpRelayDisplayLog("incoming exitLogged repIndex=\(repIndex) gate=\(gate)")
                 }
+                let displayReceiveWall = Date()
+                DecisionSpeedDebugLog.logDisplayRelayIngress(activity: .oneTouchPassing, kind: "exitLogged", repIndex: repIndex, embeddedTimestamp: timestamp, displayReceiveWallTime: displayReceiveWall)
+                let wallBeforeEngine = Date()
+                DecisionSpeedDebugLog.logDisplayBeforeEngineExit(activity: .oneTouchPassing, repIndex: repIndex, embeddedDirection: timestamp, displayWallBeforeEngine: wallBeforeEngine, kind: "exitLogged")
                 #endif
                 if engine.onExitLogged(repIndex: repIndex, gate: gate, timestamp: timestamp) != nil, let result = engine.repResults.last {
                     saveDecisionForRep(result: result)
@@ -133,6 +139,10 @@ struct OneTouchPassingDisplaySessionView: View {
                 if sessionTransportMode == .relayWebSocket {
                     otpRelayDisplayLog("incoming incorrectDecision repIndex=\(repIndex)")
                 }
+                let displayReceiveWall = Date()
+                DecisionSpeedDebugLog.logDisplayRelayIngress(activity: .oneTouchPassing, kind: "incorrectDecision", repIndex: repIndex, embeddedTimestamp: timestamp, displayReceiveWallTime: displayReceiveWall)
+                let wallBeforeEngine = Date()
+                DecisionSpeedDebugLog.logDisplayBeforeEngineExit(activity: .oneTouchPassing, repIndex: repIndex, embeddedDirection: timestamp, displayWallBeforeEngine: wallBeforeEngine, kind: "incorrectDecision")
                 #endif
                 if engine.onIncorrectDecision(repIndex: repIndex, timestamp: timestamp) != nil, let result = engine.repResults.last {
                     saveDecisionForRep(result: result)
@@ -166,6 +176,9 @@ struct OneTouchPassingDisplaySessionView: View {
             #endif
             if case .blockComplete = newPhase {
                 DispatchQueue.main.async { navigateToBlockSummary = true }
+            }
+            if case .armedScanning = newPhase {
+                preloadBeepAssetsForInstantReveal()
             }
             if case .showingCheck = newPhase {
                 #if DEBUG
@@ -206,6 +219,7 @@ struct OneTouchPassingDisplaySessionView: View {
             let pid = playerStore.selectedPlayerId ?? profileManager.currentProfile?.id
             wedgeStyle = WedgeDifficultyEngine.currentStyle(playerId: pid)
             activateAudioSession()
+            preloadBeepAssetsForInstantReveal()
             subscribeToAudioInterruption()
             AnalyticsManager.shared.track(.trainingSessionStarted, playerId: playerStore.selectedPlayerId)
             Task {
@@ -310,7 +324,13 @@ struct OneTouchPassingDisplaySessionView: View {
         case .waitingForNextRep:
             engine.onNextRep(repIndex: nextRepIndex)
         case .awaitingPassTrigger(repIndex: let ri):
-            engine.onPassTrigger(repIndex: ri, timestamp: Date())
+            #if DEBUG
+            let soloPass = Date()
+            DecisionSpeedDebugLog.logSoloDisplayPassTrigger(activity: .oneTouchPassing, repIndex: ri, displayWallPassTS: soloPass)
+            otpApplyPassTrigger(repIndex: ri, passTimestamp: soloPass)
+            #else
+            otpApplyPassTrigger(repIndex: ri, passTimestamp: Date())
+            #endif
         default:
             break
         }
@@ -440,9 +460,17 @@ struct OneTouchPassingDisplaySessionView: View {
     }
 
     private func logExit(repIndex: Int, gate: Gate) {
+        #if DEBUG
+        let soloExit = Date()
+        DecisionSpeedDebugLog.logSoloDisplayExitTrigger(activity: .oneTouchPassing, repIndex: repIndex, gate: gate, displayWallExitTS: soloExit)
+        if engine.onExitLogged(repIndex: repIndex, gate: gate, timestamp: soloExit) != nil, let result = engine.repResults.last {
+            saveDecisionForRep(result: result)
+        }
+        #else
         if engine.onExitLogged(repIndex: repIndex, gate: gate, timestamp: Date()) != nil, let result = engine.repResults.last {
             saveDecisionForRep(result: result)
         }
+        #endif
         nextRepIndex = repIndex + 1
     }
 
@@ -465,6 +493,29 @@ struct OneTouchPassingDisplaySessionView: View {
 
     private var hasGatesVisible: Bool {
         !engine.revealedGates.isEmpty
+    }
+
+    private var otpShouldPreloadGateCueLayers: Bool {
+        switch engine.phase {
+        case .armedScanning, .showingCheck, .awaitingPassTrigger, .cueRevealing, .cueVisible, .awaitingExitLog:
+            return true
+        case .waitingForNextRep, .blockComplete:
+            return false
+        }
+    }
+
+    private func otpGateCueOpacity(for gate: Gate) -> Double {
+        engine.revealedGates.contains(gate) ? 1 : 0
+    }
+
+    private func otpApplyPassTrigger(repIndex: Int, passTimestamp: Date) {
+        PBAFlowDebugLog.passReceived(repId: repIndex, timestamp: passTimestamp)
+        #if DEBUG
+        let wallBeforeEngine = Date()
+        DecisionSpeedDebugLog.logDisplayBeforeEnginePass(activity: .oneTouchPassing, repIndex: repIndex, embeddedPass: passTimestamp, displayWallBeforeEngine: wallBeforeEngine)
+        #endif
+        engine.onPassTrigger(repIndex: repIndex, timestamp: passTimestamp)
+        PBAFlowDebugLog.reveal(repId: repIndex, timestamp: Date())
     }
 
     /// Drives `.id` so `DangerZoneOverlay` reveal animation replays each rep (same pattern as Away From Pressure).
@@ -492,13 +543,18 @@ struct OneTouchPassingDisplaySessionView: View {
                 }
                 .position(x: center.x, y: center.y)
 
-                if let plan = engine.currentPlan {
+                if let plan = engine.currentPlan, otpShouldPreloadGateCueLayers {
                     ForEach(Gate.allCases, id: \.self) { gate in
-                        if engine.revealedGates.contains(gate) {
-                            OneTouchGateOverlay(gate: gate, isGreen: plan.isGreen(gate), wedgeStyle: wedgeStyle)
-                                .id("\(oneTouchActiveCueRepIndex)-\(gate.rawValue)")
-                                .zIndex(1)
-                        }
+                        OneTouchGateOverlay(
+                            gate: gate,
+                            isGreen: plan.isGreen(gate),
+                            wedgeStyle: wedgeStyle,
+                            isDecisionRevealActive: engine.revealedGates.contains(gate)
+                        )
+                            .id("\(oneTouchActiveCueRepIndex)-\(gate.rawValue)")
+                            .opacity(otpGateCueOpacity(for: gate))
+                            .animation(nil, value: engine.revealedGates)
+                            .zIndex(1)
                     }
                 }
             }
@@ -601,12 +657,20 @@ struct OneTouchPassingDisplaySessionView: View {
         engine.onNextRep(repIndex: idx)
     }
 
+    private func preloadBeepAssetsForInstantReveal() {
+        PBABeepSoundManager.shared.preloadCurrent()
+    }
+
     private func playBeep() {
         #if DEBUG
         OTPPersistDebug.log("playBeep() executing (CHECK cue)")
         #endif
+        if case .showingCheck(let r) = engine.phase {
+            PBAFlowDebugLog.beep(repId: r, timestamp: Date())
+        }
         DispatchQueue.main.async {
             self.activateAudioSession()
+            self.preloadBeepAssetsForInstantReveal()
             PBABeepSoundManager.shared.play(soundEnabled: settingsViewModel.soundEnabled)
         }
     }

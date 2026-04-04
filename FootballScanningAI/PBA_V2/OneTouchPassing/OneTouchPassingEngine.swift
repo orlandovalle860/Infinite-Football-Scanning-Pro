@@ -98,7 +98,16 @@ final class OneTouchPassingEngine: ObservableObject {
         showCheckCue = false
         cancelTimers()
 
-        let delay = config.randomCheckDelay()
+        let delay = UnifiedScanToBeepTiming.randomDelaySeconds()
+        #if DEBUG
+        UnifiedScanToBeepTiming.logSchedule(
+            activity: "oneTouchPassing",
+            delaySeconds: delay,
+            difficulty: config.difficulty,
+            loopLevel: config.curriculumLoopLevel,
+            model: .unified
+        )
+        #endif
         let endsAt = Date().addingTimeInterval(delay)
         phase = .armedScanning(repIndex: repIndex, endsAt: endsAt)
         updateInstructions()
@@ -132,6 +141,9 @@ final class OneTouchPassingEngine: ObservableObject {
         guard repIndex == currentRepIndex else { return }
         guard case .awaitingPassTrigger(let r) = phase, r == repIndex else { return }
         passTriggeredAt = timestamp
+        #if DEBUG
+        DecisionSpeedDebugLog.logEngineRepLive(activity: .oneTouchPassing, repIndex: repIndex, passEmbeddedStored: timestamp)
+        #endif
         cancelTimers()
         let gates: [Gate] = [.up, .down, .left, .right]
 
@@ -252,6 +264,18 @@ final class OneTouchPassingEngine: ObservableObject {
         let p = plan[repIndex]
         let correct = p.greenDirections.contains(gate)
         let speed = TimingThresholds.oneTouchDecisionSpeed(for: reactionTimeSeconds)
+        #if DEBUG
+        let engineWallEntry = Date()
+        DecisionSpeedDebugLog.logScoredRep(
+            activity: .oneTouchPassing,
+            repIndex: repIndex,
+            passTimestamp: triggerTime,
+            directionLogTimestamp: timestamp,
+            rawDeltaSeconds: reactionTimeSeconds,
+            difficulty: config.difficulty,
+            engineEntryWallTime: engineWallEntry
+        )
+        #endif
         let result = OneTouchRepResult(
             repIndex: repIndex,
             correct: correct,
@@ -295,6 +319,18 @@ final class OneTouchPassingEngine: ObservableObject {
 
         let p = plan[repIndex]
         let speed = TimingThresholds.oneTouchDecisionSpeed(for: reactionTimeSeconds)
+        #if DEBUG
+        let engineWallEntryIncorrect = Date()
+        DecisionSpeedDebugLog.logScoredRep(
+            activity: .oneTouchPassing,
+            repIndex: repIndex,
+            passTimestamp: triggerTime,
+            directionLogTimestamp: timestamp,
+            rawDeltaSeconds: reactionTimeSeconds,
+            difficulty: config.difficulty,
+            engineEntryWallTime: engineWallEntryIncorrect
+        )
+        #endif
         let result = OneTouchRepResult(
             repIndex: repIndex,
             correct: false,

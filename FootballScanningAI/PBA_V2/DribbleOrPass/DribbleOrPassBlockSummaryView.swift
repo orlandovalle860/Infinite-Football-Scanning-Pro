@@ -84,13 +84,12 @@ struct DribbleOrPassBlockSummaryView: View {
         return "Good mix. Keep building forward habits."
     }
 
-    private var dominantDecisionSpeed: DecisionSpeed {
-        let f = blockResult.fastCount
-        let m = blockResult.mediumCount
-        let s = blockResult.slowCount
-        if f >= m && f >= s { return .fast }
-        if s >= f && s >= m { return .slow }
-        return .medium
+    private var headlineSpeedResolution: UniversalBlockSummaryHeadline.Resolution {
+        UniversalBlockSummaryHeadline.resolve(
+            fast: blockResult.fastCount,
+            medium: blockResult.mediumCount,
+            slow: blockResult.slowCount
+        )
     }
 
     private var biasString: String {
@@ -102,12 +101,9 @@ struct DribbleOrPassBlockSummaryView: View {
         return "Balanced"
     }
 
+    /// Block headline: dominant per-rep bucket (tie → worse bucket).
     private var speedBucket: SpeedBucket {
-        switch dominantDecisionSpeed {
-        case .fast: return .fast
-        case .medium: return .medium
-        case .slow: return .slow
-        }
+        headlineSpeedResolution.bucket
     }
 
     private var firstTouchCountsFromResults: [Gate: Int]? {
@@ -212,6 +208,17 @@ struct DribbleOrPassBlockSummaryView: View {
             guard !didSave else { return }
             #if DEBUG
             print("[PBA-Debug] Block completed (DOP). results.count=\(results.count), correct=\(blockResult.correctCount), decisionSpeedScoreValue=\(decisionSpeedScoreValue ?? -1), playerId=\(playerStore.selectedPlayerId?.uuidString ?? "nil")")
+            let repLabels = results.map { $0.decisionSpeed.rawValue }
+            UniversalSummaryBucketDebugLog.log(
+                activity: .dribbleOrPass,
+                perRepBucketLabels: repLabels,
+                fast: blockResult.fastCount,
+                medium: blockResult.mediumCount,
+                slow: blockResult.slowCount,
+                avgRawDeltaSeconds: blockResult.averageDecisionTime,
+                headline: speedBucket,
+                tieBreakApplied: headlineSpeedResolution.tieBreakApplied
+            )
             #endif
             guard let sessionId = CurrentSessionStore.shared.sessionId else {
                 let record = SessionRecord(
@@ -357,9 +364,18 @@ struct DribbleOrPassBlockSummaryView: View {
                     Text("Correct first decisions: \(blockResult.correctCount)/12")
                         .font(.subheadline)
                         .foregroundColor(.white.opacity(0.7))
-                    Text("Decision Window: \(dominantDecisionSpeed.rawValue.capitalized)")
-                        .font(.subheadline)
-                        .foregroundColor(.white.opacity(0.7))
+                    VStack(spacing: 4) {
+                        Text("Decision Window: \(speedBucket.rawValue.capitalized)")
+                            .font(.subheadline)
+                            .foregroundColor(.white.opacity(0.7))
+                        BlockSummarySpeedCountsSubline(
+                            fast: blockResult.fastCount,
+                            medium: blockResult.mediumCount,
+                            slow: blockResult.slowCount,
+                            debugActivity: .dribbleOrPass
+                        )
+                    }
+                    .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity)
 

@@ -262,8 +262,12 @@ struct DribbleOrPassCoachRemoteView: View {
                     if Self.partnerTransportMode == .relayWebSocket {
                         dopCoachRelayLog("send passTriggered repIndex=\(repIndex)")
                     }
-                    #endif
+                    let t = Date()
+                    DecisionSpeedDebugLog.logCoachPassSend(activity: .dribbleOrPass, repIndex: repIndex, embeddedTimestamp: t)
+                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: t)
+                    #else
                     remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
+                    #endif
                 } label: {
                     Text("PASS")
                         .font(.system(size: 30, weight: .bold, design: .rounded))
@@ -534,8 +538,12 @@ struct DribbleOrPassCoachRemoteView: View {
                     if Self.partnerTransportMode == .relayWebSocket {
                         dopCoachRelayLog("send passTriggered (volume) repIndex=\(repIndex)")
                     }
-                    #endif
+                    let t = Date()
+                    DecisionSpeedDebugLog.logCoachPassSend(activity: .dribbleOrPass, repIndex: repIndex, embeddedTimestamp: t)
+                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: t)
+                    #else
                     remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
+                    #endif
                 }
             },
             onVolumeEdgeWarningChange: { showVolumeEdgeWarning = $0 }
@@ -588,8 +596,12 @@ struct DribbleOrPassCoachRemoteView: View {
         if Self.partnerTransportMode == .relayWebSocket {
             dopCoachRelayLog("send exitLogged repIndex=\(repIndex) gate=\(gate)")
         }
-        #endif
+        let t = Date()
+        DecisionSpeedDebugLog.logCoachExitSend(activity: .dribbleOrPass, repIndex: repIndex, gate: gate, embeddedTimestamp: t)
+        remoteService.sendExitLogged(repIndex: repIndex, gate: gate, timestamp: t)
+        #else
         remoteService.sendExitLogged(repIndex: repIndex, gate: gate, timestamp: Date())
+        #endif
         advanceToNextRep(after: repIndex)
     }
 
@@ -599,8 +611,12 @@ struct DribbleOrPassCoachRemoteView: View {
         if Self.partnerTransportMode == .relayWebSocket {
             dopCoachRelayLog("send incorrectDecision repIndex=\(repIndex)")
         }
-        #endif
+        let t = Date()
+        DecisionSpeedDebugLog.logCoachIncorrectSend(activity: .dribbleOrPass, repIndex: repIndex, embeddedTimestamp: t)
+        remoteService.sendIncorrectDecision(repIndex: repIndex, timestamp: t)
+        #else
         remoteService.sendIncorrectDecision(repIndex: repIndex, timestamp: Date())
+        #endif
         advanceToNextRep(after: repIndex)
     }
 

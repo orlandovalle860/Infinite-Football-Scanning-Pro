@@ -19,6 +19,10 @@ struct FootballScanningAIApp: App {
         
         // Preload PBA training beep for low-latency playback
         PBABeepSoundManager.shared.preloadCurrent()
+
+        #if DEBUG
+        ThresholdAuditDebug.logAuditSummaryOnce()
+        #endif
         
         // Additional protection for outdoor use
         setupScreenProtection()

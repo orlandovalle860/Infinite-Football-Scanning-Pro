@@ -264,8 +264,12 @@ struct AwayFromPressureCoachRemoteView: View {
                     if Self.partnerTransportMode == .relayWebSocket {
                         afpCoachRelayLog("send passTriggered repIndex=\(repIndex)")
                     }
-                    #endif
+                    let t = Date()
+                    DecisionSpeedDebugLog.logCoachPassSend(activity: .awayFromPressure, repIndex: repIndex, embeddedTimestamp: t)
+                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: t)
+                    #else
                     remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
+                    #endif
                 } label: {
                     Text("PASS")
                         .font(.system(size: 30, weight: .bold, design: .rounded))
@@ -562,8 +566,12 @@ struct AwayFromPressureCoachRemoteView: View {
                 if Self.partnerTransportMode == .relayWebSocket {
                     afpCoachRelayLog("send passTriggered (volume) repIndex=\(repIndex)")
                 }
-                #endif
+                let t = Date()
+                DecisionSpeedDebugLog.logCoachPassSend(activity: .awayFromPressure, repIndex: repIndex, embeddedTimestamp: t)
+                remoteService.sendPassTriggered(repIndex: repIndex, timestamp: t)
+                #else
                 remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
+                #endif
             },
             onVolumeEdgeWarningChange: { showVolumeEdgeWarning = $0 }
         )
@@ -594,8 +602,12 @@ struct AwayFromPressureCoachRemoteView: View {
         if Self.partnerTransportMode == .relayWebSocket {
             afpCoachRelayLog("send exitLogged repIndex=\(repIndex) gate=\(gate)")
         }
-        #endif
+        let t = Date()
+        DecisionSpeedDebugLog.logCoachExitSend(activity: .awayFromPressure, repIndex: repIndex, gate: gate, embeddedTimestamp: t)
+        remoteService.sendExitLogged(repIndex: repIndex, gate: gate, timestamp: t)
+        #else
         remoteService.sendExitLogged(repIndex: repIndex, gate: gate, timestamp: Date())
+        #endif
         advanceToNextRep(after: repIndex)
     }
 
@@ -605,8 +617,12 @@ struct AwayFromPressureCoachRemoteView: View {
         if Self.partnerTransportMode == .relayWebSocket {
             afpCoachRelayLog("send incorrectDecision repIndex=\(repIndex)")
         }
-        #endif
+        let t = Date()
+        DecisionSpeedDebugLog.logCoachIncorrectSend(activity: .awayFromPressure, repIndex: repIndex, embeddedTimestamp: t)
+        remoteService.sendIncorrectDecision(repIndex: repIndex, timestamp: t)
+        #else
         remoteService.sendIncorrectDecision(repIndex: repIndex, timestamp: Date())
+        #endif
         advanceToNextRep(after: repIndex)
     }
 

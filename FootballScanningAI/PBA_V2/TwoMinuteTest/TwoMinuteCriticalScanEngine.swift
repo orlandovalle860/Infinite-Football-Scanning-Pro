@@ -51,7 +51,7 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
         infoHiddenAtForCurrentRep = nil
         cancelTimers()
 
-        let delay = Double.random(in: config.scanDelayRange)
+        let delay = TwoMinuteTestConfig.randomTwoMinuteBeepDelaySeconds(difficulty: config.difficulty)
         let endsAt = Date().addingTimeInterval(delay)
         phase = .armedScanning(repIndex: repIndex, ballGate: p.ballGate, endsAt: endsAt)
 
@@ -86,6 +86,9 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
 
         passTriggeredAt = timestamp
         infoShownAtForCurrentRep = timestamp
+        #if DEBUG
+        DecisionSpeedDebugLog.logEngineRepLive(activity: .twoMinuteTest, repIndex: repIndex, passEmbeddedStored: timestamp)
+        #endif
         ballHideTimer?.invalidate()
         let duration = config.ballVisibleSeconds
         let endsAt = Date().addingTimeInterval(duration)
@@ -129,6 +132,27 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
             if repIndex + 1 >= plan.count { phase = .complete } else { phase = .waitingForNextRep }
             return nil
         }
+
+        #if DEBUG
+        let triggerAnchor2MT: String = {
+            if passTriggeredAt != nil { return "passTriggeredAt" }
+            if infoShownAtForCurrentRep != nil { return "infoShownAtForCurrentRep" }
+            if startedAtForCurrentRep != nil { return "startedAtForCurrentRep" }
+            return "exit_timestamp_fallback"
+        }()
+        let engineWallEntry2MT = Date()
+        DecisionSpeedDebugLog.logScoredRep(
+            activity: .twoMinuteTest,
+            repIndex: repIndex,
+            passTimestamp: passTriggeredAt,
+            directionLogTimestamp: timestamp,
+            rawDeltaSeconds: reactionTimeSeconds,
+            difficulty: config.difficulty,
+            visualRevealTimestamp: infoShownAtForCurrentRep,
+            triggerAnchor: triggerAnchor2MT,
+            engineEntryWallTime: engineWallEntry2MT
+        )
+        #endif
 
         let p = plan[repIndex]
         let startedAt = startedAtForCurrentRep ?? Date()
@@ -176,6 +200,27 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
             if repIndex + 1 >= plan.count { phase = .complete } else { phase = .waitingForNextRep }
             return nil
         }
+
+        #if DEBUG
+        let triggerAnchor2MTIncorrect: String = {
+            if passTriggeredAt != nil { return "passTriggeredAt" }
+            if infoShownAtForCurrentRep != nil { return "infoShownAtForCurrentRep" }
+            if startedAtForCurrentRep != nil { return "startedAtForCurrentRep" }
+            return "exit_timestamp_fallback"
+        }()
+        let engineWallEntry2MTIncorrect = Date()
+        DecisionSpeedDebugLog.logScoredRep(
+            activity: .twoMinuteTest,
+            repIndex: repIndex,
+            passTimestamp: passTriggeredAt,
+            directionLogTimestamp: timestamp,
+            rawDeltaSeconds: reactionTimeSeconds,
+            difficulty: config.difficulty,
+            visualRevealTimestamp: infoShownAtForCurrentRep,
+            triggerAnchor: triggerAnchor2MTIncorrect,
+            engineEntryWallTime: engineWallEntry2MTIncorrect
+        )
+        #endif
 
         let p = plan[repIndex]
         let startedAt = startedAtForCurrentRep ?? Date()

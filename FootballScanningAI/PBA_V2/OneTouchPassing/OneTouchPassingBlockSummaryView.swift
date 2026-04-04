@@ -52,13 +52,12 @@ struct OneTouchPassingBlockSummaryView: View {
         return "Needs work"
     }
 
-    private var dominantDecisionSpeed: DecisionSpeed {
-        let f = blockResult.fastCount
-        let m = blockResult.mediumCount
-        let s = blockResult.slowCount
-        if f >= m && f >= s { return .fast }
-        if s >= f && s >= m { return .slow }
-        return .medium
+    private var headlineSpeedResolution: UniversalBlockSummaryHeadline.Resolution {
+        UniversalBlockSummaryHeadline.resolve(
+            fast: blockResult.fastCount,
+            medium: blockResult.mediumCount,
+            slow: blockResult.slowCount
+        )
     }
 
     /// Bias: any direction >= 50% of passes (12 reps => 6+).
@@ -92,8 +91,8 @@ struct OneTouchPassingBlockSummaryView: View {
             case .down: return "You're playing safe too often. Look forward earlier."
             }
         }
-        // 2) Else if Decision Speed is Slow
-        if dominantDecisionSpeed == .slow {
+        // 2) Else if block headline speed is slow (dominant bucket; tie → worse)
+        if speedBucket == .slow {
             let c = blockResult.correctCount
             if c >= 8 {
                 return "Good decisions. Now make them earlier."
@@ -115,12 +114,9 @@ struct OneTouchPassingBlockSummaryView: View {
         return "Find the green option earlier."
     }
 
+    /// Block headline: dominant per-rep bucket (tie → worse bucket).
     private var speedBucket: SpeedBucket {
-        switch dominantDecisionSpeed {
-        case .fast: return .fast
-        case .medium: return .medium
-        case .slow: return .slow
-        }
+        headlineSpeedResolution.bucket
     }
 
     /// Forward Intent: only when up was a valid (green) option. forwardOpportunities = reps where up was available; forwardChoices = those reps where player chose up. Nil when no forward opportunities so metric is not displayed.
@@ -209,6 +205,17 @@ struct OneTouchPassingBlockSummaryView: View {
             guard !didSave else { return }
             #if DEBUG
             print("[PBA-Debug] Block completed (OTP). results.count=\(results.count), correct=\(blockResult.correctCount), decisionSpeedScoreValue=\(decisionSpeedScoreValue ?? -1), playerId=\(playerStore.selectedPlayerId?.uuidString ?? "nil")")
+            let repLabels = results.map { $0.decisionSpeed.rawValue }
+            UniversalSummaryBucketDebugLog.log(
+                activity: .oneTouchPassing,
+                perRepBucketLabels: repLabels,
+                fast: blockResult.fastCount,
+                medium: blockResult.mediumCount,
+                slow: blockResult.slowCount,
+                avgRawDeltaSeconds: blockResult.averageDecisionTime,
+                headline: speedBucket,
+                tieBreakApplied: headlineSpeedResolution.tieBreakApplied
+            )
             #endif
             guard let sessionId = CurrentSessionStore.shared.sessionId else {
                 let record = SessionRecord(
@@ -342,9 +349,18 @@ struct OneTouchPassingBlockSummaryView: View {
                     Text("Correct first decisions: \(blockResult.correctCount)/12")
                         .font(.subheadline)
                         .foregroundColor(.white.opacity(0.7))
-                    Text("Decision Speed: \(dominantDecisionSpeed.rawValue.capitalized)")
-                        .font(.subheadline)
-                        .foregroundColor(.white.opacity(0.7))
+                    VStack(spacing: 4) {
+                        Text("Decision Speed: \(speedBucket.rawValue.capitalized)")
+                            .font(.subheadline)
+                            .foregroundColor(.white.opacity(0.7))
+                        BlockSummarySpeedCountsSubline(
+                            fast: blockResult.fastCount,
+                            medium: blockResult.mediumCount,
+                            slow: blockResult.slowCount,
+                            debugActivity: .oneTouchPassing
+                        )
+                    }
+                    .multilineTextAlignment(.center)
                     Text("Bias: \(biasString)")
                         .font(.subheadline)
                         .foregroundColor(.white.opacity(0.7))

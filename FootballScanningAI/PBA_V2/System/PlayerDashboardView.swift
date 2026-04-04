@@ -70,9 +70,7 @@ struct PlayerDashboardView: View {
         let (f, m, s) = speedCounts
         let total = f + m + s
         guard total > 0 else { return "—" }
-        if f >= m && f >= s { return "Fast" }
-        if s >= f && s >= m { return "Slow" }
-        return "Medium"
+        return UniversalBlockSummaryHeadline.headlineLabel(fast: f, medium: m, slow: s)
     }
 
     private var firstTouchCommitmentCurrent: Int? {

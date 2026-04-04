@@ -118,3 +118,26 @@ final class PBABeepSoundManager {
         } catch {}
     }
 }
+
+// MARK: - PBA flow timing (beep vs PASS vs reveal — display sessions)
+
+/// Training design: beep = perception cue; PASS = decision moment; reveal timestamp = UI live after preload.
+enum PBAFlowDebugLog {
+    static func beep(repId: Int, timestamp: Date = Date()) {
+        #if DEBUG
+        print("[PBAFlow-Debug] beep repId=\(repId) ts=\(timestamp.timeIntervalSince1970)")
+        #endif
+    }
+
+    static func passReceived(repId: Int, timestamp: Date) {
+        #if DEBUG
+        print("[PBAFlow-Debug] PASS received repId=\(repId) ts=\(timestamp.timeIntervalSince1970)")
+        #endif
+    }
+
+    static func reveal(repId: Int, timestamp: Date = Date()) {
+        #if DEBUG
+        print("[PBAFlow-Debug] reveal repId=\(repId) ts=\(timestamp.timeIntervalSince1970)")
+        #endif
+    }
+}

@@ -190,12 +190,28 @@ struct TwoMinuteCriticalScanSessionView: View {
             guard sessionManager.isConnected else { return }
             engine.onNextRep(repIndex: repIndex)
         case .passTriggered(let repIndex, let timestamp):
-            engine.onPassTrigger(repIndex: repIndex, timestamp: timestamp)
+            #if DEBUG
+            let displayReceiveWall = Date()
+            DecisionSpeedDebugLog.logDisplayRelayIngress(activity: .twoMinuteTest, kind: "passTriggered", repIndex: repIndex, embeddedTimestamp: timestamp, displayReceiveWallTime: displayReceiveWall)
+            #endif
+            twoMinuteApplyPassTrigger(repIndex: repIndex, passTimestamp: timestamp)
         case .exitLogged(let repIndex, let gate, let timestamp):
+            #if DEBUG
+            let displayReceiveWall = Date()
+            DecisionSpeedDebugLog.logDisplayRelayIngress(activity: .twoMinuteTest, kind: "exitLogged", repIndex: repIndex, embeddedTimestamp: timestamp, displayReceiveWallTime: displayReceiveWall)
+            let wallBeforeEngine = Date()
+            DecisionSpeedDebugLog.logDisplayBeforeEngineExit(activity: .twoMinuteTest, repIndex: repIndex, embeddedDirection: timestamp, displayWallBeforeEngine: wallBeforeEngine, kind: "exitLogged")
+            #endif
             if engine.onExitLogged(repIndex: repIndex, gate: gate, timestamp: timestamp) != nil, let log = engine.repLogs.last {
                 saveDecisionForRep(log: log)
             }
         case .incorrectDecision(let repIndex, let timestamp):
+            #if DEBUG
+            let displayReceiveWall = Date()
+            DecisionSpeedDebugLog.logDisplayRelayIngress(activity: .twoMinuteTest, kind: "incorrectDecision", repIndex: repIndex, embeddedTimestamp: timestamp, displayReceiveWallTime: displayReceiveWall)
+            let wallBeforeEngine = Date()
+            DecisionSpeedDebugLog.logDisplayBeforeEngineExit(activity: .twoMinuteTest, repIndex: repIndex, embeddedDirection: timestamp, displayWallBeforeEngine: wallBeforeEngine, kind: "incorrectDecision")
+            #endif
             if engine.onIncorrectDecision(repIndex: repIndex, timestamp: timestamp) != nil, let log = engine.repLogs.last {
                 saveDecisionForRep(log: log)
             }
@@ -217,7 +233,7 @@ struct TwoMinuteCriticalScanSessionView: View {
         engine.onNextRep(repIndex: idx)
     }
 
-    private func handlePhaseChange(_ oldPhase: CriticalScanPhase, _ newPhase: CriticalScanPhase) {
+    private func handlePhaseChange(_: CriticalScanPhase, _ newPhase: CriticalScanPhase) {
         if case .complete = newPhase {
             DispatchQueue.main.async {
                 testResultItem = TwoMinuteResultItem(
@@ -227,7 +243,20 @@ struct TwoMinuteCriticalScanSessionView: View {
                 AnalyticsManager.shared.track(.twoMinuteTestCompleted, playerId: playerStore.selectedPlayerId)
             }
         }
+        if case .armedScanning = newPhase {
+            preloadBeepAssetsForInstantReveal()
+        }
         if case .beepedAwaitingPass = newPhase { playBeep() }
+    }
+
+    private func twoMinuteApplyPassTrigger(repIndex: Int, passTimestamp: Date) {
+        PBAFlowDebugLog.passReceived(repId: repIndex, timestamp: passTimestamp)
+        #if DEBUG
+        let wallBeforeEngine = Date()
+        DecisionSpeedDebugLog.logDisplayBeforeEnginePass(activity: .twoMinuteTest, repIndex: repIndex, embeddedPass: passTimestamp, displayWallBeforeEngine: wallBeforeEngine)
+        #endif
+        engine.onPassTrigger(repIndex: repIndex, timestamp: passTimestamp)
+        PBAFlowDebugLog.reveal(repId: repIndex, timestamp: Date())
     }
 
     private func handleTestResultItemChange(old: TwoMinuteResultItem?, new: TwoMinuteResultItem?) {
@@ -262,6 +291,7 @@ struct TwoMinuteCriticalScanSessionView: View {
             }
         }
         activateAudioSession()
+        preloadBeepAssetsForInstantReveal()
         subscribeToAudioInterruption()
         AnalyticsManager.shared.track(.twoMinuteTestStarted, playerId: playerStore.selectedPlayerId)
         // Relay: start join-code + WebSocket immediately (parallel with Supabase); no intentional delay before code.
@@ -446,7 +476,13 @@ struct TwoMinuteCriticalScanSessionView: View {
         case .waitingForNextRep:
             engine.onNextRep(repIndex: nextRepIndex)
         case .beepedAwaitingPass(repIndex: let ri, ballGate: _):
-            engine.onPassTrigger(repIndex: ri, timestamp: Date())
+            #if DEBUG
+            let soloPass = Date()
+            DecisionSpeedDebugLog.logSoloDisplayPassTrigger(activity: .twoMinuteTest, repIndex: ri, displayWallPassTS: soloPass)
+            twoMinuteApplyPassTrigger(repIndex: ri, passTimestamp: soloPass)
+            #else
+            twoMinuteApplyPassTrigger(repIndex: ri, passTimestamp: Date())
+            #endif
         default:
             break
         }
@@ -513,9 +549,17 @@ struct TwoMinuteCriticalScanSessionView: View {
     }
 
     private func logExit(repIndex: Int, gate: Gate) {
+        #if DEBUG
+        let soloExit = Date()
+        DecisionSpeedDebugLog.logSoloDisplayExitTrigger(activity: .twoMinuteTest, repIndex: repIndex, gate: gate, displayWallExitTS: soloExit)
+        if engine.onExitLogged(repIndex: repIndex, gate: gate, timestamp: soloExit) != nil, let log = engine.repLogs.last {
+            saveDecisionForRep(log: log)
+        }
+        #else
         if engine.onExitLogged(repIndex: repIndex, gate: gate, timestamp: Date()) != nil, let log = engine.repLogs.last {
             saveDecisionForRep(log: log)
         }
+        #endif
         nextRepIndex = repIndex + 1
     }
 
@@ -555,14 +599,16 @@ struct TwoMinuteCriticalScanSessionView: View {
                 }
                 .position(x: center.x, y: center.y)
 
-                // Soccer ball at gate position when visible (same slots as where defenders/teammates would be)
-                if case .ballVisible(_, let ballGate, _) = engine.phase,
-                   let pt = positions[ballGate] {
+                // Soccer ball: pre-mounted from scan/beep with opacity 0; PASS flips opacity (partner instant reveal).
+                if let ctx = twoMinutePreparedBallContext,
+                   let pt = positions[ctx.ballGate] {
                     Image("SoccerBall")
                         .resizable()
                         .scaledToFit()
                         .frame(width: ballSide, height: ballSide)
                         .shadow(radius: 4)
+                        .opacity(twoMinuteBallRevealOpacity)
+                        .animation(nil, value: engine.phase)
                         .position(x: pt.x, y: pt.y)
                         .zIndex(1)
                 }
@@ -824,9 +870,32 @@ struct TwoMinuteCriticalScanSessionView: View {
         try? AVAudioSession.sharedInstance().setActive(true)
     }
 
+    private func preloadBeepAssetsForInstantReveal() {
+        PBABeepSoundManager.shared.preloadCurrent()
+    }
+
+    /// Same slot as visible ball, from first scan frame through exit log so Image asset decodes before PASS.
+    private var twoMinutePreparedBallContext: (repIndex: Int, ballGate: Gate)? {
+        switch engine.phase {
+        case .armedScanning(let r, let g, _), .beepedAwaitingPass(let r, let g), .ballVisible(let r, let g, _), .awaitingExitLog(let r, let g):
+            return (r, g)
+        default:
+            return nil
+        }
+    }
+
+    private var twoMinuteBallRevealOpacity: Double {
+        if case .ballVisible = engine.phase { return 1 }
+        return 0
+    }
+
     private func playBeep() {
+        if case .beepedAwaitingPass(let r, _) = engine.phase {
+            PBAFlowDebugLog.beep(repId: r, timestamp: Date())
+        }
         DispatchQueue.main.async {
             self.activateAudioSession()
+            self.preloadBeepAssetsForInstantReveal()
             PBABeepSoundManager.shared.play(soundEnabled: settingsViewModel.soundEnabled)
         }
     }

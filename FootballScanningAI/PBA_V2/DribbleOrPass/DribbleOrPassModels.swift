@@ -22,9 +22,7 @@ enum DecisionSpeed: String, Codable, CaseIterable {
 }
 
 func classifyDecisionSpeed(_ time: Double) -> DecisionSpeed {
-    if time < 1.2 { return .fast }
-    if time <= 2.0 { return .medium }
-    return .slow
+    TimingThresholds.dribblePassDecisionSpeed(for: time)
 }
 
 /// Decision hierarchy (v1: up=forward, left/right=lateral, down=backward). Green=pass, clear=dribble, red=avoid.

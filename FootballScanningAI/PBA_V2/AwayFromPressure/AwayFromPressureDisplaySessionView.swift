@@ -99,13 +99,19 @@ struct AwayFromPressureDisplaySessionView: View {
                 if sessionTransportMode == .relayWebSocket {
                     afpRelayDisplayLog("incoming passTriggered repIndex=\(repIndex)")
                 }
+                let displayReceiveWall = Date()
+                DecisionSpeedDebugLog.logDisplayRelayIngress(activity: .awayFromPressure, kind: "passTriggered", repIndex: repIndex, embeddedTimestamp: timestamp, displayReceiveWallTime: displayReceiveWall)
                 #endif
-                engine.onPassTrigger(repIndex: repIndex, timestamp: timestamp)
+                afpApplyPassTrigger(repIndex: repIndex, passTimestamp: timestamp)
             case .exitLogged(let repIndex, let gate, let timestamp):
                 #if DEBUG
                 if sessionTransportMode == .relayWebSocket {
                     afpRelayDisplayLog("incoming exitLogged repIndex=\(repIndex) gate=\(gate)")
                 }
+                let displayReceiveWall = Date()
+                DecisionSpeedDebugLog.logDisplayRelayIngress(activity: .awayFromPressure, kind: "exitLogged", repIndex: repIndex, embeddedTimestamp: timestamp, displayReceiveWallTime: displayReceiveWall)
+                let wallBeforeEngine = Date()
+                DecisionSpeedDebugLog.logDisplayBeforeEngineExit(activity: .awayFromPressure, repIndex: repIndex, embeddedDirection: timestamp, displayWallBeforeEngine: wallBeforeEngine, kind: "exitLogged")
                 #endif
                 if engine.onExitLogged(repIndex: repIndex, gate: gate, timestamp: timestamp) != nil, let log = engine.repLogs.last {
                     saveDecisionForRep(log: log)
@@ -122,6 +128,10 @@ struct AwayFromPressureDisplaySessionView: View {
                 if sessionTransportMode == .relayWebSocket {
                     afpRelayDisplayLog("incoming incorrectDecision repIndex=\(repIndex)")
                 }
+                let displayReceiveWall = Date()
+                DecisionSpeedDebugLog.logDisplayRelayIngress(activity: .awayFromPressure, kind: "incorrectDecision", repIndex: repIndex, embeddedTimestamp: timestamp, displayReceiveWallTime: displayReceiveWall)
+                let wallBeforeEngine = Date()
+                DecisionSpeedDebugLog.logDisplayBeforeEngineExit(activity: .awayFromPressure, repIndex: repIndex, embeddedDirection: timestamp, displayWallBeforeEngine: wallBeforeEngine, kind: "incorrectDecision")
                 #endif
                 if engine.onIncorrectDecision(repIndex: repIndex, timestamp: timestamp) != nil, let log = engine.repLogs.last {
                     saveDecisionForRep(log: log)
@@ -152,6 +162,9 @@ struct AwayFromPressureDisplaySessionView: View {
         .onChange(of: engine.phase) { _, newPhase in
             if case .blockComplete = newPhase {
                 DispatchQueue.main.async { navigateToBlockSummary = true }
+            }
+            if case .armedScanning = newPhase {
+                preloadBeepAssetsForInstantReveal()
             }
             if case .beepedAwaitingPass = newPhase { playBeep() }
             if case .waitingForNextRep = newPhase, mode != .partner {
@@ -189,6 +202,7 @@ struct AwayFromPressureDisplaySessionView: View {
             let pid = playerStore.selectedPlayerId ?? profileManager.currentProfile?.id
             wedgeStyle = WedgeDifficultyEngine.currentStyle(playerId: pid)
             activateAudioSession()
+            preloadBeepAssetsForInstantReveal()
             subscribeToAudioInterruption()
             AnalyticsManager.shared.track(.trainingSessionStarted, playerId: playerStore.selectedPlayerId)
             Task {
@@ -293,7 +307,13 @@ struct AwayFromPressureDisplaySessionView: View {
         case .waitingForNextRep:
             engine.onNextRep(repIndex: nextRepIndex)
         case .beepedAwaitingPass(repIndex: let ri, _):
-            engine.onPassTrigger(repIndex: ri, timestamp: Date())
+            #if DEBUG
+            let soloPass = Date()
+            DecisionSpeedDebugLog.logSoloDisplayPassTrigger(activity: .awayFromPressure, repIndex: ri, displayWallPassTS: soloPass)
+            afpApplyPassTrigger(repIndex: ri, passTimestamp: soloPass)
+            #else
+            afpApplyPassTrigger(repIndex: ri, passTimestamp: Date())
+            #endif
         default:
             break
         }
@@ -422,9 +442,17 @@ struct AwayFromPressureDisplaySessionView: View {
     }
 
     private func logExit(repIndex: Int, gate: Gate) {
+        #if DEBUG
+        let soloExit = Date()
+        DecisionSpeedDebugLog.logSoloDisplayExitTrigger(activity: .awayFromPressure, repIndex: repIndex, gate: gate, displayWallExitTS: soloExit)
+        if engine.onExitLogged(repIndex: repIndex, gate: gate, timestamp: soloExit) != nil, let log = engine.repLogs.last {
+            saveDecisionForRep(log: log)
+        }
+        #else
         if engine.onExitLogged(repIndex: repIndex, gate: gate, timestamp: Date()) != nil, let log = engine.repLogs.last {
             saveDecisionForRep(log: log)
         }
+        #endif
         nextRepIndex = repIndex + 1
     }
 
@@ -464,14 +492,34 @@ struct AwayFromPressureDisplaySessionView: View {
                 }
                 .position(x: center.x, y: center.y)
 
-                if case .markerVisible(let repIndex, let pressureGate, _) = engine.phase {
-                    DangerZoneOverlay(gate: pressureGate, style: wedgeStyle)
-                        .id("\(repIndex)-\(pressureGate)")
+                if let ctx = afpPreparedPressureContext {
+                    DangerZoneOverlay(gate: ctx.pressureGate, style: wedgeStyle, isDecisionRevealActive: isMarkerVisible)
+                        .id("\(ctx.repIndex)-\(ctx.pressureGate)")
                         .zIndex(1)
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
         }
+    }
+
+    /// Pending cue: same gate as the upcoming marker, mounted from scan/beep through exit; `DangerZoneOverlay.isDecisionRevealActive` controls when the wedge is visible and replays the edge→center reveal (partner preload path).
+    private var afpPreparedPressureContext: (repIndex: Int, pressureGate: Gate)? {
+        switch engine.phase {
+        case .armedScanning(let r, let g, _), .beepedAwaitingPass(let r, let g), .markerVisible(let r, let g, _), .awaitingExitLog(let r, let g):
+            return (r, g)
+        default:
+            return nil
+        }
+    }
+
+    private func afpApplyPassTrigger(repIndex: Int, passTimestamp: Date) {
+        PBAFlowDebugLog.passReceived(repId: repIndex, timestamp: passTimestamp)
+        #if DEBUG
+        let wallBeforeEngine = Date()
+        DecisionSpeedDebugLog.logDisplayBeforeEnginePass(activity: .awayFromPressure, repIndex: repIndex, embeddedPass: passTimestamp, displayWallBeforeEngine: wallBeforeEngine)
+        #endif
+        engine.onPassTrigger(repIndex: repIndex, timestamp: passTimestamp)
+        PBAFlowDebugLog.reveal(repId: repIndex, timestamp: Date())
     }
 
     private var statusOverlay: some View {
@@ -548,9 +596,17 @@ struct AwayFromPressureDisplaySessionView: View {
         }
     }
 
+    private func preloadBeepAssetsForInstantReveal() {
+        PBABeepSoundManager.shared.preloadCurrent()
+    }
+
     private func playBeep() {
+        if case .beepedAwaitingPass(let r, _) = engine.phase {
+            PBAFlowDebugLog.beep(repId: r, timestamp: Date())
+        }
         DispatchQueue.main.async {
             self.activateAudioSession()
+            self.preloadBeepAssetsForInstantReveal()
             PBABeepSoundManager.shared.play(soundEnabled: settingsViewModel.soundEnabled)
         }
     }

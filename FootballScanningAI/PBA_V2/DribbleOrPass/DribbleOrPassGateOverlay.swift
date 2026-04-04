@@ -12,20 +12,21 @@ struct DribbleOrPassGateOverlay: View {
     let content: DribbleOrPassGateContent
     /// Matches ``WedgeDifficultyEngine`` / Playing Away From Pressure red wedge sizing.
     var wedgeStyle: WedgeCueStyle = WedgeCueStyle.style(for: 1)
-    var laneSpan: CGFloat = 0.70
     var insetFraction: CGFloat = 0.22
+    /// Same as AFP: when false, opponent wedge stays mounted for preload but collapsed until the cue is revealed (`revealedGates`).
+    var isDecisionRevealActive: Bool = true
 
     var body: some View {
         Group {
             if content == .open {
                 Color.clear
             } else if content == .opponent {
-                DangerZoneOverlay(gate: gate, style: wedgeStyle)
+                DangerZoneOverlay(gate: gate, style: wedgeStyle, isDecisionRevealActive: isDecisionRevealActive)
             } else {
                 GeometryReader { geo in
                     let w = geo.size.width
                     let h = geo.size.height
-                    overlayRect(w: w, h: h)
+                    overlayRect(w: w, h: h, geo: geo)
                 }
             }
         }
@@ -44,33 +45,63 @@ struct DribbleOrPassGateOverlay: View {
     }
 
     @ViewBuilder
-    private func overlayRect(w: CGFloat, h: CGFloat) -> some View {
-        let laneW = w * laneSpan
+    private func overlayRect(w: CGFloat, h: CGFloat, geo: GeometryProxy) -> some View {
+        let spanAlong = wedgeStyle.spanAlongEdge(for: gate, fieldWidth: w, fieldHeight: h)
+        let edgeInset = min(w, h) * WedgeCueStyle.edgeInsetFraction
         let laneH = h * insetFraction
         let inset = min(w, h) * insetFraction
         let colors = gradientColors
 
+        Group {
+            switch gate {
+            case .up:
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(LinearGradient(colors: colors, startPoint: .top, endPoint: .bottom))
+                    .frame(width: spanAlong, height: laneH)
+                    .position(x: w / 2, y: laneH / 2 + edgeInset)
+            case .down:
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(LinearGradient(colors: colors, startPoint: .bottom, endPoint: .top))
+                    .frame(width: spanAlong, height: laneH)
+                    .position(x: w / 2, y: h - laneH / 2 - edgeInset)
+            case .left:
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing))
+                    .frame(width: inset, height: spanAlong)
+                    .position(x: edgeInset + inset / 2, y: h / 2)
+            case .right:
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(LinearGradient(colors: colors, startPoint: .trailing, endPoint: .leading))
+                    .frame(width: inset, height: spanAlong)
+                    .position(x: w - edgeInset - inset / 2, y: h / 2)
+            }
+        }
+        .onAppear { logGreenGateClarity(w: w, h: h, edgeInset: edgeInset, spanAlong: spanAlong) }
+        .onChange(of: gate) { _, _ in logGreenGateClarity(w: w, h: h, edgeInset: edgeInset, spanAlong: spanAlong) }
+        .onChange(of: geo.size.width) { _, _ in logGreenGateClarity(w: w, h: h, edgeInset: edgeInset, spanAlong: spanAlong) }
+        .onChange(of: geo.size.height) { _, _ in logGreenGateClarity(w: w, h: h, edgeInset: edgeInset, spanAlong: spanAlong) }
+    }
+
+    private func logGreenGateClarity(w: CGFloat, h: CGFloat, edgeInset: CGFloat, spanAlong: CGFloat) {
+        let cx: CGFloat
+        let cy: CGFloat
+        let laneH = h * insetFraction
+        let inset = min(w, h) * insetFraction
         switch gate {
         case .up:
-            RoundedRectangle(cornerRadius: 8)
-                .fill(LinearGradient(colors: colors, startPoint: .top, endPoint: .bottom))
-                .frame(width: laneW, height: laneH)
-                .position(x: w / 2, y: laneH / 2)
+            cx = w / 2
+            cy = laneH / 2 + edgeInset
         case .down:
-            RoundedRectangle(cornerRadius: 8)
-                .fill(LinearGradient(colors: colors, startPoint: .bottom, endPoint: .top))
-                .frame(width: laneW, height: laneH)
-                .position(x: w / 2, y: h - laneH / 2)
+            cx = w / 2
+            cy = h - laneH / 2 - edgeInset
         case .left:
-            RoundedRectangle(cornerRadius: 8)
-                .fill(LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing))
-                .frame(width: inset, height: h * laneSpan)
-                .position(x: inset / 2, y: h / 2)
+            cx = edgeInset + inset / 2
+            cy = h / 2
         case .right:
-            RoundedRectangle(cornerRadius: 8)
-                .fill(LinearGradient(colors: colors, startPoint: .trailing, endPoint: .leading))
-                .frame(width: inset, height: h * laneSpan)
-                .position(x: w - inset / 2, y: h / 2)
+            cx = w - edgeInset - inset / 2
+            cy = h / 2
         }
+        let pos = "center=(\(String(format: "%.1f", cx)),\(String(format: "%.1f", cy))) insetPts=\(String(format: "%.2f", edgeInset))"
+        WedgeClarityDebugLog.log(side: gate.wedgeClaritySideLabel, widthPts: spanAlong, position: pos)
     }
 }

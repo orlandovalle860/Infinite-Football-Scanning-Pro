@@ -16,59 +16,66 @@ enum DribbleOrPassRevealStyle: String, Codable {
 
 struct DribbleOrPassConfig {
     let difficulty: TestDifficulty
-    /// Scan phase duration (seconds) before beep.
-    let scanWindowSeconds: Double
     /// How gates are revealed.
     let revealStyle: DribbleOrPassRevealStyle
     /// For simultaneous/twoStage: kept for consistency. For sequential: time between reveals.
     let revealSpacingSeconds: Double
     /// How long gates stay visible after reveal (seconds).
     let cueVisibleSeconds: Double
+    /// Curriculum loop (1...3); for logging only — does **not** scale scan→beep delay.
+    let curriculumLoopLevel: Int
 
     /// Presets only; no customization. When difficulty changes, use this.
     static func defaultConfig(for difficulty: TestDifficulty) -> DribbleOrPassConfig {
-        switch difficulty {
-        case .beginner:
-            return DribbleOrPassConfig(
-                difficulty: difficulty,
-                scanWindowSeconds: 7.5,
-                revealStyle: .simultaneous,
-                revealSpacingSeconds: 0.30,
-                cueVisibleSeconds: 1.0
-            )
-        case .standard:
-            return DribbleOrPassConfig(
-                difficulty: difficulty,
-                scanWindowSeconds: 5.5,
-                revealStyle: .twoStage,
-                revealSpacingSeconds: 0.20,
-                cueVisibleSeconds: 0.75
-            )
-        case .advanced:
-            return DribbleOrPassConfig(
-                difficulty: difficulty,
-                scanWindowSeconds: 4.0,
-                revealStyle: .sequential,
-                revealSpacingSeconds: 0.12,
-                cueVisibleSeconds: 0.5
-            )
-        }
+        defaultConfig(for: difficulty, loopLevel: 1)
     }
 
-    /// Loop scaling for guided curriculum (v1 supports loops 1...3).
-    /// Loop 1 = default, loop 2/3 = faster tempo + shorter windows.
+    /// Loop scaling applies to reveal style / cue duration / spacing — **not** scan→beep timing.
     static func defaultConfig(for difficulty: TestDifficulty, loopLevel: Int) -> DribbleOrPassConfig {
-        let base = defaultConfig(for: difficulty)
-        switch max(1, min(3, loopLevel)) {
+        let base: DribbleOrPassConfig
+        switch difficulty {
+        case .beginner:
+            base = DribbleOrPassConfig(
+                difficulty: difficulty,
+                revealStyle: .simultaneous,
+                revealSpacingSeconds: 0.30,
+                cueVisibleSeconds: 1.0,
+                curriculumLoopLevel: 1
+            )
+        case .standard:
+            base = DribbleOrPassConfig(
+                difficulty: difficulty,
+                revealStyle: .twoStage,
+                revealSpacingSeconds: 0.20,
+                cueVisibleSeconds: 0.75,
+                curriculumLoopLevel: 1
+            )
+        case .advanced:
+            base = DribbleOrPassConfig(
+                difficulty: difficulty,
+                revealStyle: .sequential,
+                revealSpacingSeconds: 0.12,
+                cueVisibleSeconds: 0.5,
+                curriculumLoopLevel: 1
+            )
+        }
+        let level = max(1, min(3, loopLevel))
+        switch level {
         case 1:
-            return base
+            return DribbleOrPassConfig(
+                difficulty: difficulty,
+                revealStyle: base.revealStyle,
+                revealSpacingSeconds: base.revealSpacingSeconds,
+                cueVisibleSeconds: base.cueVisibleSeconds,
+                curriculumLoopLevel: level
+            )
         case 2:
             return DribbleOrPassConfig(
                 difficulty: difficulty,
-                scanWindowSeconds: max(2.5, base.scanWindowSeconds * 0.9),
                 revealStyle: base.revealStyle,
                 revealSpacingSeconds: max(0.08, base.revealSpacingSeconds * 0.9),
-                cueVisibleSeconds: max(0.40, base.cueVisibleSeconds * 0.9)
+                cueVisibleSeconds: max(0.40, base.cueVisibleSeconds * 0.9),
+                curriculumLoopLevel: level
             )
         default:
             let advancedStyle: DribbleOrPassRevealStyle
@@ -79,10 +86,10 @@ struct DribbleOrPassConfig {
             }
             return DribbleOrPassConfig(
                 difficulty: difficulty,
-                scanWindowSeconds: max(2.2, base.scanWindowSeconds * 0.8),
                 revealStyle: advancedStyle,
                 revealSpacingSeconds: max(0.07, base.revealSpacingSeconds * 0.8),
-                cueVisibleSeconds: max(0.35, base.cueVisibleSeconds * 0.8)
+                cueVisibleSeconds: max(0.35, base.cueVisibleSeconds * 0.8),
+                curriculumLoopLevel: level
             )
         }
     }

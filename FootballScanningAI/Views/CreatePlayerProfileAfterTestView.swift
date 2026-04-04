@@ -169,12 +169,11 @@ struct CreatePlayerProfileAfterTestView: View {
     }
 
     private func saveTestResultToProfile(_ result: TwoMinuteTestResult, playerId: UUID) {
-        let speedBucket: SpeedBucket = {
-            let (f, m, s) = (result.fastCount, result.mediumCount, result.slowCount)
-            if f >= m && f >= s { return .fast }
-            if s >= f && s >= m { return .slow }
-            return .medium
-        }()
+        let speedBucket = UniversalBlockSummaryHeadline.resolve(
+            fast: result.fastCount,
+            medium: result.mediumCount,
+            slow: result.slowCount
+        ).bucket
         let biasString = result.biasDirection?.userFacingName ?? "Balanced"
         let record = SessionRecord(
             id: UUID(),

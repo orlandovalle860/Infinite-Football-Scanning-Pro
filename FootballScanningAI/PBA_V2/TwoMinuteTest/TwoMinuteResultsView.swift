@@ -59,7 +59,7 @@ struct TwoMinuteResultsView: View {
         if r == maxCount && r > l + 1 { return "Right" }
         return "Balanced"
     }
-    /// Average latency (passTriggered -> exitLogged) in seconds; nil if none.
+    /// Average latency (passTriggered -> exitLogged) in seconds; nil if none. Shown in UI / analytics; not used for headline bucket.
     private var avgLatency: Double? {
         let withPass = logs.compactMap { log -> Double? in
             guard let pt = log.passTriggeredAt else { return nil }
@@ -68,12 +68,28 @@ struct TwoMinuteResultsView: View {
         guard !withPass.isEmpty else { return nil }
         return withPass.reduce(0, +) / Double(withPass.count)
     }
-    /// Speed bucket for SessionRecord: fast < 1.2, medium 1.2–1.8, slow > 1.8.
+
+    private var twoMinuteSpeedCounts: SessionSpeedCounts {
+        var fast = 0, medium = 0, slow = 0
+        for log in logs {
+            let t = log.exitLoggedAt.timeIntervalSince(log.passTriggeredAt ?? log.infoShownAt)
+            switch TimingThresholds.speedBucket(for: t, activity: .twoMinuteTest) {
+            case .fast: fast += 1
+            case .medium: medium += 1
+            case .slow: slow += 1
+            }
+        }
+        return SessionSpeedCounts(fast: fast, medium: medium, slow: slow)
+    }
+
+    private var headlineSpeedResolution: UniversalBlockSummaryHeadline.Resolution {
+        let c = twoMinuteSpeedCounts
+        return UniversalBlockSummaryHeadline.resolve(fast: c.fast, medium: c.medium, slow: c.slow)
+    }
+
+    /// Session headline: dominant per-rep bucket (tie → worse bucket). Same thresholds as per-rep classification.
     private var speedBucket: SpeedBucket {
-        guard let avg = avgLatency else { return .medium }
-        if avg < 1.2 { return .fast }
-        if avg <= 1.8 { return .medium }
-        return .slow
+        headlineSpeedResolution.bucket
     }
     private var totalExits: Int { logs.count }
     private var leftExits: Int { exitCounts[.left] ?? 0 }
@@ -89,15 +105,11 @@ struct TwoMinuteResultsView: View {
             totalExits: totalExits
         )
     }
-    private var twoMinuteSpeedCounts: SessionSpeedCounts {
-        var fast = 0, medium = 0, slow = 0
-        for log in logs {
+    private var twoMinutePerRepBucketLabels: [String] {
+        logs.map { log in
             let t = log.exitLoggedAt.timeIntervalSince(log.passTriggeredAt ?? log.infoShownAt)
-            if t < 1.5 { fast += 1 }
-            else if t < 3.0 { medium += 1 }
-            else { slow += 1 }
+            return TimingThresholds.speedBucket(for: t, activity: .twoMinuteTest).rawValue
         }
-        return SessionSpeedCounts(fast: fast, medium: medium, slow: slow)
     }
 
     private var biasGateFromBiasString: Gate? {
@@ -176,6 +188,19 @@ struct TwoMinuteResultsView: View {
         }
         .onAppear {
             guard !didSave else { return }
+            #if DEBUG
+            let c = twoMinuteSpeedCounts
+            UniversalSummaryBucketDebugLog.log(
+                activity: .twoMinuteTest,
+                perRepBucketLabels: twoMinutePerRepBucketLabels,
+                fast: c.fast,
+                medium: c.medium,
+                slow: c.slow,
+                avgRawDeltaSeconds: avgLatency,
+                headline: speedBucket,
+                tieBreakApplied: headlineSpeedResolution.tieBreakApplied
+            )
+            #endif
             let wasNewPlayer = !(profileManager.currentProfile?.sessionResults.contains { [.awayFromPressure, .dribbleOrPass, .oneTouchPassing].contains($0.activityType) } ?? false)
             guard let sessionId = CurrentSessionStore.shared.sessionId else {
                 let record = SessionRecord(
@@ -393,7 +418,7 @@ struct TwoMinuteResultsView: View {
                 resultRow("Forward decisions", "\(forwardCorrect) / \(forwardTotal)")
                 resultRow("Decision window", sessionResult?.avgDecisionWindowSeconds.map { DecisionTimingModel.summaryText(windowSeconds: $0) } ?? "—")
                 resultRow("Strong side tendency", strongSideTendency)
-                resultRow("Tempo mix", "Fast \(twoMinuteSpeedCounts.fast) · Med \(twoMinuteSpeedCounts.medium) · Slow \(twoMinuteSpeedCounts.slow)")
+                twoMinuteDecisionSpeedHeadlineRow
 
                 HStack {
                     Text("Saving progress for: \(playerStore.selectedPlayer?.name ?? "Player 1")")
@@ -523,6 +548,30 @@ struct TwoMinuteResultsView: View {
             Text(value)
                 .font(.headline)
                 .foregroundColor(.white)
+        }
+        .padding(.vertical, 4)
+    }
+
+    /// Dominant bucket headline with rep counts (same `twoMinuteSpeedCounts` as universal headline).
+    private var twoMinuteDecisionSpeedHeadlineRow: some View {
+        let c = twoMinuteSpeedCounts
+        return HStack(alignment: .top) {
+            Text("Decision speed")
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.8))
+            Spacer()
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(speedBucket.rawValue.capitalized)
+                    .font(.headline)
+                    .foregroundColor(.white)
+                BlockSummarySpeedCountsSubline(
+                    fast: c.fast,
+                    medium: c.medium,
+                    slow: c.slow,
+                    textAlignment: .trailing,
+                    debugActivity: .twoMinuteTest
+                )
+            }
         }
         .padding(.vertical, 4)
     }

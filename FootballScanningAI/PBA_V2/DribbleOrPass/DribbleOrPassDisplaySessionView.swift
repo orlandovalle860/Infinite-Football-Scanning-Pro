@@ -103,13 +103,19 @@ struct DribbleOrPassDisplaySessionView: View {
                 if sessionTransportMode == .relayWebSocket {
                     dopRelayDisplayLog("incoming passTriggered repIndex=\(repIndex)")
                 }
+                let displayReceiveWall = Date()
+                DecisionSpeedDebugLog.logDisplayRelayIngress(activity: .dribbleOrPass, kind: "passTriggered", repIndex: repIndex, embeddedTimestamp: timestamp, displayReceiveWallTime: displayReceiveWall)
                 #endif
-                engine.onPassTrigger(repIndex: repIndex, timestamp: timestamp)
+                dopApplyPassTrigger(repIndex: repIndex, passTimestamp: timestamp)
             case .exitLogged(let repIndex, let gate, let timestamp):
                 #if DEBUG
                 if sessionTransportMode == .relayWebSocket {
                     dopRelayDisplayLog("incoming exitLogged repIndex=\(repIndex) gate=\(gate)")
                 }
+                let displayReceiveWall = Date()
+                DecisionSpeedDebugLog.logDisplayRelayIngress(activity: .dribbleOrPass, kind: "exitLogged", repIndex: repIndex, embeddedTimestamp: timestamp, displayReceiveWallTime: displayReceiveWall)
+                let wallBeforeEngine = Date()
+                DecisionSpeedDebugLog.logDisplayBeforeEngineExit(activity: .dribbleOrPass, repIndex: repIndex, embeddedDirection: timestamp, displayWallBeforeEngine: wallBeforeEngine, kind: "exitLogged")
                 #endif
                 if engine.onExitLogged(repIndex: repIndex, gate: gate, timestamp: timestamp) != nil, let result = engine.repResults.last {
                     saveDecisionForRep(result: result)
@@ -126,6 +132,10 @@ struct DribbleOrPassDisplaySessionView: View {
                 if sessionTransportMode == .relayWebSocket {
                     dopRelayDisplayLog("incoming incorrectDecision repIndex=\(repIndex)")
                 }
+                let displayReceiveWall = Date()
+                DecisionSpeedDebugLog.logDisplayRelayIngress(activity: .dribbleOrPass, kind: "incorrectDecision", repIndex: repIndex, embeddedTimestamp: timestamp, displayReceiveWallTime: displayReceiveWall)
+                let wallBeforeEngine = Date()
+                DecisionSpeedDebugLog.logDisplayBeforeEngineExit(activity: .dribbleOrPass, repIndex: repIndex, embeddedDirection: timestamp, displayWallBeforeEngine: wallBeforeEngine, kind: "incorrectDecision")
                 #endif
                 if engine.onIncorrectDecision(repIndex: repIndex, timestamp: timestamp) != nil, let result = engine.repResults.last {
                     saveDecisionForRep(result: result)
@@ -156,6 +166,9 @@ struct DribbleOrPassDisplaySessionView: View {
         .onChange(of: engine.phase) { _, newPhase in
             if case .blockComplete = newPhase {
                 DispatchQueue.main.async { navigateToBlockSummary = true }
+            }
+            if case .armedScanning = newPhase {
+                preloadBeepAssetsForInstantReveal()
             }
             if case .beepedAwaitingPass = newPhase { playBeep() }
         }
@@ -190,6 +203,7 @@ struct DribbleOrPassDisplaySessionView: View {
             let pid = playerStore.selectedPlayerId ?? profileManager.currentProfile?.id
             wedgeStyle = WedgeDifficultyEngine.currentStyle(playerId: pid)
             activateAudioSession()
+            preloadBeepAssetsForInstantReveal()
             subscribeToAudioInterruption()
             AnalyticsManager.shared.track(.trainingSessionStarted, playerId: playerStore.selectedPlayerId)
             Task {
@@ -339,7 +353,13 @@ struct DribbleOrPassDisplaySessionView: View {
         case .waitingForNextRep:
             engine.onNextRep(repIndex: nextRepIndex)
         case .beepedAwaitingPass(repIndex: let ri):
-            engine.onPassTrigger(repIndex: ri, timestamp: Date())
+            #if DEBUG
+            let soloPass = Date()
+            DecisionSpeedDebugLog.logSoloDisplayPassTrigger(activity: .dribbleOrPass, repIndex: ri, displayWallPassTS: soloPass)
+            dopApplyPassTrigger(repIndex: ri, passTimestamp: soloPass)
+            #else
+            dopApplyPassTrigger(repIndex: ri, passTimestamp: Date())
+            #endif
         default:
             break
         }
@@ -470,9 +490,17 @@ struct DribbleOrPassDisplaySessionView: View {
     }
 
     private func logExit(repIndex: Int, gate: Gate) {
+        #if DEBUG
+        let soloExit = Date()
+        DecisionSpeedDebugLog.logSoloDisplayExitTrigger(activity: .dribbleOrPass, repIndex: repIndex, gate: gate, displayWallExitTS: soloExit)
+        if engine.onExitLogged(repIndex: repIndex, gate: gate, timestamp: soloExit) != nil, let result = engine.repResults.last {
+            saveDecisionForRep(result: result)
+        }
+        #else
         if engine.onExitLogged(repIndex: repIndex, gate: gate, timestamp: Date()) != nil, let result = engine.repResults.last {
             saveDecisionForRep(result: result)
         }
+        #endif
         nextRepIndex = repIndex + 1
     }
 
@@ -495,6 +523,29 @@ struct DribbleOrPassDisplaySessionView: View {
 
     private var hasGatesVisible: Bool {
         !engine.revealedGates.isEmpty
+    }
+
+    private var dopShouldPreloadGateCueLayers: Bool {
+        switch engine.phase {
+        case .armedScanning, .beepedAwaitingPass, .cueRevealing, .cueVisible, .awaitingExitLog:
+            return true
+        case .waitingForNextRep, .blockComplete:
+            return false
+        }
+    }
+
+    private func dopGateCueOpacity(for gate: Gate) -> Double {
+        engine.revealedGates.contains(gate) ? 1 : 0
+    }
+
+    private func dopApplyPassTrigger(repIndex: Int, passTimestamp: Date) {
+        PBAFlowDebugLog.passReceived(repId: repIndex, timestamp: passTimestamp)
+        #if DEBUG
+        let wallBeforeEngine = Date()
+        DecisionSpeedDebugLog.logDisplayBeforeEnginePass(activity: .dribbleOrPass, repIndex: repIndex, embeddedPass: passTimestamp, displayWallBeforeEngine: wallBeforeEngine)
+        #endif
+        engine.onPassTrigger(repIndex: repIndex, timestamp: passTimestamp)
+        PBAFlowDebugLog.reveal(repId: repIndex, timestamp: Date())
     }
 
     /// Drives `.id` so `DangerZoneOverlay` reveal animation replays each rep (same pattern as Away From Pressure).
@@ -521,13 +572,18 @@ struct DribbleOrPassDisplaySessionView: View {
                 }
                 .position(x: center.x, y: center.y)
 
-                if let plan = engine.currentPlan {
+                if let plan = engine.currentPlan, dopShouldPreloadGateCueLayers {
                     ForEach(Gate.allCases, id: \.self) { gate in
-                        if engine.revealedGates.contains(gate) {
-                            DribbleOrPassGateOverlay(gate: gate, content: plan.content(for: gate), wedgeStyle: wedgeStyle)
-                                .id("\(dribbleOrPassActiveCueRepIndex)-\(gate.rawValue)")
-                                .zIndex(1)
-                        }
+                        DribbleOrPassGateOverlay(
+                            gate: gate,
+                            content: plan.content(for: gate),
+                            wedgeStyle: wedgeStyle,
+                            isDecisionRevealActive: engine.revealedGates.contains(gate)
+                        )
+                            .id("\(dribbleOrPassActiveCueRepIndex)-\(gate.rawValue)")
+                            .opacity(dopGateCueOpacity(for: gate))
+                            .animation(nil, value: engine.revealedGates)
+                            .zIndex(1)
                     }
                 }
             }
@@ -593,9 +649,17 @@ struct DribbleOrPassDisplaySessionView: View {
         }
     }
 
+    private func preloadBeepAssetsForInstantReveal() {
+        PBABeepSoundManager.shared.preloadCurrent()
+    }
+
     private func playBeep() {
+        if case .beepedAwaitingPass(let r) = engine.phase {
+            PBAFlowDebugLog.beep(repId: r, timestamp: Date())
+        }
         DispatchQueue.main.async {
             self.activateAudioSession()
+            self.preloadBeepAssetsForInstantReveal()
             PBABeepSoundManager.shared.play(soundEnabled: settingsViewModel.soundEnabled)
         }
     }

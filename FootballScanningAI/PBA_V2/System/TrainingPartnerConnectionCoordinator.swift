@@ -8,6 +8,7 @@
 //
 
 import Foundation
+import UIKit
 
 /// Owns shared coach/display transport for one partner **training run** until an explicit end reason.
 @MainActor
@@ -32,6 +33,7 @@ final class TrainingPartnerConnectionCoordinator {
     private var relaySessionMutationToken: UInt64 = 0
 
     private var partnerTrainingEndedObserver: NSObjectProtocol?
+    private var didBecomeActiveObserver: NSObjectProtocol?
 
     private init() {
         partnerTrainingEndedObserver = NotificationCenter.default.addObserver(
@@ -45,11 +47,38 @@ final class TrainingPartnerConnectionCoordinator {
                 self?.handleIncomingPartnerTrainingEndedFromPeer()
             }
         }
+        didBecomeActiveObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                await self?.reconnectPartnerRelayAfterForegroundIfNeeded()
+            }
+        }
     }
 
     deinit {
         if let partnerTrainingEndedObserver {
             NotificationCenter.default.removeObserver(partnerTrainingEndedObserver)
+        }
+        if let didBecomeActiveObserver {
+            NotificationCenter.default.removeObserver(didBecomeActiveObserver)
+        }
+    }
+
+    /// After `suspendPartnerSessionForBackground()`, relay sockets are disconnected; reconnect when the app is active again.
+    private func reconnectPartnerRelayAfterForegroundIfNeeded() async {
+        guard isPartnerTrainingSessionActive else { return }
+        #if DEBUG
+        PartnerPersistDebug.log("UIApplication.didBecomeActive — reconnectPartnerRelayAfterForegroundIfNeeded")
+        #endif
+        await relayDisplaySession.startDisplaySessionIfNeeded()
+        if coachRelayRemoteService.connectionState != .connected {
+            #if DEBUG
+            PartnerPersistDebug.log("coach relay not connected after foreground — RemoteService.connect()")
+            #endif
+            coachRelayRemoteService.connect()
         }
     }
 

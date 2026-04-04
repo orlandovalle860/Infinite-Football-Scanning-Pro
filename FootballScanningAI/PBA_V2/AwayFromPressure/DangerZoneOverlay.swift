@@ -58,13 +58,18 @@ struct GateOutlineOverlay: View {
 
 // MARK: - Pressure wedge (directional, points toward player)
 
-/// Grows the wedge from the screen edge toward the player (center).
-private let pressureWedgeRevealSeconds: Double = 0.42
+/// Full edge→center reveal duration for the red pressure wedge (seconds). Same for AFP / OTP / DOP. Tunable; keep ≤ 0.35. Uses `easeOut` only (no spring/bounce).
+private let pbaPressureWedgeRevealDuration: Double = 0.22
+
+/// Inner edge (toward field) is this much wider than the base on the sideline — reads as a pressure band, not a sharp arrow.
+private let wedgeInnerFlare: CGFloat = 1.36
 
 /// Red directional wedge indicating where pressure is coming from. Points toward the center (player).
 struct DangerZoneOverlay: View {
     let gate: Gate
     var style: WedgeCueStyle = WedgeCueStyle.style(for: 1)
+    /// When false, the view can stay mounted for preload (e.g. AFP scan/beep) but stays collapsed and invisible until this becomes true, so the edge→center reveal runs when the player actually sees it.
+    var isDecisionRevealActive: Bool = true
 
     @State private var revealProgress: CGFloat = 0
 
@@ -84,21 +89,65 @@ struct DangerZoneOverlay: View {
                         endPoint: wedgeGradientEnd
                     )
                 )
+                .onAppear { logWedgeClarity(w: w, h: h) }
+                .onChange(of: gate) { _, _ in logWedgeClarity(w: w, h: h) }
+                .onChange(of: geo.size.width) { _, _ in logWedgeClarity(w: w, h: h) }
+                .onChange(of: geo.size.height) { _, _ in logWedgeClarity(w: w, h: h) }
         }
         .scaleEffect(x: scaleX, y: scaleY, anchor: scaleAnchor)
-        .opacity(0.35 + 0.65 * Double(revealProgress))
+        .opacity(overlayOpacity)
+        /// Explicit animation on `revealProgress` so the edge→center motion still runs when an ancestor uses `.animation(nil, …)` (e.g. OTP/DOP gate cue opacity).
+        .animation(.easeOut(duration: pbaPressureWedgeRevealDuration), value: revealProgress)
         .allowsHitTesting(false)
         .onAppear {
-            revealProgress = 0
-            withAnimation(.easeOut(duration: pressureWedgeRevealSeconds)) {
-                revealProgress = 1
+            if isDecisionRevealActive {
+                runEdgeRevealAnimation()
+            } else {
+                revealProgress = 0
+            }
+        }
+        .onChange(of: isDecisionRevealActive) { _, active in
+            if active {
+                runEdgeRevealAnimation()
+            } else {
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) { revealProgress = 0 }
             }
         }
         .onChange(of: gate) { _, _ in
-            revealProgress = 0
-            withAnimation(.easeOut(duration: pressureWedgeRevealSeconds)) {
-                revealProgress = 1
+            guard isDecisionRevealActive else {
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) { revealProgress = 0 }
+                return
             }
+            runEdgeRevealAnimation()
+        }
+    }
+
+    private var overlayOpacity: Double {
+        guard isDecisionRevealActive else { return 0 }
+        return 0.35 + 0.65 * Double(revealProgress)
+    }
+
+    /// Resets without animation, then advances `revealProgress` on the next main run so we escape a parent `.animation(nil, …)` transaction (same frame as cue opacity / phase changes).
+    private func runEdgeRevealAnimation() {
+        #if DEBUG
+        let revealStart = Date()
+        print("[WedgeTiming-Debug] reveal duration=\(pbaPressureWedgeRevealDuration)s start=\(revealStart.timeIntervalSince1970)")
+        #endif
+        var reset = Transaction()
+        reset.disablesAnimations = true
+        withTransaction(reset) { revealProgress = 0 }
+        DispatchQueue.main.async {
+            revealProgress = 1
+            #if DEBUG
+            DispatchQueue.main.asyncAfter(deadline: .now() + pbaPressureWedgeRevealDuration) {
+                let revealEnd = Date()
+                print("[WedgeTiming-Debug] reveal duration=\(pbaPressureWedgeRevealDuration)s start=\(revealStart.timeIntervalSince1970) end=\(revealEnd.timeIntervalSince1970)")
+            }
+            #endif
         }
     }
 
@@ -145,69 +194,110 @@ struct DangerZoneOverlay: View {
         }
     }
 
-    private func wedgePath(w: CGFloat, h: CGFloat) -> Path {
-        let laneW = wedgeLaneWidth(w: w, h: h)
+    private func logWedgeClarity(w: CGFloat, h: CGFloat) {
+        let span = style.spanAlongEdge(for: gate, fieldWidth: w, fieldHeight: h)
+        let inset = min(w, h) * WedgeCueStyle.edgeInsetFraction
         let depth = wedgeDepth(w: w, h: h)
         let centerGap = min(w, h) * style.centerGapFraction
+        let baseCenter: CGPoint
+        let tip: CGPoint
+        switch gate {
+        case .up:
+            let baseY = inset
+            let tipY = min(baseY + depth, (h / 2) - centerGap)
+            baseCenter = CGPoint(x: w / 2, y: baseY)
+            tip = CGPoint(x: w / 2, y: tipY)
+        case .down:
+            let baseY = h - inset
+            let tipY = max(baseY - depth, (h / 2) + centerGap)
+            baseCenter = CGPoint(x: w / 2, y: baseY)
+            tip = CGPoint(x: w / 2, y: tipY)
+        case .left:
+            let baseX = inset
+            let tipX = min(baseX + depth, (w / 2) - centerGap)
+            baseCenter = CGPoint(x: baseX, y: h / 2)
+            tip = CGPoint(x: tipX, y: h / 2)
+        case .right:
+            let baseX = w - inset
+            let tipX = max(baseX - depth, (w / 2) + centerGap)
+            baseCenter = CGPoint(x: baseX, y: h / 2)
+            tip = CGPoint(x: tipX, y: h / 2)
+        }
+        let pos = "baseCenter=(\(String(format: "%.1f", baseCenter.x)),\(String(format: "%.1f", baseCenter.y))) tip=(\(String(format: "%.1f", tip.x)),\(String(format: "%.1f", tip.y))) insetPts=\(String(format: "%.2f", inset))"
+        WedgeClarityDebugLog.log(side: gate.wedgeClaritySideLabel, widthPts: span, position: pos)
+    }
+
+    private func wedgePath(w: CGFloat, h: CGFloat) -> Path {
+        let span = style.spanAlongEdge(for: gate, fieldWidth: w, fieldHeight: h)
+        let depth = wedgeDepth(w: w, h: h)
+        let centerGap = min(w, h) * style.centerGapFraction
+        let inset = min(w, h) * WedgeCueStyle.edgeInsetFraction
+        let halfBase = span / 2
+        let margin = min(w, h) * 0.04
 
         switch gate {
         case .up:
-            // Base at top, tip points down toward player
-            let baseY: CGFloat = 0
+            // Trapezoid: narrow base on top edge, wider band toward the field (not a pointed arrow).
+            let baseY = inset
             let tipY = min(baseY + depth, (h / 2) - centerGap)
-            let left = w / 2 - laneW / 2
-            let right = w / 2 + laneW / 2
+            let innerHalf = min(halfBase * wedgeInnerFlare, (w / 2) - margin)
+            let leftB = w / 2 - halfBase
+            let rightB = w / 2 + halfBase
+            let leftI = w / 2 - innerHalf
+            let rightI = w / 2 + innerHalf
             return Path { p in
-                p.move(to: CGPoint(x: left, y: baseY))
-                p.addLine(to: CGPoint(x: right, y: baseY))
-                p.addLine(to: CGPoint(x: w / 2, y: tipY))
+                p.move(to: CGPoint(x: leftB, y: baseY))
+                p.addLine(to: CGPoint(x: rightB, y: baseY))
+                p.addLine(to: CGPoint(x: rightI, y: tipY))
+                p.addLine(to: CGPoint(x: leftI, y: tipY))
                 p.closeSubpath()
             }
         case .down:
-            let baseY = h
+            let baseY = h - inset
             let tipY = max(baseY - depth, (h / 2) + centerGap)
-            let left = w / 2 - laneW / 2
-            let right = w / 2 + laneW / 2
+            let innerHalf = min(halfBase * wedgeInnerFlare, (w / 2) - margin)
+            let leftB = w / 2 - halfBase
+            let rightB = w / 2 + halfBase
+            let leftI = w / 2 - innerHalf
+            let rightI = w / 2 + innerHalf
             return Path { p in
-                p.move(to: CGPoint(x: left, y: baseY))
-                p.addLine(to: CGPoint(x: right, y: baseY))
-                p.addLine(to: CGPoint(x: w / 2, y: tipY))
+                p.move(to: CGPoint(x: leftB, y: baseY))
+                p.addLine(to: CGPoint(x: rightB, y: baseY))
+                p.addLine(to: CGPoint(x: rightI, y: tipY))
+                p.addLine(to: CGPoint(x: leftI, y: tipY))
                 p.closeSubpath()
             }
         case .left:
-            let baseX: CGFloat = 0
+            let baseX = inset
             let tipX = min(baseX + depth, (w / 2) - centerGap)
-            let top = h / 2 - (h * style.laneSpan) / 2
-            let bottom = h / 2 + (h * style.laneSpan) / 2
+            let innerHalf = min(halfBase * wedgeInnerFlare, (h / 2) - margin)
+            let topB = h / 2 - halfBase
+            let botB = h / 2 + halfBase
+            let topI = h / 2 - innerHalf
+            let botI = h / 2 + innerHalf
             return Path { p in
-                p.move(to: CGPoint(x: baseX, y: top))
-                p.addLine(to: CGPoint(x: baseX, y: bottom))
-                p.addLine(to: CGPoint(x: tipX, y: h / 2))
+                p.move(to: CGPoint(x: baseX, y: topB))
+                p.addLine(to: CGPoint(x: baseX, y: botB))
+                p.addLine(to: CGPoint(x: tipX, y: botI))
+                p.addLine(to: CGPoint(x: tipX, y: topI))
                 p.closeSubpath()
             }
         case .right:
-            let baseX = w
+            let baseX = w - inset
             let tipX = max(baseX - depth, (w / 2) + centerGap)
-            let top = h / 2 - (h * style.laneSpan) / 2
-            let bottom = h / 2 + (h * style.laneSpan) / 2
+            let innerHalf = min(halfBase * wedgeInnerFlare, (h / 2) - margin)
+            let topB = h / 2 - halfBase
+            let botB = h / 2 + halfBase
+            let topI = h / 2 - innerHalf
+            let botI = h / 2 + innerHalf
             return Path { p in
-                p.move(to: CGPoint(x: baseX, y: top))
-                p.addLine(to: CGPoint(x: baseX, y: bottom))
-                p.addLine(to: CGPoint(x: tipX, y: h / 2))
+                p.move(to: CGPoint(x: baseX, y: topB))
+                p.addLine(to: CGPoint(x: baseX, y: botB))
+                p.addLine(to: CGPoint(x: tipX, y: botI))
+                p.addLine(to: CGPoint(x: tipX, y: topI))
                 p.closeSubpath()
             }
         }
-    }
-
-    /// In landscape, top/bottom wedges can dominate the field because width is much larger than height.
-    /// Reduce their span/depth adaptively so pressure is clear without drowning side-space options.
-    private func wedgeLaneWidth(w: CGFloat, h: CGFloat) -> CGFloat {
-        let base = w * style.laneSpan
-        guard gate == .up || gate == .down else { return base }
-        let safeW = max(w, 1)
-        let aspect = h / safeW // < 1 in landscape
-        let reduction = max(0.62, min(1.0, aspect * 0.95))
-        return base * reduction
     }
 
     private func wedgeDepth(w: CGFloat, h: CGFloat) -> CGFloat {

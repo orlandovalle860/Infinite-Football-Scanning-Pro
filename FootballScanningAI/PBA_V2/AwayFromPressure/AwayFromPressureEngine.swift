@@ -94,7 +94,16 @@ final class AwayFromPressureEngine: ObservableObject {
         markerHiddenAtForCurrentRep = nil
         cancelTimers()
 
-        let delay = Double.random(in: config.scanDelayRange)
+        let delay = UnifiedScanToBeepTiming.randomDelaySeconds()
+        #if DEBUG
+        UnifiedScanToBeepTiming.logSchedule(
+            activity: "awayFromPressure",
+            delaySeconds: delay,
+            difficulty: config.difficulty,
+            loopLevel: config.curriculumLoopLevel,
+            model: .unified
+        )
+        #endif
         let endsAt = Date().addingTimeInterval(delay)
         phase = .armedScanning(repIndex: repIndex, pressureGate: p.pressureGate, endsAt: endsAt)
         updateInstructions()
@@ -119,6 +128,9 @@ final class AwayFromPressureEngine: ObservableObject {
 
         passTriggeredAt = timestamp
         markerShownAtForCurrentRep = timestamp
+        #if DEBUG
+        DecisionSpeedDebugLog.logEngineRepLive(activity: .awayFromPressure, repIndex: repIndex, passEmbeddedStored: timestamp)
+        #endif
         markerHideTimer?.invalidate()
         let duration = config.markerVisibleSeconds
         let endsAt = Date().addingTimeInterval(duration)
@@ -161,6 +173,20 @@ final class AwayFromPressureEngine: ObservableObject {
             updateInstructions()
             return nil
         }
+
+        #if DEBUG
+        let engineWallEntry = Date()
+        DecisionSpeedDebugLog.logScoredRep(
+            activity: .awayFromPressure,
+            repIndex: repIndex,
+            passTimestamp: triggerTime,
+            directionLogTimestamp: timestamp,
+            rawDeltaSeconds: reactionTimeSeconds,
+            difficulty: config.difficulty,
+            visualRevealTimestamp: markerShownAtForCurrentRep,
+            engineEntryWallTime: engineWallEntry
+        )
+        #endif
 
         let p = plan[repIndex]
         let startedAt = startedAtForCurrentRep ?? Date()
@@ -218,6 +244,20 @@ final class AwayFromPressureEngine: ObservableObject {
             updateInstructions()
             return nil
         }
+
+        #if DEBUG
+        let engineWallEntryIncorrect = Date()
+        DecisionSpeedDebugLog.logScoredRep(
+            activity: .awayFromPressure,
+            repIndex: repIndex,
+            passTimestamp: triggerTime,
+            directionLogTimestamp: timestamp,
+            rawDeltaSeconds: reactionTimeSeconds,
+            difficulty: config.difficulty,
+            visualRevealTimestamp: markerShownAtForCurrentRep,
+            engineEntryWallTime: engineWallEntryIncorrect
+        )
+        #endif
 
         let p = plan[repIndex]
         let startedAt = startedAtForCurrentRep ?? Date()

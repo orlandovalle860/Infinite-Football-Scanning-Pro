@@ -63,6 +63,8 @@ enum TwoMinuteMessage: Codable {
     case sessionEnded(timestamp: Date)
     /// Either device: the **whole** partner training run ended (explicit hub end / Leave with end session). Peers must tear down relay and clear pairing so the next activity gets a fresh join code.
     case partnerTrainingEnded(timestamp: Date)
+    /// After reconnect: minimal drill snapshot so coach can compare rep/phase (does not change scores).
+    case partnerSessionCheckpoint(sourceRole: String, activityId: String, repIndex: Int, phaseToken: String, relaySessionId: String?, timestamp: Date)
 
     enum CodingKeys: String, CodingKey {
         case kind
@@ -70,6 +72,10 @@ enum TwoMinuteMessage: Codable {
         case gate
         case timestamp
         case sessionId
+        case sourceRole
+        case activityId
+        case phaseToken
+        case relaySessionId
     }
 
     init(from decoder: Decoder) throws {
@@ -92,6 +98,15 @@ enum TwoMinuteMessage: Codable {
             self = .sessionEnded(timestamp: try c.decode(Date.self, forKey: .timestamp))
         case "partnerTrainingEnded":
             self = .partnerTrainingEnded(timestamp: try c.decode(Date.self, forKey: .timestamp))
+        case "partnerSessionCheckpoint":
+            self = .partnerSessionCheckpoint(
+                sourceRole: try c.decode(String.self, forKey: .sourceRole),
+                activityId: try c.decode(String.self, forKey: .activityId),
+                repIndex: try c.decode(Int.self, forKey: .repIndex),
+                phaseToken: try c.decode(String.self, forKey: .phaseToken),
+                relaySessionId: try c.decodeIfPresent(String.self, forKey: .relaySessionId),
+                timestamp: try c.decode(Date.self, forKey: .timestamp)
+            )
         default:
             throw DecodingError.dataCorruptedError(forKey: .kind, in: c, debugDescription: "Unknown kind: \(kind)")
         }
@@ -130,6 +145,14 @@ enum TwoMinuteMessage: Codable {
         case .partnerTrainingEnded(let timestamp):
             try c.encode("partnerTrainingEnded", forKey: .kind)
             try c.encode(timestamp, forKey: .timestamp)
+        case .partnerSessionCheckpoint(let sourceRole, let activityId, let repIndex, let phaseToken, let relaySessionId, let timestamp):
+            try c.encode("partnerSessionCheckpoint", forKey: .kind)
+            try c.encode(sourceRole, forKey: .sourceRole)
+            try c.encode(activityId, forKey: .activityId)
+            try c.encode(repIndex, forKey: .repIndex)
+            try c.encode(phaseToken, forKey: .phaseToken)
+            try c.encodeIfPresent(relaySessionId, forKey: .relaySessionId)
+            try c.encode(timestamp, forKey: .timestamp)
         }
     }
 }
@@ -140,7 +163,7 @@ extension TwoMinuteMessage {
         switch self {
         case .nextRep, .passTriggered, .exitLogged, .firstTouchLogged, .incorrectDecision:
             return true
-        case .coachPaired, .sessionEnded, .partnerTrainingEnded:
+        case .coachPaired, .sessionEnded, .partnerTrainingEnded, .partnerSessionCheckpoint:
             return false
         }
     }

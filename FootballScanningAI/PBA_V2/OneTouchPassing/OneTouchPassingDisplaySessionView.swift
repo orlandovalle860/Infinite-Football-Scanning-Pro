@@ -72,6 +72,9 @@ struct OneTouchPassingDisplaySessionView: View {
                     .zIndex(2)
             }
             waitingForCoachRelayOverlay
+            if mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket {
+                PartnerRelayLifecycleBannerOverlay()
+            }
         }
         .contentShape(Rectangle())
         .onTapGesture {
@@ -167,6 +170,8 @@ struct OneTouchPassingDisplaySessionView: View {
                     otpRelayDisplayLog("partnerTrainingEnded received (coordinator also tears down relay)")
                 }
                 #endif
+                break
+            case .partnerSessionCheckpoint:
                 break
             }
         }
@@ -294,6 +299,14 @@ struct OneTouchPassingDisplaySessionView: View {
             Text("Your current block will not be saved.")
         }
         .sessionCountdown(waitForPartnerReady: mode.requiresPhoneDisplayRelay, partnerReady: partnerReadyForCountdown, suppressCoachMessagesDuringCountdown: $blockCoachDrillDuringSessionCountdown)
+        .onReceive(NotificationCenter.default.publisher(for: .relayForegroundReconnectCompleted)) { _ in
+            guard mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket else { return }
+            PartnerRelayCheckpointDisplaySend.sendIfReady(
+                engine: engine,
+                activityId: ActivityKind.oneTouchPassing.sessionActivityActivityId,
+                relay: TrainingPartnerConnectionCoordinator.shared.relayDisplaySession
+            )
+        }
         .onChange(of: blockCoachDrillDuringSessionCountdown) { old, new in
             #if DEBUG
             OTPPersistDebug.log("blockCoachDrillDuringSessionCountdown=\(new) (session 3–2–1–Go overlay \(new ? "visible — drill messages suppressed" : "cleared after Go"))")
@@ -622,6 +635,7 @@ struct OneTouchPassingDisplaySessionView: View {
         case .coachPaired(let sid): return "coachPaired(\(sid))"
         case .sessionEnded: return "sessionEnded"
         case .partnerTrainingEnded: return "partnerTrainingEnded"
+        case .partnerSessionCheckpoint: return "partnerSessionCheckpoint"
         }
     }
     #endif

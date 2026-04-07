@@ -61,6 +61,9 @@ struct AwayFromPressureDisplaySessionView: View {
                 exitLogOverlay
             }
             waitingForCoachRelayOverlay
+            if mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket {
+                PartnerRelayLifecycleBannerOverlay()
+            }
         }
         .contentShape(Rectangle())
         .onTapGesture {
@@ -157,6 +160,8 @@ struct AwayFromPressureDisplaySessionView: View {
                 }
                 #endif
                 break
+            case .partnerSessionCheckpoint:
+                break
             }
         }
         .onChange(of: engine.phase) { _, newPhase in
@@ -235,6 +240,14 @@ struct AwayFromPressureDisplaySessionView: View {
             schedulePartnerSuspendForBackgroundNotification()
         }
         .sessionCountdown(waitForPartnerReady: mode.requiresPhoneDisplayRelay, partnerReady: partnerReadyForCountdown, suppressCoachMessagesDuringCountdown: $blockCoachDrillDuringSessionCountdown)
+        .onReceive(NotificationCenter.default.publisher(for: .relayForegroundReconnectCompleted)) { _ in
+            guard mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket else { return }
+            PartnerRelayCheckpointDisplaySend.sendIfReady(
+                engine: engine,
+                activityId: ActivityKind.awayFromPressure.sessionActivityActivityId,
+                relay: TrainingPartnerConnectionCoordinator.shared.relayDisplaySession
+            )
+        }
         .onChange(of: blockCoachDrillDuringSessionCountdown) { old, new in
             guard mode.requiresPhoneDisplayRelay, old == true, new == false else { return }
             flushPendingCoachNextRepAfterCountdown()

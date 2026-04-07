@@ -41,6 +41,7 @@ struct AwayFromPressureCoachRemoteView: View {
     @State private var currentRepIndex = 0
     @State private var volumeTriggerEnabled = true
     @State private var showVolumeEdgeWarning = false
+    @State private var passVolumeFlashSignal = 0
     @State private var coachRelayJoinCodeInput = ""
     @State private var coachRelayJoinError: String?
     @State private var coachRelayJoinBusy = false
@@ -82,6 +83,9 @@ struct AwayFromPressureCoachRemoteView: View {
                 case .blockComplete: blockCompleteView
                 }
             }
+            if Self.partnerTransportMode == .relayWebSocket {
+                PartnerRelayLifecycleBannerOverlay()
+            }
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -102,6 +106,12 @@ struct AwayFromPressureCoachRemoteView: View {
                 volumeTriggerEnabled = true
                 popToCoachRemoteHubAfterDisplayDisconnect()
             }
+            PartnerRelayCheckpointCoachUI.handleDisplayCheckpointMessage(
+                msg,
+                relayWebSocket: Self.partnerTransportMode == .relayWebSocket,
+                expectedActivityId: ActivityKind.awayFromPressure.sessionActivityActivityId,
+                coachSyncRepIndex: coachSyncRepIndexForCheckpoint()
+            )
         }
         .onAppear {
             didNavigateBackToCoachHubAfterDisplayDisconnect = false
@@ -238,7 +248,7 @@ struct AwayFromPressureCoachRemoteView: View {
     }
 
     private func loggingView(repIndex: Int) -> some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 16) {
             Text("Rep \(repIndex + 1) of \(totalReps)")
                 .font(.caption)
                 .foregroundColor(.white.opacity(0.45))
@@ -259,29 +269,6 @@ struct AwayFromPressureCoachRemoteView: View {
                         .font(.caption2)
                         .foregroundColor(.orange.opacity(0.95))
                 }
-                CoachRemoteFeedbackTap(kind: .pass, clipCornerRadius: 16) {
-                    #if DEBUG
-                    if Self.partnerTransportMode == .relayWebSocket {
-                        afpCoachRelayLog("send passTriggered repIndex=\(repIndex)")
-                    }
-                    let t = Date()
-                    DecisionSpeedDebugLog.logCoachPassSend(activity: .awayFromPressure, repIndex: repIndex, embeddedTimestamp: t)
-                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: t)
-                    #else
-                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
-                    #endif
-                } label: {
-                    Text("PASS")
-                        .font(.system(size: 30, weight: .bold, design: .rounded))
-                        .foregroundColor(.black)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 26)
-                        .background(Color.yellow)
-                        .cornerRadius(16)
-                }
-                Text(CoachRemoteCopy.volumePassHint)
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.38))
             }
 
             VStack(alignment: .leading, spacing: 12) {
@@ -300,9 +287,27 @@ struct AwayFromPressureCoachRemoteView: View {
                 decisionPad(repIndex: repIndex)
             }
 
-            Spacer(minLength: 0)
+            Spacer(minLength: 12)
+
+            CoachRemotePassPrimaryButton(
+                activity: ActivityKind.awayFromPressure.rawValue,
+                repIndex: repIndex,
+                send: {
+                    #if DEBUG
+                    if Self.partnerTransportMode == .relayWebSocket {
+                        afpCoachRelayLog("send passTriggered repIndex=\(repIndex)")
+                    }
+                    let t = Date()
+                    DecisionSpeedDebugLog.logCoachPassSend(activity: .awayFromPressure, repIndex: repIndex, embeddedTimestamp: t)
+                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: t)
+                    #else
+                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
+                    #endif
+                },
+                volumeFlashSignal: $passVolumeFlashSignal
+            )
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     /// Player decision: ↑ ↓ ← → or ✕ (`incorrectDecision` on wire). Stops timer and records.
@@ -475,6 +480,7 @@ struct AwayFromPressureCoachRemoteView: View {
             let wsURL = try joined.webSocketURLForCoach()
             afpCoachRelayLog("join HTTP: coach WebSocket URL ready \(wsURL.absoluteString)")
 
+            TrainingPartnerConnectionCoordinator.shared.recordRelaySessionId(joined.sessionId)
             let config = WebSocketSessionConfig(url: wsURL, sessionId: joined.sessionId, authToken: joined.coachToken)
             let transport = WebSocketRemoteTransport(config: config)
             let displayPeerJoinedBinding = $coachRelayDisplayPeerJoined
@@ -562,16 +568,25 @@ struct AwayFromPressureCoachRemoteView: View {
             repIndex: { if case .logging(let r) = state { return r }; return nil },
             onTrigger: {
                 guard case .logging(let repIndex) = state else { return }
-                #if DEBUG
-                if Self.partnerTransportMode == .relayWebSocket {
-                    afpCoachRelayLog("send passTriggered (volume) repIndex=\(repIndex)")
+                let sent = CoachRemotePassTrigger.perform(
+                    source: .volume,
+                    activity: ActivityKind.awayFromPressure.rawValue,
+                    repIndex: repIndex
+                ) {
+                    #if DEBUG
+                    if Self.partnerTransportMode == .relayWebSocket {
+                        afpCoachRelayLog("send passTriggered (volume) repIndex=\(repIndex)")
+                    }
+                    let t = Date()
+                    DecisionSpeedDebugLog.logCoachPassSend(activity: .awayFromPressure, repIndex: repIndex, embeddedTimestamp: t)
+                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: t)
+                    #else
+                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
+                    #endif
                 }
-                let t = Date()
-                DecisionSpeedDebugLog.logCoachPassSend(activity: .awayFromPressure, repIndex: repIndex, embeddedTimestamp: t)
-                remoteService.sendPassTriggered(repIndex: repIndex, timestamp: t)
-                #else
-                remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
-                #endif
+                if sent {
+                    passVolumeFlashSignal += 1
+                }
             },
             onVolumeEdgeWarningChange: { showVolumeEdgeWarning = $0 }
         )
@@ -629,6 +644,15 @@ struct AwayFromPressureCoachRemoteView: View {
     private func advanceToNextRep(after repIndex: Int) {
         currentRepIndex = repIndex + 1
         state = currentRepIndex >= totalReps ? .blockComplete : .ready
+    }
+
+    /// Aligns with display ``partnerSessionCheckpoint`` rep index (0-based).
+    private func coachSyncRepIndexForCheckpoint() -> Int {
+        switch state {
+        case .ready: return currentRepIndex
+        case .logging(let r): return r
+        case .blockComplete: return totalReps
+        }
     }
 
     private func resetLocalUIForDisconnect(source: String) {

@@ -270,3 +270,39 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
         cancelTimers()
     }
 }
+
+// MARK: - Partner relay reconnect checkpoint (no scoring impact)
+
+extension TwoMinuteCriticalScanEngine: PartnerRelayCheckpointEmitting {
+    func partnerRelayCheckpointPayload(activityId: String, relaySessionId: String?) -> PartnerRelayCheckpointPayload {
+        let rep: Int
+        let phaseToken: String
+        switch phase {
+        case .waitingForNextRep:
+            rep = repLogs.count
+            phaseToken = "waitingForNextRep"
+        case .complete:
+            rep = plan.count
+            phaseToken = "complete"
+        case .armedScanning(let r, _, _):
+            rep = r
+            phaseToken = "armedScanning"
+        case .beepedAwaitingPass(let r, _):
+            rep = r
+            phaseToken = "beepedAwaitingPass"
+        case .ballVisible(let r, _, _):
+            rep = r
+            phaseToken = "ballVisible"
+        case .awaitingExitLog(let r, _):
+            rep = r
+            phaseToken = "awaitingExitLog"
+        }
+        return PartnerRelayCheckpointPayload(
+            sourceRole: "display",
+            activityId: activityId,
+            repIndex: rep,
+            phaseToken: phaseToken,
+            relaySessionId: relaySessionId
+        )
+    }
+}

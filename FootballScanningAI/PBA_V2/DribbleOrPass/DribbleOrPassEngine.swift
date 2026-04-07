@@ -362,3 +362,42 @@ final class DribbleOrPassEngine: ObservableObject {
 
     deinit { cancelTimers() }
 }
+
+// MARK: - Partner relay reconnect checkpoint (no scoring impact)
+
+extension DribbleOrPassEngine: PartnerRelayCheckpointEmitting {
+    func partnerRelayCheckpointPayload(activityId: String, relaySessionId: String?) -> PartnerRelayCheckpointPayload {
+        let rep: Int
+        let phaseToken: String
+        switch phase {
+        case .waitingForNextRep:
+            rep = repResults.count
+            phaseToken = "waitingForNextRep"
+        case .blockComplete:
+            rep = plan.count
+            phaseToken = "blockComplete"
+        case .armedScanning(let r, _):
+            rep = r
+            phaseToken = "armedScanning"
+        case .beepedAwaitingPass(let r):
+            rep = r
+            phaseToken = "beepedAwaitingPass"
+        case .cueRevealing(let r, _):
+            rep = r
+            phaseToken = "cueRevealing"
+        case .cueVisible(let r, _):
+            rep = r
+            phaseToken = "cueVisible"
+        case .awaitingExitLog(let r):
+            rep = r
+            phaseToken = "awaitingExitLog"
+        }
+        return PartnerRelayCheckpointPayload(
+            sourceRole: "display",
+            activityId: activityId,
+            repIndex: rep,
+            phaseToken: phaseToken,
+            relaySessionId: relaySessionId
+        )
+    }
+}

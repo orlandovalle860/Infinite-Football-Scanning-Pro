@@ -20,6 +20,8 @@ extension Notification.Name {
 }
 
 let hasCompletedInitialTestKey = "hasCompletedInitialTest"
+/// True after the user finishes the 3-step pocket onboarding (tap-through); persisted so steps are not repeated.
+let hasCompletedPocketOnboardingStepsKey = "hasCompletedPocketOnboardingSteps"
 
 final class MultipeerManager: NSObject, ObservableObject {
     static weak var shared: MultipeerManager?

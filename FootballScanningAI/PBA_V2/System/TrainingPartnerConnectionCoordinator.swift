@@ -4,15 +4,17 @@
 //
 //  PBA V2 — One coach ↔ display pairing per training session: reuse relay (and Multipeer host/browse)
 //  across Home, Pathway, iOS springboard, and activity switches until ``endPartnerTrainingSession(reason:notifyPeer:)`` runs
-//  (explicit Leave, coach hub end, or ``popToRoot(endingPartnerSession: true)``). iOS background only **suspends** relay.
+//  (explicit Leave, coach hub end, or ``popToRoot(endingPartnerSession: true)``). iOS background **suspends** relay sockets;
+//  foreground triggers reconnect + optional checkpoint messaging.
 //
 
+import Combine
 import Foundation
 import UIKit
 
 /// Owns shared coach/display transport for one partner **training run** until an explicit end reason.
 @MainActor
-final class TrainingPartnerConnectionCoordinator {
+final class TrainingPartnerConnectionCoordinator: ObservableObject {
     static let shared = TrainingPartnerConnectionCoordinator()
 
     /// Shared relay display session (join code + WebSocket). One instance per app run.
@@ -20,6 +22,9 @@ final class TrainingPartnerConnectionCoordinator {
 
     /// Shared coach `RemoteService` for relay WebSocket. Same instance for all activity coach remotes.
     let coachRelayRemoteService = RemoteService(transport: TwoMinuteSessionTransport.makeInitial(for: .relayWebSocket))
+
+    /// Banner for reconnect / restored / rejoin / checkpoint drift (partner relay).
+    @Published private(set) var relayLifecycleBanner: PartnerRelayLifecycleBanner = .hidden
 
     /// True after the first partner pairing starts; cleared only on ``endPartnerTrainingSession(reason:notifyPeer:)`` (explicit Leave,
     /// coach hub end, or ``AppRouter.popToRoot(endingPartnerSession: true)``). **Not** cleared on iOS background.
@@ -34,6 +39,71 @@ final class TrainingPartnerConnectionCoordinator {
 
     private var partnerTrainingEndedObserver: NSObjectProtocol?
     private var didBecomeActiveObserver: NSObjectProtocol?
+    private var willResignActiveObserver: NSObjectProtocol?
+    private var didEnterBackgroundObserver: NSObjectProtocol?
+    private var bannerAutoHideTask: Task<Void, Never>?
+
+    // MARK: - Soft resume (grace window)
+
+    /// When the relay was suspended (background); used with ``RelaySoftResumeConfig.interruptionGraceSeconds``.
+    private var interruptionBeganAt: Date?
+    /// Display relay session id captured at suspend; compared after reconnect for the same server session.
+    private var relaySessionIdSnapshotAtSuspend: String?
+    /// Server session id from display HTTP create or coach HTTP join (same logical session).
+    private(set) var trackedRelaySessionId: String?
+    /// Coach iPhone: brief reconnect succeeded; waiting for display ``partnerSessionCheckpoint`` to validate soft resume.
+    private(set) var awaitingSoftResumeCheckpointValidation: Bool = false
+
+    /// Call when the relay server session id is known (display session created or coach HTTP join).
+    func recordRelaySessionId(_ id: String?) {
+        guard let id, !id.isEmpty else { return }
+        trackedRelaySessionId = id
+    }
+
+    private func clearSoftResumeInterruptionState() {
+        interruptionBeganAt = nil
+        relaySessionIdSnapshotAtSuspend = nil
+        awaitingSoftResumeCheckpointValidation = false
+    }
+
+    /// Coach: validate soft resume after display checkpoint (``partnerSessionCheckpoint``).
+    func applyCoachSoftResumeCheckpointValidation(relaySessionMatch: Bool, activityMatch: Bool, repMatch: Bool) {
+        guard awaitingSoftResumeCheckpointValidation else { return }
+        awaitingSoftResumeCheckpointValidation = false
+        let passed = relaySessionMatch && activityMatch && repMatch
+        RelaySoftResumeDebug.logSessionValidation(
+            passed: passed,
+            detail: "relay=\(relaySessionMatch) activity=\(activityMatch) rep=\(repMatch)"
+        )
+        if passed {
+            clearCheckpointDrift()
+            relayLifecycleBanner = .sessionRestoredSoft
+            scheduleAutoHideSessionRestoredSoftBanner()
+            clearSoftResumeInterruptionState()
+            RelaySoftResumeDebug.logSoftResumeOutcome(success: true, reason: "coach_checkpoint_validated")
+        } else {
+            relayLifecycleBanner = .sessionRequiresRejoin
+            clearSoftResumeInterruptionState()
+            RelaySoftResumeDebug.logFallbackToRejoin(reason: "coach_soft_resume_checkpoint_failed")
+        }
+    }
+
+    /// Non–soft-resume path: checkpoint relay session id disagrees with tracked server session.
+    func applyRelaySessionIdMismatchFromCheckpoint() {
+        relayLifecycleBanner = .sessionRequiresRejoin
+        RelaySoftResumeDebug.logFallbackToRejoin(reason: "checkpoint_relay_session_id_mismatch")
+    }
+
+    private func scheduleAutoHideSessionRestoredSoftBanner() {
+        bannerAutoHideTask?.cancel()
+        bannerAutoHideTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            guard !Task.isCancelled else { return }
+            if case .sessionRestoredSoft = self.relayLifecycleBanner {
+                self.relayLifecycleBanner = .hidden
+            }
+        }
+    }
 
     private init() {
         partnerTrainingEndedObserver = NotificationCenter.default.addObserver(
@@ -56,6 +126,26 @@ final class TrainingPartnerConnectionCoordinator {
                 await self?.reconnectPartnerRelayAfterForegroundIfNeeded()
             }
         }
+        willResignActiveObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                LifecycleReconnectDebug.logWillResignActive()
+                self?.scheduleBannerHiddenIfReconnecting()
+            }
+        }
+        didEnterBackgroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                LifecycleReconnectDebug.logBackgroundEntered(source: "UIApplication.didEnterBackgroundNotification")
+                self?.suspendPartnerSessionForBackground()
+            }
+        }
     }
 
     deinit {
@@ -65,21 +155,190 @@ final class TrainingPartnerConnectionCoordinator {
         if let didBecomeActiveObserver {
             NotificationCenter.default.removeObserver(didBecomeActiveObserver)
         }
+        if let willResignActiveObserver {
+            NotificationCenter.default.removeObserver(willResignActiveObserver)
+        }
+        if let didEnterBackgroundObserver {
+            NotificationCenter.default.removeObserver(didEnterBackgroundObserver)
+        }
+    }
+
+    func setCheckpointDrift(displayRep: Int, coachRep: Int) {
+        relayLifecycleBanner = .checkpointMismatch(
+            hint: "Display reports rep \(displayRep + 1); coach is on rep \(coachRep + 1). Confirm with the player before continuing."
+        )
+    }
+
+    func clearCheckpointDrift() {
+        if case .checkpointMismatch = relayLifecycleBanner {
+            relayLifecycleBanner = .hidden
+        }
+    }
+
+    private func scheduleBannerHiddenIfReconnecting() {
+        switch relayLifecycleBanner {
+        case .reconnecting, .restoringSession:
+            break
+        default:
+            return
+        }
+        bannerAutoHideTask?.cancel()
+        bannerAutoHideTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 12_000_000_000)
+            guard !Task.isCancelled else { return }
+            switch self.relayLifecycleBanner {
+            case .reconnecting, .restoringSession:
+                self.relayLifecycleBanner = .hidden
+            default:
+                break
+            }
+        }
+    }
+
+    private func scheduleAutoHideRestoredBanner() {
+        bannerAutoHideTask?.cancel()
+        bannerAutoHideTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            guard !Task.isCancelled else { return }
+            if case .connectionRestored = self.relayLifecycleBanner {
+                self.relayLifecycleBanner = .hidden
+            }
+        }
     }
 
     /// After `suspendPartnerSessionForBackground()`, relay sockets are disconnected; reconnect when the app is active again.
     private func reconnectPartnerRelayAfterForegroundIfNeeded() async {
         guard isPartnerTrainingSessionActive else { return }
-        #if DEBUG
-        PartnerPersistDebug.log("UIApplication.didBecomeActive — reconnectPartnerRelayAfterForegroundIfNeeded")
-        #endif
+        awaitingSoftResumeCheckpointValidation = false
+
+        LifecycleReconnectDebug.logForegroundEntered(source: "UIApplication.didBecomeActiveNotification")
+        let beforeCoach = coachRelayRemoteService.connectionState
+        let beforeDisplay = relayDisplaySession.socketConnectionState
+        LifecycleReconnectDebug.logSocketState(role: "coach", before: beforeCoach.rawValue, after: "pending")
+        LifecycleReconnectDebug.logSocketState(role: "display", before: beforeDisplay.rawValue, after: "pending")
+
+        let displayHasRelaySession = relayDisplaySession.joinCode != nil
+        let grace = RelaySoftResumeConfig.interruptionGraceSeconds
+        let now = Date()
+        let duration: TimeInterval = {
+            guard let start = interruptionBeganAt else { return -1 }
+            return now.timeIntervalSince(start)
+        }()
+        let softEligible = interruptionBeganAt != nil && duration >= 0 && duration <= grace
+        RelaySoftResumeDebug.logInterruptionResume(
+            duration: duration,
+            graceSeconds: grace,
+            eligible: softEligible
+        )
+
+        let hadDisconnect: Bool = displayHasRelaySession
+            ? (beforeDisplay != .connected)
+            : (beforeCoach != .connected)
+
+        if hadDisconnect {
+            relayLifecycleBanner = softEligible ? .restoringSession : .reconnecting
+        }
+
+        LifecycleReconnectDebug.logReconnectAttempt(context: "display.startDisplaySessionIfNeeded")
         await relayDisplaySession.startDisplaySessionIfNeeded()
+
         if coachRelayRemoteService.connectionState != .connected {
-            #if DEBUG
-            PartnerPersistDebug.log("coach relay not connected after foreground — RemoteService.connect()")
-            #endif
+            LifecycleReconnectDebug.logReconnectAttempt(context: "coach.RemoteService.connect")
             coachRelayRemoteService.connect()
         }
+
+        try? await Task.sleep(nanoseconds: 350_000_000)
+
+        let afterCoach = coachRelayRemoteService.connectionState
+        let afterDisplay = relayDisplaySession.socketConnectionState
+        LifecycleReconnectDebug.logSocketState(role: "coach", before: beforeCoach.rawValue, after: afterCoach.rawValue)
+        LifecycleReconnectDebug.logSocketState(role: "display", before: beforeDisplay.rawValue, after: afterDisplay.rawValue)
+
+        let recovered: Bool = displayHasRelaySession
+            ? (afterDisplay == .connected)
+            : (afterCoach == .connected)
+
+        RelaySoftResumeDebug.logReconnectOutcome(success: recovered, detail: displayHasRelaySession ? "display" : "coach")
+
+        let socketDeadAfterForeground = displayHasRelaySession && afterDisplay == .disconnected && beforeDisplay == .connected
+        if socketDeadAfterForeground {
+            RelaySoftResumeDebug.logFallbackToRejoin(reason: "display_socket_not_recovered")
+            relayLifecycleBanner = .sessionRequiresRejoin
+            clearSoftResumeInterruptionState()
+            NotificationCenter.default.post(name: .relayForegroundReconnectCompleted, object: nil)
+            return
+        }
+
+        // Display (iPad): same relay session id after brief interrupt → soft resume without rejoin.
+        if displayHasRelaySession, softEligible, recovered, hadDisconnect {
+            let curId = relayDisplaySession.relaySessionId
+            let idOK: Bool = {
+                guard let snap = relaySessionIdSnapshotAtSuspend else { return true }
+                guard let cur = curId else { return false }
+                return snap == cur
+            }()
+            RelaySoftResumeDebug.logSessionValidation(
+                passed: idOK,
+                detail: "display_relay_session snapshot=\(relaySessionIdSnapshotAtSuspend ?? "nil") current=\(curId ?? "nil")"
+            )
+            if idOK {
+                clearCheckpointDrift()
+                relayLifecycleBanner = .sessionRestoredSoft
+                scheduleAutoHideSessionRestoredSoftBanner()
+                clearSoftResumeInterruptionState()
+                RelaySoftResumeDebug.logSoftResumeOutcome(success: true, reason: "display_session_id_preserved")
+                NotificationCenter.default.post(name: .relayForegroundReconnectCompleted, object: nil)
+                return
+            }
+            RelaySoftResumeDebug.logFallbackToRejoin(reason: "display_relay_session_id_mismatch_after_soft_window")
+            relayLifecycleBanner = .sessionRequiresRejoin
+            clearSoftResumeInterruptionState()
+            NotificationCenter.default.post(name: .relayForegroundReconnectCompleted, object: nil)
+            return
+        }
+
+        // Coach iPhone: no local display join code; validate via display checkpoint if soft-eligible.
+        if !displayHasRelaySession, softEligible, recovered, hadDisconnect {
+            awaitingSoftResumeCheckpointValidation = true
+            RelaySoftResumeDebug.logSoftResumeOutcome(success: false, reason: "coach_awaiting_checkpoint_validation")
+            NotificationCenter.default.post(name: .relayForegroundReconnectCompleted, object: nil)
+            #if DEBUG
+            PartnerPersistDebug.log("UIApplication.didBecomeActive — coach soft-resume awaiting checkpoint")
+            #endif
+            return
+        }
+
+        if hadDisconnect, recovered {
+            LifecycleReconnectDebug.logReconnectResult(context: "partner_relay", success: true, detail: displayHasRelaySession ? "display_socket_connected" : "coach_socket_connected")
+            clearCheckpointDrift()
+            relayLifecycleBanner = .connectionRestored
+            scheduleAutoHideRestoredBanner()
+            clearSoftResumeInterruptionState()
+        } else if !hadDisconnect {
+            relayLifecycleBanner = .hidden
+            clearSoftResumeInterruptionState()
+        } else {
+            LifecycleReconnectDebug.logReconnectResult(context: "partner_relay", success: recovered, detail: "recovery_incomplete")
+            if recovered {
+                clearCheckpointDrift()
+                relayLifecycleBanner = .connectionRestored
+                scheduleAutoHideRestoredBanner()
+                clearSoftResumeInterruptionState()
+            } else if displayHasRelaySession, afterDisplay == .disconnected {
+                relayLifecycleBanner = .sessionRequiresRejoin
+                LifecycleReconnectDebug.logRejoinRequired(reason: "display_relay_still_disconnected")
+                RelaySoftResumeDebug.logFallbackToRejoin(reason: "display_relay_still_disconnected_long_path")
+                clearSoftResumeInterruptionState()
+            } else {
+                relayLifecycleBanner = .hidden
+                clearSoftResumeInterruptionState()
+            }
+        }
+
+        NotificationCenter.default.post(name: .relayForegroundReconnectCompleted, object: nil)
+        #if DEBUG
+        PartnerPersistDebug.log("UIApplication.didBecomeActive — reconnectPartnerRelayAfterForegroundIfNeeded complete")
+        #endif
     }
 
     /// Call after a successful HTTP join so any subsequent activity coach screen can restore the same one-time code.
@@ -111,6 +370,9 @@ final class TrainingPartnerConnectionCoordinator {
         ConnectionManager.shared.stopHosting()
         ConnectionManager.shared.stopBrowsing()
         isPartnerTrainingSessionActive = true
+        trackedRelaySessionId = nil
+        clearSoftResumeInterruptionState()
+        relayLifecycleBanner = .hidden
         #if DEBUG
         print("[Multipeer] TrainingPartnerSession: begin — partner training session active (relay + Multipeer reuse allowed)")
         PartnerPersistDebug.log("beginPartnerTrainingSessionIfNeeded — marked partner training session active")
@@ -136,6 +398,9 @@ final class TrainingPartnerConnectionCoordinator {
         let endToken = relaySessionMutationToken
         isPartnerTrainingSessionActive = false
         lastCoachRelayJoinCode = nil
+        trackedRelaySessionId = nil
+        clearSoftResumeInterruptionState()
+        relayLifecycleBanner = .hidden
 
         let finishLocalTeardown: () -> Void = { [weak self] in
             guard let self else { return }
@@ -249,13 +514,22 @@ final class TrainingPartnerConnectionCoordinator {
         await relayDisplaySession.startDisplaySessionIfNeeded()
     }
 
-    /// iOS background (springboard / multitasking): disconnect relay socket only — **keep** join code and training flag
+    /// iOS background (springboard / multitasking / Siri / phone call): disconnect relay sockets — **keep** join code and training flag
     /// so the next drill can reconnect without a new join code. Does **not** send `sessionEnded` to coach.
     func suspendPartnerSessionForBackground() {
         guard isPartnerTrainingSessionActive else { return }
+        if interruptionBeganAt == nil {
+            let start = Date()
+            interruptionBeganAt = start
+            RelaySoftResumeDebug.logInterruptionStart(at: start)
+        }
+        relaySessionIdSnapshotAtSuspend = relayDisplaySession.relaySessionId ?? relaySessionIdSnapshotAtSuspend
         #if DEBUG
-        print("[Multipeer] TrainingPartnerSession: suspend for iOS background — keep pairing; relay soft disconnect only")
+        print("[Multipeer] TrainingPartnerSession: suspend for iOS background — keep pairing; relay soft disconnect (display + coach)")
         #endif
         relayDisplaySession.suspendForAppBackground()
+        if coachRelayRemoteService.connectionState != .disconnected {
+            coachRelayRemoteService.disconnect()
+        }
     }
 }

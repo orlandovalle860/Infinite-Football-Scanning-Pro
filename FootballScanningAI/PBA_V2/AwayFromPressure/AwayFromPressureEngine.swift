@@ -317,3 +317,39 @@ final class AwayFromPressureEngine: ObservableObject {
         cancelTimers()
     }
 }
+
+// MARK: - Partner relay reconnect checkpoint (no scoring impact)
+
+extension AwayFromPressureEngine: PartnerRelayCheckpointEmitting {
+    func partnerRelayCheckpointPayload(activityId: String, relaySessionId: String?) -> PartnerRelayCheckpointPayload {
+        let rep: Int
+        let phaseToken: String
+        switch phase {
+        case .waitingForNextRep:
+            rep = repLogs.count
+            phaseToken = "waitingForNextRep"
+        case .blockComplete:
+            rep = plan.count
+            phaseToken = "blockComplete"
+        case .armedScanning(let r, _, _):
+            rep = r
+            phaseToken = "armedScanning"
+        case .beepedAwaitingPass(let r, _):
+            rep = r
+            phaseToken = "beepedAwaitingPass"
+        case .markerVisible(let r, _, _):
+            rep = r
+            phaseToken = "markerVisible"
+        case .awaitingExitLog(let r, _):
+            rep = r
+            phaseToken = "awaitingExitLog"
+        }
+        return PartnerRelayCheckpointPayload(
+            sourceRole: "display",
+            activityId: activityId,
+            repIndex: rep,
+            phaseToken: phaseToken,
+            relaySessionId: relaySessionId
+        )
+    }
+}

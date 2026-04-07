@@ -40,6 +40,7 @@ struct OneTouchPassingCoachRemoteView: View {
     @State private var currentRepIndex = 0
     @State private var volumeTriggerEnabled = true
     @State private var showVolumeEdgeWarning = false
+    @State private var passVolumeFlashSignal = 0
     @State private var coachRelayJoinCodeInput = ""
     @State private var coachRelayJoinError: String?
     @State private var coachRelayJoinBusy = false
@@ -78,6 +79,9 @@ struct OneTouchPassingCoachRemoteView: View {
                 case .blockComplete: blockCompleteView
                 }
             }
+            if Self.partnerTransportMode == .relayWebSocket {
+                PartnerRelayLifecycleBannerOverlay()
+            }
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -98,6 +102,12 @@ struct OneTouchPassingCoachRemoteView: View {
                 volumeTriggerEnabled = true
                 popToCoachRemoteHubAfterDisplayDisconnect()
             }
+            PartnerRelayCheckpointCoachUI.handleDisplayCheckpointMessage(
+                msg,
+                relayWebSocket: Self.partnerTransportMode == .relayWebSocket,
+                expectedActivityId: ActivityKind.oneTouchPassing.sessionActivityActivityId,
+                coachSyncRepIndex: coachSyncRepIndexForCheckpoint()
+            )
         }
         .onAppear {
             didNavigateBackToCoachHubAfterDisplayDisconnect = false
@@ -233,7 +243,7 @@ struct OneTouchPassingCoachRemoteView: View {
     }
 
     private func loggingView(repIndex: Int) -> some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 16) {
             Text("Rep \(repIndex + 1) of \(totalReps)")
                 .font(.caption)
                 .foregroundColor(.white.opacity(0.45))
@@ -254,29 +264,6 @@ struct OneTouchPassingCoachRemoteView: View {
                         .font(.caption2)
                         .foregroundColor(.orange.opacity(0.95))
                 }
-                CoachRemoteFeedbackTap(kind: .pass, clipCornerRadius: 16) {
-                    #if DEBUG
-                    if Self.partnerTransportMode == .relayWebSocket {
-                        otpCoachRelayLog("send passTriggered repIndex=\(repIndex)")
-                    }
-                    let t = Date()
-                    DecisionSpeedDebugLog.logCoachPassSend(activity: .oneTouchPassing, repIndex: repIndex, embeddedTimestamp: t)
-                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: t)
-                    #else
-                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
-                    #endif
-                } label: {
-                    Text("PASS")
-                        .font(.system(size: 30, weight: .bold, design: .rounded))
-                        .foregroundColor(.black)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 26)
-                        .background(Color.yellow)
-                        .cornerRadius(16)
-                }
-                Text(CoachRemoteCopy.volumePassHint)
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.38))
             }
 
             VStack(alignment: .leading, spacing: 12) {
@@ -295,9 +282,27 @@ struct OneTouchPassingCoachRemoteView: View {
                 directionPad
             }
 
-            Spacer(minLength: 0)
+            Spacer(minLength: 12)
+
+            CoachRemotePassPrimaryButton(
+                activity: ActivityKind.oneTouchPassing.rawValue,
+                repIndex: repIndex,
+                send: {
+                    #if DEBUG
+                    if Self.partnerTransportMode == .relayWebSocket {
+                        otpCoachRelayLog("send passTriggered repIndex=\(repIndex)")
+                    }
+                    let t = Date()
+                    DecisionSpeedDebugLog.logCoachPassSend(activity: .oneTouchPassing, repIndex: repIndex, embeddedTimestamp: t)
+                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: t)
+                    #else
+                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
+                    #endif
+                },
+                volumeFlashSignal: $passVolumeFlashSignal
+            )
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var directionPad: some View {
@@ -430,6 +435,7 @@ struct OneTouchPassingCoachRemoteView: View {
             let wsURL = try joined.webSocketURLForCoach()
             otpCoachRelayLog("join HTTP: coach WebSocket URL ready \(wsURL.absoluteString)")
 
+            TrainingPartnerConnectionCoordinator.shared.recordRelaySessionId(joined.sessionId)
             let config = WebSocketSessionConfig(url: wsURL, sessionId: joined.sessionId, authToken: joined.coachToken)
             let transport = WebSocketRemoteTransport(config: config)
             let displayPeerJoinedBinding = $coachRelayDisplayPeerJoined
@@ -514,7 +520,12 @@ struct OneTouchPassingCoachRemoteView: View {
             enabled: volumeTriggerEnabled,
             repIndex: { if case .logging(let r) = state { return r }; return nil },
             onTrigger: {
-                if case .logging(let repIndex) = state {
+                guard case .logging(let repIndex) = state else { return }
+                let sent = CoachRemotePassTrigger.perform(
+                    source: .volume,
+                    activity: ActivityKind.oneTouchPassing.rawValue,
+                    repIndex: repIndex
+                ) {
                     #if DEBUG
                     if Self.partnerTransportMode == .relayWebSocket {
                         otpCoachRelayLog("send passTriggered (volume) repIndex=\(repIndex)")
@@ -525,6 +536,9 @@ struct OneTouchPassingCoachRemoteView: View {
                     #else
                     remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
                     #endif
+                }
+                if sent {
+                    passVolumeFlashSignal += 1
                 }
             },
             onVolumeEdgeWarningChange: { showVolumeEdgeWarning = $0 }
@@ -601,6 +615,14 @@ struct OneTouchPassingCoachRemoteView: View {
         #endif
         currentRepIndex = repIndex + 1
         state = currentRepIndex >= totalReps ? .blockComplete : .ready
+    }
+
+    private func coachSyncRepIndexForCheckpoint() -> Int {
+        switch state {
+        case .ready: return currentRepIndex
+        case .logging(let r): return r
+        case .blockComplete: return totalReps
+        }
     }
 
     private func resetLocalUIForDisconnect(source: String) {

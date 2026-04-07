@@ -19,6 +19,8 @@ final class PartnerRelayDisplaySession: ObservableObject {
     @Published private(set) var socketConnectionState: ConnectionState = .disconnected
     /// `true` after `control.peer_joined`, `false` after `peer_left` or socket disconnect.
     @Published private(set) var isCoachPaired: Bool = false
+    /// Relay server session id (HTTP/WebSocket config); used for reconnect checkpoint logging.
+    @Published private(set) var relaySessionId: String?
 
     private var transport: WebSocketRemoteTransport?
 
@@ -93,6 +95,8 @@ final class PartnerRelayDisplaySession: ObservableObject {
             }
 
             await MainActor.run {
+                relaySessionId = created.sessionId
+                TrainingPartnerConnectionCoordinator.shared.recordRelaySessionId(created.sessionId)
                 transport = newTransport
                 #if DEBUG
                 print("[RelayWS-DEBUG] calling connect()")
@@ -105,6 +109,7 @@ final class PartnerRelayDisplaySession: ObservableObject {
             #endif
             await MainActor.run {
                 joinCode = nil
+                relaySessionId = nil
                 transport = nil
             }
         }
@@ -159,6 +164,7 @@ final class PartnerRelayDisplaySession: ObservableObject {
         transport?.disconnect()
         transport = nil
         joinCode = nil
+        relaySessionId = nil
         socketConnectionState = .disconnected
         isCoachPaired = false
         onCoachPairingChanged?(false)

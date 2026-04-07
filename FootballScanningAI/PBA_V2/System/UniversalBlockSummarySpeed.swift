@@ -87,6 +87,23 @@ enum UniversalBlockSummaryHeadline {
     static func headlineLabel(fast: Int, medium: Int, slow: Int) -> String {
         resolve(fast: fast, medium: medium, slow: slow).bucket.rawValue.capitalized
     }
+
+    /// Coaching line from rep-level fast/medium/slow counts (same dominant-bucket rules as ``resolve``).
+    /// Tie → "inconsistent"; otherwise maps dominant bucket to pocket-moment feedback.
+    static func pocketMomentInterpretationLine(fast: Int, medium: Int, slow: Int) -> String {
+        let res = resolve(fast: fast, medium: medium, slow: slow)
+        if res.tieBreakApplied {
+            return "Your pocket moments are inconsistent."
+        }
+        switch res.bucket {
+        case .fast:
+            return "You're winning your pocket moments."
+        case .medium:
+            return "You're seeing the pocket, but deciding late."
+        case .slow:
+            return "You're reacting after the pocket moment."
+        }
+    }
 }
 
 #if DEBUG

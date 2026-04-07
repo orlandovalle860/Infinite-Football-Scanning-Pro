@@ -358,3 +358,45 @@ final class OneTouchPassingEngine: ObservableObject {
 
     deinit { cancelTimers() }
 }
+
+// MARK: - Partner relay reconnect checkpoint (no scoring impact)
+
+extension OneTouchPassingEngine: PartnerRelayCheckpointEmitting {
+    func partnerRelayCheckpointPayload(activityId: String, relaySessionId: String?) -> PartnerRelayCheckpointPayload {
+        let rep: Int
+        let phaseToken: String
+        switch phase {
+        case .waitingForNextRep:
+            rep = repResults.count
+            phaseToken = "waitingForNextRep"
+        case .blockComplete:
+            rep = plan.count
+            phaseToken = "blockComplete"
+        case .armedScanning(let r, _):
+            rep = r
+            phaseToken = "armedScanning"
+        case .showingCheck(let r):
+            rep = r
+            phaseToken = "showingCheck"
+        case .awaitingPassTrigger(let r):
+            rep = r
+            phaseToken = "awaitingPassTrigger"
+        case .cueRevealing(let r, _):
+            rep = r
+            phaseToken = "cueRevealing"
+        case .cueVisible(let r, _):
+            rep = r
+            phaseToken = "cueVisible"
+        case .awaitingExitLog(let r):
+            rep = r
+            phaseToken = "awaitingExitLog"
+        }
+        return PartnerRelayCheckpointPayload(
+            sourceRole: "display",
+            activityId: activityId,
+            repIndex: rep,
+            phaseToken: phaseToken,
+            relaySessionId: relaySessionId
+        )
+    }
+}

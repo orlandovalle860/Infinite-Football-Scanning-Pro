@@ -951,28 +951,80 @@ struct IntroOnboardingView: View {
     @AppStorage(AppRole.storageKey) private var appRoleRaw: String = AppRole.player.rawValue
     @State private var showHowItWorks = false
     @State private var showAccountSignIn = false
+    /// 0…2 = tap-through steps; main content when completed or after persistence.
+    @State private var introStep = 0
+    @AppStorage(hasCompletedPocketOnboardingStepsKey) private var hasCompletedPocketOnboardingSteps = false
+
+    private var showPocketOnboardingSteps: Bool {
+        !hasCompletedPocketOnboardingSteps && introStep < 3
+    }
 
     var body: some View {
         ScrollView {
             VStack(spacing: 24) {
                 Spacer(minLength: 32)
-                Text("Do you know what you'll do before the ball gets to you?")
-                    .font(.system(size: 26, weight: .bold, design: .rounded))
-                    .foregroundColor(.white)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 24)
-                Text("Elite players decide before the ball arrives.")
-                    .font(.title3)
-                    .foregroundColor(.white.opacity(0.9))
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 20)
-                    .padding(.top, 4)
-                Text("This quick 2-minute test measures how fast you recognize the best option before receiving the ball.")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.85))
-                    .multilineTextAlignment(.center)
+                if showPocketOnboardingSteps {
+                    Group {
+                        switch introStep {
+                        case 0:
+                            VStack(spacing: 20) {
+                                Text("Game moment")
+                                    .font(.system(size: 17, weight: .semibold, design: .rounded))
+                                    .foregroundColor(.white.opacity(0.72))
+                                    .textCase(.uppercase)
+                                    .tracking(0.6)
+                                    .multilineTextAlignment(.center)
+                                Text("Check into the pocket.")
+                                    .font(.system(size: 34, weight: .bold, design: .rounded))
+                                    .foregroundColor(.white)
+                                    .multilineTextAlignment(.center)
+                                    .minimumScaleFactor(0.85)
+                                    .lineSpacing(2)
+                                Text("That's your moment.")
+                                    .font(.system(size: 16, weight: .medium, design: .rounded))
+                                    .foregroundColor(.white.opacity(0.58))
+                                    .multilineTextAlignment(.center)
+                            }
+                            .padding(.horizontal, 24)
+                        case 1:
+                            Text("Know your next action before the ball arrives.")
+                                .font(.system(size: 24, weight: .semibold, design: .rounded))
+                                .foregroundColor(.white.opacity(0.96))
+                                .multilineTextAlignment(.center)
+                                .minimumScaleFactor(0.9)
+                                .padding(.horizontal, 24)
+                        case 2:
+                            Text("Coach: tap where the player goes.")
+                                .font(.system(size: 24, weight: .semibold, design: .rounded))
+                                .foregroundColor(.white.opacity(0.96))
+                                .multilineTextAlignment(.center)
+                                .minimumScaleFactor(0.9)
+                                .padding(.horizontal, 24)
+                        default:
+                            EmptyView()
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    Button {
+                        if introStep < 2 {
+                            introStep += 1
+                        } else {
+                            hasCompletedPocketOnboardingSteps = true
+                        }
+                    } label: {
+                        Text(introStep == 2 ? "Continue" : "Next")
+                            .font(.system(size: 18, weight: .semibold, design: .rounded))
+                            .foregroundColor(.black)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16)
+                            .background(Color.yellow)
+                            .cornerRadius(14)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(PlainButtonStyle())
                     .padding(.horizontal, 28)
                     .padding(.top, 8)
+                } else {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("You only need:")
                         .font(.subheadline.weight(.semibold))
@@ -992,8 +1044,8 @@ struct IntroOnboardingView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 32)
-                .padding(.top, 8)
-                Spacer(minLength: 24)
+                .padding(.bottom, 4)
+                Spacer(minLength: 16)
                 Button {
                     router.push(.twoMinuteRoleSelection)
                 } label: {
@@ -1066,6 +1118,7 @@ struct IntroOnboardingView: View {
                 }
                 .buttonStyle(PlainButtonStyle())
                 Spacer(minLength: 48)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -3854,7 +3907,7 @@ private struct HowItWorksView: View {
                     Text("It's about when you decide, not how you touch. Know your first decision before the ball reaches you.")
                         .foregroundColor(.primary)
 
-                    Text("Use the training activities to practice scanning and deciding early.")
+                    Text("Use the drills to practice pocket moments and deciding early.")
                         .foregroundColor(.primary)
                 }
                 .padding(24)

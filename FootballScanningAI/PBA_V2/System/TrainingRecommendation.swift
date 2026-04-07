@@ -140,21 +140,21 @@ enum TrainingRecommendation {
     /// Short coaching focus line for the recommended activity.
     static func focusLine(activity: ActivityKind, decisionSpeed: GlobalDecisionSpeed, bias: BiasType?) -> String {
         if decisionSpeed == .slow {
-            return "decide earlier before the ball arrives"
+            return "Win your pocket moment earlier."
         }
         if bias == .leftRight {
-            return "scan the whole field"
+            return "Use the whole field — don’t lean one way."
         }
         // backwardSafe not yet measured; when we have it, return "recognize forward options sooner" here.
         switch activity {
         case .awayFromPressure:
-            return "read danger and decide away early"
+            return "Win your pocket moment early under pressure."
         case .dribbleOrPass:
-            return "decide pass or dribble before the ball arrives"
+            return "Win your pocket moment early — then pass or dribble."
         case .oneTouchPassing:
-            return "decide before the ball arrives"
+            return "Win your pocket moment early — one-touch execution."
         case .twoMinuteTest:
-            return "establish your baseline decision speed"
+            return "Win your pocket moment early — baseline check."
         }
     }
 
@@ -193,26 +193,26 @@ enum TrainingRecommendation {
     ) -> (focus: String, coachTip: String) {
         switch activity {
         case .twoMinuteTest:
-            return ("Establish your baseline decision speed.", "Take the 2-Minute Test before starting training.")
+            return ("Win your pocket moment early — baseline check.", "Take the 2-Minute Test before starting training.")
         case .awayFromPressure:
             if case .firstTouchIssues = reason, let subtype = firstTouchSubtype(lastAFPSessionResult) {
                 switch subtype {
                 case .towardPressure:
-                    return ("Decide away from pressure earlier.", "You're turning into pressure too often.")
+                    return ("Win your pocket moment away from pressure.", "You're turning into pressure too often.")
                 case .hesitant:
-                    return ("Commit to your decision.", "You're hesitating between options.")
+                    return ("Commit in the pocket moment.", "You're hesitating between options.")
                 case .correcting:
-                    return ("Decide earlier before the ball arrives.", "You're correcting after receiving—commit to the picture earlier.")
+                    return ("Win your pocket moment earlier.", "You're correcting after receiving — commit earlier.")
                 }
             }
-            if bias == .leftRight { return ("Scan the whole field.", "You're favoring one side.") }
-            if speed == .slow { return ("Decide earlier before the ball arrives.", "Your decisions are arriving late.") }
-            return ("Decide away from pressure earlier.", "Keep scanning and deciding away from pressure.")
+            if bias == .leftRight { return ("Use the whole field.", "You're favoring one side.") }
+            if speed == .slow { return ("Win your pocket moment earlier.", "Your decisions are arriving late.") }
+            return ("Win your pocket moment early under pressure.", "Keep deciding away from pressure with a clear first action.")
         case .dribbleOrPass:
-            return ("Decide pass or dribble before the ball arrives.", "You're hesitating between options.")
+            return ("Win your pocket moment early — then pass or dribble.", "You're hesitating between options.")
         case .oneTouchPassing:
-            if speed == .slow { return ("Decide before the ball arrives.", "Your decisions are arriving late.") }
-            return ("Decide before the ball arrives.", "Train deciding before the ball arrives.")
+            if speed == .slow { return ("Win your pocket moment earlier.", "Your decisions are arriving late.") }
+            return ("Win your pocket moment early — one-touch execution.", "Train deciding before the ball arrives.")
         }
     }
 
@@ -245,7 +245,7 @@ enum TrainingRecommendation {
             if !hasCompletedInitialTest {
                 return TrainingRecommendationResult(
                     activity: .twoMinuteTest,
-                    focusLine: "Establish your baseline decision speed.",
+                    focusLine: "Win your pocket moment early — start with the 2-Minute Test.",
                     coachTip: "Take the 2-Minute Test before starting training.",
                     reason: "Take the 2-Minute Test first."
                 )

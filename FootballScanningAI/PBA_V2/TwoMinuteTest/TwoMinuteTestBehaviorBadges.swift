@@ -79,33 +79,33 @@ enum TwoMinuteBehaviorBadgeEvaluator {
     // MARK: - Copy for results UI
 
     static func forwardThinkerTitle() -> String { "Forward Thinker" }
-    static func forwardThinkerDescription() -> String { "You knew your next action early." }
+    static func forwardThinkerDescription() -> String { "Wins pocket moments early" }
     static func forwardThinkerWhy(evaluation: TwoMinuteBehaviorBadgeEvaluation) -> String {
         let n = evaluation.earlyCount + evaluation.idealCount
         let t = max(evaluation.total, 1)
-        return "You knew your next action early in \(n) out of \(t) reps (early + on-time decisions)."
+        return "You’re deciding early in your pocket moments in \(n) of \(t) reps (early + on-time)."
     }
 
     static func onTimeTitle() -> String { "On Time" }
-    static func onTimeDescription() -> String { "Your decisions matched the moment." }
+    static func onTimeDescription() -> String { "Meets the pocket, not ahead yet" }
     static func onTimeWhy(evaluation: TwoMinuteBehaviorBadgeEvaluation) -> String {
         let i = evaluation.idealCount
         let e = evaluation.earlyCount
         let l = evaluation.lateCount
         let t = max(evaluation.total, 1)
-        return "On-time was the largest group: \(i) of \(t) reps (early \(e), late \(l)) — matching “while the ball was traveling.”"
+        return "On-time led: \(i) of \(t) reps (early \(e), late \(l)) — you’re meeting the pocket, not ahead of it yet."
     }
 
     static func reactiveTitle() -> String { "Reactive" }
-    static func reactiveDescription() -> String { "You’re reacting instead of anticipating." }
+    static func reactiveDescription() -> String { "Arrives after the pocket moment" }
     static func reactiveWhy(evaluation: TwoMinuteBehaviorBadgeEvaluation) -> String {
         let l = evaluation.lateCount
         let t = max(evaluation.total, 1)
-        return "\(l) out of \(t) decisions happened too late (reactive / late window)."
+        return "\(l) of \(t) reps — you’re arriving after the pocket moment."
     }
 
     static func mappingFootnote() -> String {
-        "Timing groups use your decision window (same as above). Early ≈ as soon as the visual appeared; on-time ≈ while the ball was traveling; late ≈ right before receiving, as you received, or after first touch."
+        "Timing groups use your decision window. Early ≈ picture clear early; on-time ≈ while the ball travels; late ≈ at or after the receive."
     }
 
     // MARK: - Coaching results screen (primary title + insights + next focus)
@@ -123,45 +123,45 @@ enum TwoMinuteBehaviorBadgeEvaluator {
         let t = evaluation.total
         guard t > 0 else { return "No reps recorded for timing breakdown." }
         if evaluation.forwardThinkerUnlocked {
-            return "You knew your next action early in \(evaluation.earlyCount)/\(t) reps"
+            return "You’re deciding early in your pocket moments — \(evaluation.earlyCount)/\(t) early reps."
         }
         if evaluation.onTimeUnlocked {
-            return "On-time was your leading share: \(evaluation.idealCount)/\(t) reps."
+            return "You’re meeting the pocket: \(evaluation.idealCount)/\(t) reps on time."
         }
         if evaluation.reactiveTriggered {
-            return "Late decisions: \(evaluation.lateCount)/\(t) reps."
+            return "Late in the pocket: \(evaluation.lateCount)/\(t) reps."
         }
         return "Early \(evaluation.earlyCount), on-time \(evaluation.idealCount), late \(evaluation.lateCount) (of \(t))."
     }
 
     static func nextFocusBody(evaluation: TwoMinuteBehaviorBadgeEvaluation) -> String {
         if evaluation.reactiveTriggered {
-            return "Decide earlier — aim to know your action before the ball travels."
+            return "Train winning your pocket moment earlier — own the picture before the ball moves."
         }
         if evaluation.forwardThinkerUnlocked {
-            return "Own that early picture — next, stress-test it under chaos."
+            return "Keep attacking your pocket moments early — add chaos next."
         }
         if evaluation.onTimeUnlocked {
-            return "Stay in rhythm — add one cue: scan wide before the pass is released."
+            return "Train deciding before the pocket closes — get one beat ahead."
         }
-        return "Decide earlier — aim to know your action before the ball travels."
+        return "Train deciding before the pocket closes — commit one beat earlier."
     }
 
     /// At most two insight blocks for the coaching results screen.
     static func resultsInsightBlocks(evaluation: TwoMinuteBehaviorBadgeEvaluation) -> [(title: String, body: String)] {
         var blocks: [(String, String)] = []
         if evaluation.forwardThinkerUnlocked {
-            blocks.append(("Forward Thinker", "You consistently knew your next action before receiving."))
+            blocks.append(("Forward Thinker", "You’re deciding early in your pocket moments."))
         } else if evaluation.onTimeUnlocked {
-            blocks.append(("On Time", "Your decisions matched the moment while the ball was traveling."))
+            blocks.append(("On Time", "You’re meeting the pocket, but not ahead of it yet."))
         } else if evaluation.reactiveTriggered {
-            blocks.append(("Reactive tendency", "\(evaluation.lateCount) decisions came too late — under pressure, this leads to turnovers."))
+            blocks.append(("Reactive tendency", "You’re arriving after the pocket moment on \(evaluation.lateCount) reps."))
         } else if evaluation.total > 0 {
-            blocks.append(("Timing mix", "Keep sharpening when you commit relative to the pass."))
+            blocks.append(("Timing mix", "Your pocket moments are inconsistent — commit one beat earlier."))
         }
         let hasReactiveTitle = blocks.contains { $0.0 == "Reactive tendency" }
         if blocks.count < 2, evaluation.lateCount > 0, !hasReactiveTitle {
-            blocks.append(("Reactive tendency", "\(evaluation.lateCount) decisions came too late — under pressure, this leads to turnovers."))
+            blocks.append(("Reactive tendency", "You’re arriving after the pocket moment on \(evaluation.lateCount) reps."))
         }
         return Array(blocks.prefix(2))
     }

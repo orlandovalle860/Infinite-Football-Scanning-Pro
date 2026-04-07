@@ -57,6 +57,8 @@ struct TwoMinuteCriticalScanSessionView: View {
     /// Display-side relay (join code, WebSocket, coach paired). Used when `partnerTransportMode == .relayWebSocket`.
     /// Conforms to ``PartnerRelayDisplayControlling``; concrete type is ``PartnerRelayDisplaySession``.
     @ObservedObject private var partnerRelaySession = TrainingPartnerConnectionCoordinator.shared.relayDisplaySession
+    @State private var showPocketMomentToast = false
+    private static let pocketMomentToastShownKey = "hasShownPocketMomentToast"
 
     init(config: TwoMinuteTestConfig, mode: TrainingMode, settingsViewModel: SettingsViewModel, profileManager: UserProfileManager) {
         self.config = config
@@ -97,6 +99,29 @@ struct TwoMinuteCriticalScanSessionView: View {
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture { }
+            }
+            if mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket {
+                PartnerRelayLifecycleBannerOverlay()
+            }
+            if showPocketMomentToast {
+                VStack {
+                    Spacer()
+                    Text("That was your pocket moment.")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 12)
+                        .background(Color.white.opacity(0.18))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(Color.white.opacity(0.28), lineWidth: 1)
+                        )
+                        .cornerRadius(12)
+                        .padding(.bottom, 36)
+                }
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+                .animation(.easeInOut(duration: 0.25), value: showPocketMomentToast)
+                .allowsHitTesting(false)
             }
         }
     }
@@ -158,6 +183,15 @@ struct TwoMinuteCriticalScanSessionView: View {
                 scheduleTwoMinutePartnerSuspendForBackgroundNotification()
             }
             .onChange(of: connectionManager.connectedPeerName, handleConnectedPeerChange)
+            .onChange(of: engine.repLogs.count) { _, newCount in
+                guard newCount == 1,
+                      !UserDefaults.standard.bool(forKey: Self.pocketMomentToastShownKey) else { return }
+                UserDefaults.standard.set(true, forKey: Self.pocketMomentToastShownKey)
+                showPocketMomentToast = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
+                    showPocketMomentToast = false
+                }
+            }
             .preferredColorScheme(.dark)
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
@@ -172,6 +206,14 @@ struct TwoMinuteCriticalScanSessionView: View {
             .onChange(of: blockCoachDrillDuringSessionCountdown) { old, new in
                 guard mode.requiresPhoneDisplayRelay, old == true, new == false else { return }
                 flushPendingCoachNextRepAfterCountdown()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .relayForegroundReconnectCompleted)) { _ in
+                guard mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket else { return }
+                PartnerRelayCheckpointDisplaySend.sendIfReady(
+                    engine: engine,
+                    activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId,
+                    relay: TrainingPartnerConnectionCoordinator.shared.relayDisplaySession
+                )
             }
     }
 
@@ -222,6 +264,8 @@ struct TwoMinuteCriticalScanSessionView: View {
         case .sessionEnded:
             break
         case .partnerTrainingEnded:
+            break
+        case .partnerSessionCheckpoint:
             break
         }
     }

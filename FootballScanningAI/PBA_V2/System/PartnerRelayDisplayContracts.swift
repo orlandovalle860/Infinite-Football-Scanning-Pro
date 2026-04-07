@@ -53,6 +53,91 @@ enum PartnerRelayDisplayUI {
 
 // MARK: - Join code banner (DEBUG relay)
 
+// MARK: - Relay lifecycle (foreground reconnect)
+
+/// Top banner for partner WebSocket reconnect / resync (coach + display).
+struct PartnerRelayLifecycleBannerOverlay: View {
+    @ObservedObject private var coordinator = TrainingPartnerConnectionCoordinator.shared
+
+    var body: some View {
+        Group {
+            if case .hidden = coordinator.relayLifecycleBanner {
+                EmptyView()
+            } else {
+                VStack {
+                    bannerLabel
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .frame(maxWidth: .infinity)
+                        .background(bannerBackground)
+                        .cornerRadius(12)
+                        .padding(.horizontal, 12)
+                        .padding(.top, 10)
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .allowsHitTesting(false)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var bannerLabel: some View {
+        switch coordinator.relayLifecycleBanner {
+        case .hidden:
+            EmptyView()
+        case .reconnecting:
+            Text("Reconnecting…")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.white)
+                .multilineTextAlignment(.center)
+        case .restoringSession:
+            Text("Restoring session…")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.white)
+                .multilineTextAlignment(.center)
+        case .connectionRestored:
+            Text("Connection restored")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.white)
+                .multilineTextAlignment(.center)
+        case .sessionRestoredSoft:
+            Text("Session restored")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.white)
+                .multilineTextAlignment(.center)
+        case .sessionRequiresRejoin:
+            VStack(alignment: .center, spacing: 6) {
+                Text("Session ended — rejoin required")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                Text("Enter the join code from the display again, or restart partner training from the hub.")
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.9))
+                    .multilineTextAlignment(.center)
+            }
+        case .checkpointMismatch(let hint):
+            Text(hint)
+                .font(.caption.weight(.semibold))
+                .foregroundColor(.white)
+                .multilineTextAlignment(.center)
+        }
+    }
+
+    private var bannerBackground: Color {
+        switch coordinator.relayLifecycleBanner {
+        case .sessionRequiresRejoin, .checkpointMismatch:
+            return Color.red.opacity(0.42)
+        case .reconnecting, .restoringSession:
+            return Color.blue.opacity(0.5)
+        case .connectionRestored, .sessionRestoredSoft:
+            return Color.green.opacity(0.4)
+        case .hidden:
+            return .clear
+        }
+    }
+}
+
 /// Shows the relay join code for coach entry; hide when `joinCode` is nil.
 struct PartnerRelayJoinCodeBanner: View {
     let joinCode: String?

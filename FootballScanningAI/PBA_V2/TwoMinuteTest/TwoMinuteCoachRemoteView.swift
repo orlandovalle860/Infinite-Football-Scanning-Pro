@@ -41,6 +41,8 @@ struct TwoMinuteCoachRemoteView: View {
     @State private var currentRepIndex = 0
     @State private var volumeTriggerEnabled = true
     @State private var showVolumeEdgeWarning = false
+    /// Incremented when volume fires PASS so the primary PASS button flashes (same as touch).
+    @State private var passVolumeFlashSignal = 0
     @State private var coachRelayJoinCodeInput = ""
     @State private var coachRelayJoinError: String?
     @State private var coachRelayJoinBusy = false
@@ -84,6 +86,9 @@ struct TwoMinuteCoachRemoteView: View {
                 case .complete: completeView
                 }
             }
+            if Self.partnerTransportMode == .relayWebSocket {
+                PartnerRelayLifecycleBannerOverlay()
+            }
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -103,6 +108,12 @@ struct TwoMinuteCoachRemoteView: View {
                 volumeTriggerEnabled = true
                 popToCoachRemoteHubAfterDisplayDisconnect()
             }
+            PartnerRelayCheckpointCoachUI.handleDisplayCheckpointMessage(
+                msg,
+                relayWebSocket: Self.partnerTransportMode == .relayWebSocket,
+                expectedActivityId: ActivityKind.twoMinuteTest.sessionActivityActivityId,
+                coachSyncRepIndex: coachSyncRepIndexForCheckpoint()
+            )
         }
         .onAppear {
             didNavigateBackToCoachHubAfterDisplayDisconnect = false
@@ -232,13 +243,12 @@ struct TwoMinuteCoachRemoteView: View {
     }
 
     private func loggingView(repIndex: Int) -> some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 16) {
             Text("Rep \(repIndex + 1) of \(totalReps)")
                 .font(.caption)
                 .foregroundColor(.white.opacity(0.45))
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            // A. PASS — timing input (primary)
             VStack(alignment: .leading, spacing: 12) {
                 Text(CoachRemoteCopy.partnerCoachSetupLine)
                     .font(.caption2)
@@ -254,29 +264,9 @@ struct TwoMinuteCoachRemoteView: View {
                         .font(.caption2)
                         .foregroundColor(.orange.opacity(0.95))
                 }
-                CoachRemoteFeedbackTap(kind: .pass, clipCornerRadius: 16) {
-                    #if DEBUG
-                    let t = Date()
-                    DecisionSpeedDebugLog.logCoachPassSend(activity: .twoMinuteTest, repIndex: repIndex, embeddedTimestamp: t)
-                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: t)
-                    #else
-                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
-                    #endif
-                } label: {
-                    Text("PASS")
-                        .font(.system(size: 30, weight: .bold, design: .rounded))
-                        .foregroundColor(.black)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 26)
-                        .background(Color.yellow)
-                        .cornerRadius(16)
-                }
-                Text(CoachRemoteCopy.volumePassHint)
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.38))
             }
 
-            // B. Player decision — direction (secondary)
+            // Player decision — direction (secondary, above thumb PASS)
             VStack(alignment: .leading, spacing: 12) {
                 Text(CoachRemoteCopy.coachFirstDecisionLoggingLine)
                     .font(.caption)
@@ -293,9 +283,25 @@ struct TwoMinuteCoachRemoteView: View {
                 directionPad
             }
 
-            Spacer(minLength: 0)
+            Spacer(minLength: 12)
+
+            // Primary PASS — bottom-centered, shared trigger path with volume
+            CoachRemotePassPrimaryButton(
+                activity: ActivityKind.twoMinuteTest.rawValue,
+                repIndex: repIndex,
+                send: {
+                    #if DEBUG
+                    let t = Date()
+                    DecisionSpeedDebugLog.logCoachPassSend(activity: .twoMinuteTest, repIndex: repIndex, embeddedTimestamp: t)
+                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: t)
+                    #else
+                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
+                    #endif
+                },
+                volumeFlashSignal: $passVolumeFlashSignal
+            )
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var directionPad: some View {
@@ -477,6 +483,7 @@ struct TwoMinuteCoachRemoteView: View {
             print("[RelayWS-DEBUG][Coach] WebSocket URL (with query)=\(wsURL.absoluteString)")
             #endif
 
+            TrainingPartnerConnectionCoordinator.shared.recordRelaySessionId(joined.sessionId)
             let config = WebSocketSessionConfig(url: wsURL, sessionId: joined.sessionId, authToken: joined.coachToken)
             let transport = WebSocketRemoteTransport(config: config)
             let displayPeerJoinedBinding = $coachRelayDisplayPeerJoined
@@ -575,7 +582,12 @@ struct TwoMinuteCoachRemoteView: View {
             enabled: volumeTriggerEnabled,
             repIndex: { if case .logging(let r) = state { return r }; return nil },
             onTrigger: {
-                if case .logging(let repIndex) = state {
+                guard case .logging(let repIndex) = state else { return }
+                let sent = CoachRemotePassTrigger.perform(
+                    source: .volume,
+                    activity: ActivityKind.twoMinuteTest.rawValue,
+                    repIndex: repIndex
+                ) {
                     #if DEBUG
                     let t = Date()
                     DecisionSpeedDebugLog.logCoachPassSend(activity: .twoMinuteTest, repIndex: repIndex, embeddedTimestamp: t)
@@ -583,6 +595,9 @@ struct TwoMinuteCoachRemoteView: View {
                     #else
                     remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
                     #endif
+                }
+                if sent {
+                    passVolumeFlashSignal += 1
                 }
             },
             onVolumeEdgeWarningChange: { showVolumeEdgeWarning = $0 }
@@ -645,6 +660,14 @@ struct TwoMinuteCoachRemoteView: View {
             #endif
             currentRepIndex = repIndex + 1
             state = currentRepIndex >= totalReps ? .complete : .ready
+        }
+    }
+
+    private func coachSyncRepIndexForCheckpoint() -> Int {
+        switch state {
+        case .ready: return currentRepIndex
+        case .logging(let r): return r
+        case .complete: return totalReps
         }
     }
 

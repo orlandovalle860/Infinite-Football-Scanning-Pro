@@ -72,6 +72,15 @@ struct TwoMinuteTestResultsView: View {
         return "Connect a full session with rep logs to see early / on-time / late breakdown."
     }
 
+    /// Speed aggregate (fast/medium/slow rep counts) — game-real pocket line under the profile title.
+    private var pocketSpeedInterpretation: String {
+        UniversalBlockSummaryHeadline.pocketMomentInterpretationLine(
+            fast: result.fastCount,
+            medium: result.mediumCount,
+            slow: result.slowCount
+        )
+    }
+
     private var earlyCount: Int { behaviorBadgeEvaluation?.earlyCount ?? 0 }
     private var idealCount: Int { behaviorBadgeEvaluation?.idealCount ?? 0 }
     private var lateCount: Int { behaviorBadgeEvaluation?.lateCount ?? 0 }
@@ -88,7 +97,7 @@ struct TwoMinuteTestResultsView: View {
         if let ev = behaviorBadgeEvaluation {
             return TwoMinuteBehaviorBadgeEvaluator.nextFocusBody(evaluation: ev)
         }
-        return "Decide earlier — aim to know your action before the ball travels."
+        return "Train deciding before the pocket closes — connect a session for full timing insights."
     }
 
     var body: some View {
@@ -281,6 +290,12 @@ struct TwoMinuteTestResultsView: View {
                 .font(.system(size: 32, weight: .bold))
                 .foregroundColor(.white)
                 .multilineTextAlignment(.center)
+            Text(pocketSpeedInterpretation)
+                .font(.headline)
+                .fontWeight(.semibold)
+                .foregroundColor(Color.yellow.opacity(0.95))
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
             Text(headerSubtext)
                 .font(.subheadline)
                 .foregroundColor(.secondary)

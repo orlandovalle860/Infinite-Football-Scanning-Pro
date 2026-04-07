@@ -65,6 +65,9 @@ struct DribbleOrPassDisplaySessionView: View {
                     .zIndex(2)
             }
             waitingForCoachRelayOverlay
+            if mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket {
+                PartnerRelayLifecycleBannerOverlay()
+            }
         }
         .contentShape(Rectangle())
         .onTapGesture {
@@ -160,6 +163,8 @@ struct DribbleOrPassDisplaySessionView: View {
                     dopRelayDisplayLog("partnerTrainingEnded received (coordinator also tears down relay)")
                 }
                 #endif
+                break
+            case .partnerSessionCheckpoint:
                 break
             }
         }
@@ -275,6 +280,14 @@ struct DribbleOrPassDisplaySessionView: View {
             Text("Your current block will not be saved.")
         }
         .sessionCountdown(waitForPartnerReady: mode.requiresPhoneDisplayRelay, partnerReady: partnerReadyForCountdown, suppressCoachMessagesDuringCountdown: $blockCoachDrillDuringSessionCountdown)
+        .onReceive(NotificationCenter.default.publisher(for: .relayForegroundReconnectCompleted)) { _ in
+            guard mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket else { return }
+            PartnerRelayCheckpointDisplaySend.sendIfReady(
+                engine: engine,
+                activityId: ActivityKind.dribbleOrPass.sessionActivityActivityId,
+                relay: TrainingPartnerConnectionCoordinator.shared.relayDisplaySession
+            )
+        }
         .onChange(of: blockCoachDrillDuringSessionCountdown) { old, new in
             guard mode.requiresPhoneDisplayRelay, old == true, new == false else { return }
             flushPendingCoachNextRepAfterCountdown()

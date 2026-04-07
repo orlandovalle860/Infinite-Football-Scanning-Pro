@@ -34,32 +34,32 @@ enum TrainingRecommendationModel {
         case ft:
             return TrainingRecommendationContent(
                 logKey: "forwardThinker",
-                primaryTitle: "Challenge your speed",
-                primaryBody: "Add pressure. Reduce time. Make earlier decisions under stress.",
+                primaryTitle: "Keep attacking your pocket moments early.",
+                primaryBody: "Add pressure. Reduce time. Decide earlier under stress.",
                 activities: [
                     (title: "2-Minute Test", detail: "Repeat and aim for earlier decisions."),
-                    (title: "Playing Away From Pressure", detail: "Focus on scanning and playing away from pressure.")
+                    (title: "Playing Away From Pressure", detail: "Play away from pressure with a clear first action.")
                 ],
                 goalText: "Aim for 8 out of 10 early decisions."
             )
         case ot:
             return TrainingRecommendationContent(
                 logKey: "onTime",
-                primaryTitle: "Decide earlier",
-                primaryBody: "Try to know your action before the ball travels.",
+                primaryTitle: "Train deciding before the pocket closes.",
+                primaryBody: "Know your next action before the ball reaches you.",
                 activities: [
                     (title: "2-Minute Test", detail: "Repeat and aim for earlier decisions."),
-                    (title: "Playing Away From Pressure", detail: "Focus on scanning and playing away from pressure.")
+                    (title: "Playing Away From Pressure", detail: "Play away from pressure with a clear first action.")
                 ],
                 goalText: "Aim for on-time to lead 6+ of 10 reps."
             )
         case re:
             return TrainingRecommendationContent(
                 logKey: "reactive",
-                primaryTitle: "Slow the moment down",
-                primaryBody: "Focus on seeing the picture before the ball arrives.",
+                primaryTitle: "Train winning your pocket moment earlier.",
+                primaryBody: "See the picture before the ball arrives.",
                 activities: [
-                    (title: "Playing Away From Pressure", detail: "Focus on scanning and playing away from pressure."),
+                    (title: "Playing Away From Pressure", detail: "Play away from pressure with a clear first action."),
                     (title: "2-Minute Test", detail: "Repeat and aim for earlier decisions.")
                 ],
                 goalText: "Aim for under 5 late decisions in your next 10 reps."
@@ -67,11 +67,11 @@ enum TrainingRecommendationModel {
         default:
             return TrainingRecommendationContent(
                 logKey: "mixedOrProfile",
-                primaryTitle: "Decide earlier",
-                primaryBody: "Try to know your action before the ball travels.",
+                primaryTitle: "Train deciding before the pocket closes.",
+                primaryBody: "Know your next action before the ball reaches you.",
                 activities: [
                     (title: "2-Minute Test", detail: "Repeat and aim for earlier decisions."),
-                    (title: "Playing Away From Pressure", detail: "Focus on scanning and playing away from pressure.")
+                    (title: "Playing Away From Pressure", detail: "Play away from pressure with a clear first action.")
                 ],
                 goalText: "Aim for 8 out of 10 early decisions."
             )

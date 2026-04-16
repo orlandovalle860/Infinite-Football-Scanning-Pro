@@ -15,7 +15,6 @@ struct AwayFromPressureSetupView: View {
     @EnvironmentObject private var playerStore: PlayerStore
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
     @EnvironmentObject private var router: AppRouter
-    @State private var difficulty: TestDifficulty = TestDifficulty.loadFromUserDefaults()
     @State private var showInstructions = false
     @State private var navigateToSession = false
 
@@ -23,11 +22,15 @@ struct AwayFromPressureSetupView: View {
         GuidedCurriculumEngine.currentProgress(playerId: playerStore.selectedPlayerId).loop
     }
 
+    private var adaptivePlan: ActivityAdaptivePlan {
+        makeActivityAdaptivePlan(from: profileManager.recentTrainSessions(limit: 3))
+    }
+
     var body: some View {
         VStack(spacing: 18) {
             Spacer(minLength: 20)
 
-            Text("Set up")
+            Text("Playing Away From Pressure")
                 .font(.system(size: 32, weight: .bold, design: .rounded))
                 .multilineTextAlignment(.center)
                 .foregroundColor(.white)
@@ -41,40 +44,35 @@ struct AwayFromPressureSetupView: View {
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.9))
                 if mode == .partner {
-                    Text("• Coach stands about 10 yards in front with the ball.")
+                    Text("• Coach stands about 12 yards in front with the ball.")
                         .font(.subheadline)
                         .foregroundColor(.white.opacity(0.9))
                 }
             }
             .padding(.top, 4)
 
-            Text("Difficulty")
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.8))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 28)
-                .padding(.top, 12)
-            Picker("Difficulty", selection: $difficulty) {
-                Text("Beginner").tag(TestDifficulty.beginner)
-                Text("Standard").tag(TestDifficulty.standard)
-                Text("Advanced").tag(TestDifficulty.advanced)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Level: \(adaptivePlan.level.rawValue)")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                Text("Focus: \(adaptivePlan.focusCue)")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.78))
+                Text("Constraints: \(adaptivePlan.constraintsSummary)")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.66))
             }
-            .pickerStyle(.segmented)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 28)
-            .onChange(of: difficulty) { _, newValue in
-                newValue.saveToUserDefaults()
-            }
+            .padding(.top, 2)
 
             Spacer(minLength: 8)
 
             Button {
-                if ActivityInstructionContent.shouldShowInstructions(for: .awayFromPressure) {
-                    showInstructions = true
-                } else {
-                    navigateToSession = true
-                }
+                profileManager.pendingLevelDifficulty = adaptivePlan.modifiers
+                navigateToSession = true
             } label: {
-                Text("Continue")
+                Text("Begin")
                     .font(.system(size: 20, weight: .bold, design: .rounded))
                     .foregroundColor(.black)
                     .frame(maxWidth: .infinity)
@@ -85,6 +83,13 @@ struct AwayFromPressureSetupView: View {
             }
             .buttonStyle(PlainButtonStyle())
             .padding(.horizontal, 28)
+
+            Button("View Instructions") {
+                showInstructions = true
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundColor(.white.opacity(0.82))
+            .buttonStyle(.plain)
 
             Spacer()
         }
@@ -106,6 +111,7 @@ struct AwayFromPressureSetupView: View {
         .pbaHomeToolbar(router: router)
         .onAppear {
             print("[SetupScreen AFP] onAppear, router path count = \(router.pathCount)")
+            profileManager.pendingLevelDifficulty = adaptivePlan.modifiers
         }
         .navigationDestination(isPresented: $showInstructions) {
             ActivityInstructionView(activity: .awayFromPressure, trainingMode: mode) {
@@ -114,11 +120,19 @@ struct AwayFromPressureSetupView: View {
             }
         }
         .navigationDestination(isPresented: $navigateToSession) {
-            AwayFromPressureDisplaySessionView(config: AwayFromPressureConfig.config(for: difficulty, loopLevel: loopLevel), mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+            AwayFromPressureDisplaySessionView(
+                config: AwayFromPressureConfig.config(for: adaptivePlan.recommendedDifficulty, loopLevel: loopLevel, levelModifiers: profileManager.pendingLevelDifficulty),
+                mode: mode,
+                settingsViewModel: settingsViewModel,
+                profileManager: profileManager
+            )
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
+                .onAppear {
+                    profileManager.pendingLevelDifficulty = nil
+                }
         }
     }
 }

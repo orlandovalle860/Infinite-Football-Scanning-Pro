@@ -22,6 +22,7 @@ final class AwayFromPressureEngine: ObservableObject {
     @Published private(set) var repLogs: [AwayFromPressureRepLog] = []
     @Published var instructionTitle: String = ""
     @Published var instructionSubtitle: String = ""
+    @Published private(set) var repDecisions: [RepDecision] = []
 
     private let config: AwayFromPressureConfig
     private let trainingMode: TrainingMode
@@ -35,6 +36,12 @@ final class AwayFromPressureEngine: ObservableObject {
     private var markerHiddenAtForCurrentRep: Date?
     private var scanDelayTimer: Timer?
     private var markerHideTimer: Timer?
+    /// [CueTiming-Debug] anchor for wedge visibility window (PASS → marker hide).
+    private var cueTimingDebugVisibleAt: Date?
+    private var passTriggeredByRep: [Int: Date] = [:]
+    private var directionLoggedByRep: [Int: Date] = [:]
+    private var adaptiveState = AdaptiveState()
+    private var sessionAdaptiveDifficulty = DifficultySettings(cueDuration: 1.0, travelTime: 1.0, thresholdAdjustment: 0.0)
 
     init(config: AwayFromPressureConfig, trainingMode: TrainingMode = .solo, plan: [AwayFromPressureRepPlan] = AwayFromPressureRepPlanner.generatePlan()) {
         self.config = config
@@ -57,7 +64,7 @@ final class AwayFromPressureEngine: ObservableObject {
             if trainingMode == .partner {
                 instructionSubtitle = "\(ActivityInstructionData.partnerPlayerBeepLine)\n\(ActivityInstructionData.timingLine)"
             } else {
-                instructionSubtitle = "Be ready to turn away from pressure."
+                instructionSubtitle = "Scan for pressure.\nIdentify the safest space."
             }
         case .beepedAwaitingPass:
             instructionTitle = "Ball is coming"
@@ -65,11 +72,11 @@ final class AwayFromPressureEngine: ObservableObject {
                 ? ActivityInstructionData.partnerCoachPassTimingLine
                 : "Coach: press PASS at the strike."
         case .markerVisible:
-            instructionTitle = "Decide away from pressure"
-            instructionSubtitle = "Show your first decision opposite the red — into space."
+            instructionTitle = "Swipe now"
+            instructionSubtitle = "Swipe away from pressure as the ball arrives."
         case .awaitingExitLog:
-            instructionTitle = "Waiting for coach"
-            instructionSubtitle = "Coach logs your first decision (opposite the red = correct)."
+            instructionTitle = "Great anticipation"
+            instructionSubtitle = "Coach logs your swipe direction (opposite the red = correct)."
         case .blockComplete:
             instructionTitle = "Block complete."
             instructionSubtitle = ""
@@ -89,6 +96,8 @@ final class AwayFromPressureEngine: ObservableObject {
 
         let p = plan[repIndex]
         passTriggeredAt = nil
+        passTriggeredByRep[repIndex] = nil
+        directionLoggedByRep[repIndex] = nil
         startedAtForCurrentRep = Date()
         markerShownAtForCurrentRep = nil
         markerHiddenAtForCurrentRep = nil
@@ -127,13 +136,21 @@ final class AwayFromPressureEngine: ObservableObject {
         guard case .beepedAwaitingPass(let rIdx, let pressureGate) = phase, rIdx == repIndex else { return }
 
         passTriggeredAt = timestamp
+        passTriggeredByRep[repIndex] = timestamp
         markerShownAtForCurrentRep = timestamp
         #if DEBUG
         DecisionSpeedDebugLog.logEngineRepLive(activity: .awayFromPressure, repIndex: repIndex, passEmbeddedStored: timestamp)
         #endif
         markerHideTimer?.invalidate()
-        let duration = config.markerVisibleSeconds
+        let duration = config.markerVisibleSeconds * sessionAdaptiveDifficulty.travelTime
         let endsAt = Date().addingTimeInterval(duration)
+        cueTimingDebugVisibleAt = Date()
+        CueTimingDebugLog.logVisible(
+            activity: "awayFromPressure",
+            repIndex: repIndex,
+            configuredWindowSeconds: duration,
+            note: "PASS→markerVisible wedge reveal anim 0.22s in DangerZoneOverlay separate from timer"
+        )
         phase = .markerVisible(repIndex: repIndex, pressureGate: pressureGate, endsAt: endsAt)
         updateInstructions()
 
@@ -156,6 +173,14 @@ final class AwayFromPressureEngine: ObservableObject {
         case .markerVisible(let ri, _, _):
             rIdx = ri
             if ri != repIndex { return nil }
+            CueTimingDebugLog.logHidden(
+                activity: "awayFromPressure",
+                repIndex: repIndex,
+                visibleAt: cueTimingDebugVisibleAt,
+                hiddenAt: Date(),
+                reason: "exit_logged_before_timer"
+            )
+            cueTimingDebugVisibleAt = nil
             markerHideTimer?.invalidate()
             markerHideTimer = nil
             markerHiddenAtForCurrentRep = Date()
@@ -189,6 +214,21 @@ final class AwayFromPressureEngine: ObservableObject {
         #endif
 
         let p = plan[repIndex]
+        let expectedArrivalTime = triggerTime.addingTimeInterval(travelTimeSeconds)
+        let decisionWindowSeconds = expectedArrivalTime.timeIntervalSince(timestamp)
+        let score = adaptiveSessionScore(including: decisionWindowSeconds, isCorrect: gate == p.pressureGate.opposite)
+        directionLoggedByRep[repIndex] = timestamp
+        repDecisions.append(
+            RepDecision(
+                repIndex: repIndex,
+                direction: gate,
+                isCorrect: gate == p.pressureGate.opposite,
+                decisionWindowSeconds: decisionWindowSeconds,
+                bucket: Self.bucket(for: decisionWindowSeconds, score: score)
+            )
+        )
+        applyAdaptiveAfterRep(wasCorrect: gate == p.pressureGate.opposite, decisionWindow: decisionWindowSeconds)
+        print("[DecisionWindowDebug] repIndex=\(repIndex) passTS=\(triggerTime.timeIntervalSince1970) expectedArrivalTS=\(expectedArrivalTime.timeIntervalSince1970) decisionTS=\(timestamp.timeIntervalSince1970) decisionWindowSeconds=\(decisionWindowSeconds)")
         let startedAt = startedAtForCurrentRep ?? Date()
         let markerShownAt = markerShownAtForCurrentRep ?? startedAt
         let markerHiddenAt = markerHiddenAtForCurrentRep ?? Date()
@@ -228,6 +268,14 @@ final class AwayFromPressureEngine: ObservableObject {
         case .markerVisible(let ri, _, _):
             rIdx = ri
             if ri != repIndex { return nil }
+            CueTimingDebugLog.logHidden(
+                activity: "awayFromPressure",
+                repIndex: repIndex,
+                visibleAt: cueTimingDebugVisibleAt,
+                hiddenAt: Date(),
+                reason: "incorrect_before_timer"
+            )
+            cueTimingDebugVisibleAt = nil
             markerHideTimer?.invalidate()
             markerHideTimer = nil
             markerHiddenAtForCurrentRep = Date()
@@ -260,6 +308,9 @@ final class AwayFromPressureEngine: ObservableObject {
         #endif
 
         let p = plan[repIndex]
+        let expectedArrivalTimeIncorrect = triggerTime.addingTimeInterval(travelTimeSeconds)
+        let decisionWindowSecondsIncorrect = expectedArrivalTimeIncorrect.timeIntervalSince(timestamp)
+        applyAdaptiveAfterRep(wasCorrect: false, decisionWindow: decisionWindowSecondsIncorrect)
         let startedAt = startedAtForCurrentRep ?? Date()
         let markerShownAt = markerShownAtForCurrentRep ?? startedAt
         let markerHiddenAt = markerHiddenAtForCurrentRep ?? Date()
@@ -294,6 +345,14 @@ final class AwayFromPressureEngine: ObservableObject {
     }
 
     private func transitionToAwaitingExitLog(repIndex: Int, pressureGate: Gate) {
+        CueTimingDebugLog.logHidden(
+            activity: "awayFromPressure",
+            repIndex: repIndex,
+            visibleAt: cueTimingDebugVisibleAt,
+            hiddenAt: Date(),
+            reason: "marker_hide_timer"
+        )
+        cueTimingDebugVisibleAt = nil
         markerHideTimer?.invalidate()
         markerHideTimer = nil
         markerHiddenAtForCurrentRep = Date()
@@ -315,6 +374,71 @@ final class AwayFromPressureEngine: ObservableObject {
 
     deinit {
         cancelTimers()
+    }
+
+    func decisionSummary() -> (
+        total: Int,
+        correct: Int,
+        accuracy: Double,
+        avgTime: Double,
+        fastCount: Int,
+        mediumCount: Int,
+        slowCount: Int
+    ) {
+        let total = repDecisions.count
+        let correct = repDecisions.filter(\.isCorrect).count
+        let avgTime = total > 0 ? repDecisions.map(\.decisionWindowSeconds).reduce(0, +) / Double(total) : 0
+        let accuracy = total > 0 ? Double(correct) / Double(total) : 0
+        let fastCount = repDecisions.filter { $0.bucket == .fast }.count
+        let mediumCount = repDecisions.filter { $0.bucket == .medium }.count
+        let slowCount = repDecisions.filter { $0.bucket == .slow }.count
+        return (total, correct, accuracy, avgTime, fastCount, mediumCount, slowCount)
+    }
+
+    func computeDecisionScore() -> (score: Int, accuracy: Double, avgTime: Double) {
+        let summary = decisionSummary()
+        guard summary.total > 0 else { return (0, 0, 0) }
+
+        let accuracyComponent = summary.accuracy
+        let summaryScoreBaseline = Int((accuracyComponent * 100).rounded())
+        let speedValues = repDecisions.map { Self.speedScoreValue(for: $0.decisionWindowSeconds, score: summaryScoreBaseline) }
+        let avgSpeedScore = speedValues.reduce(0, +) / Double(speedValues.count)
+        let weighted = (accuracyComponent * 0.70) + (avgSpeedScore * 0.30)
+        let score = Int((weighted * 100).rounded())
+        return (score, summary.accuracy, summary.avgTime)
+    }
+
+    private var travelTimeSeconds: Double {
+        CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds
+            ?? config.difficulty.passTempo.expectedBallTravelTime(distanceMeters: 11.0)
+    }
+
+    private func applyAdaptiveAfterRep(wasCorrect: Bool, decisionWindow: Double) {
+        updateAdaptiveState(state: &adaptiveState, wasCorrect: wasCorrect, decisionWindow: decisionWindow)
+        sessionAdaptiveDifficulty = adjustDifficulty(state: &adaptiveState, current: sessionAdaptiveDifficulty)
+    }
+
+    private func adaptiveSessionScore(including newWindow: Double, isCorrect: Bool) -> Int {
+        let existingWindows = repDecisions.map(\.decisionWindowSeconds)
+        let windows = existingWindows + [newWindow]
+        let existingCorrect = repDecisions.filter(\.isCorrect).count
+        let correct = existingCorrect + (isCorrect ? 1 : 0)
+        let total = windows.count
+        guard total > 0 else { return 70 }
+        let accuracy = Double(correct) / Double(total)
+        return DecisionTimingModel.decisionScore(accuracy: accuracy, windows: windows, activity: .awayFromPressure)
+    }
+
+    private static func bucket(for decisionWindowSeconds: Double, score: Int) -> RepDecisionBucket {
+        DecisionTimingModel.speedBucket(forDecisionWindow: decisionWindowSeconds, activity: .awayFromPressure, score: score)
+    }
+
+    private static func speedScoreValue(for decisionWindowSeconds: Double, score: Int) -> Double {
+        switch bucket(for: decisionWindowSeconds, score: score) {
+        case .fast: return 1.0
+        case .medium: return 0.85
+        case .slow: return 0.4
+        }
     }
 }
 

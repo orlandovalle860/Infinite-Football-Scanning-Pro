@@ -39,8 +39,7 @@ enum TwoMinuteBehaviorBadgeEvaluator {
 
     /// Classify one rep using the same trigger→exit interval as ``TwoMinuteTestResult.from(logs:)``.
     static func timingCategory(for log: RepLog, difficulty: TestDifficulty) -> TwoMinutePerceptionTimingCategory {
-        let raw = log.exitLoggedAt.timeIntervalSince(log.passTriggeredAt ?? log.infoShownAt)
-        let w = DecisionTimingModel.decisionWindow(rawRepInterval: raw, activity: .twoMinuteTest, difficulty: difficulty)
+        let w = log.decisionWindowSeconds(activity: .twoMinuteTest, difficulty: difficulty) ?? 0
         if w >= earlyBandMinWindow { return .early }
         if w >= idealBandMinWindow { return .ideal }
         return .late

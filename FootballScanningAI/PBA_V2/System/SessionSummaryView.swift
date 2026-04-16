@@ -29,7 +29,7 @@ private func biasLabel(_ gate: Gate?) -> String {
     }
 }
 
-struct SessionSummaryView: View {
+struct SessionSummaryScreenView: View {
     let session: SessionResult
     let playerName: String
     /// When true, show "New Personal Best" badge (set when this session just beat the previous best).
@@ -51,11 +51,188 @@ struct SessionSummaryView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var showShare = false
+    @State private var showPlayerReport = false
     @State private var shareReportItems: [Any] = []
-    @State private var navigateToTrainAnother = false
+    @State private var navigateToRoleSelection = false
+    @State private var roleSelectionTarget: ActivityKind = .awayFromPressure
     @State private var navigateToProgress = false
     @State private var animatedXPEarned: Int = 0
     @State private var showBadgeUnlockAnimation = false
+    @State private var almostTherePrompt: SessionAlmostTherePrompt?
+    @State private var showAlmostTherePrompt = false
+
+    typealias DecisionSummaryTuple = (
+        total: Int,
+        correct: Int,
+        accuracy: Double,
+        avgTime: Double,
+        fastCount: Int,
+        mediumCount: Int,
+        slowCount: Int
+    )
+
+    /// Recommendation from the last scored block that matched progression stage (same session only).
+    private var coachNextRecommendation: StageSessionRecommendation? {
+        guard let p = profileManager.currentProfile, p.id == session.playerID,
+              let r = p.lastStageRecommendation, r.tiedSessionId == session.id else { return nil }
+        return r
+    }
+
+    private var playerSessionFeedback: PlayerFeedback {
+        PlayerFeedbackEngine.feedback(from: session)
+    }
+
+    private var playerRecommendation: PlayerRecommendation {
+        let accuracy = session.totalReps > 0 ? Double(session.correctCount) / Double(session.totalReps) : 0
+        let decisionWindow = session.avgDecisionWindowSeconds ?? 0
+        return generateRecommendation(
+            score: decisionScoreValue,
+            accuracy: accuracy,
+            decisionWindow: decisionWindow,
+            recentScores: recentRecommendationScores
+        )
+    }
+
+    private var levelFeedbackVisual: FeedbackVisual {
+        switch playerRecommendation.level {
+        case .elite:
+            return FeedbackVisual(icon: "bolt.fill", color: .green, title: "Elite")
+        case .advancing:
+            return FeedbackVisual(icon: "arrow.up.circle.fill", color: .blue, title: "Advancing")
+        case .developing:
+            return FeedbackVisual(icon: "chart.line.uptrend.xyaxis.circle.fill", color: .orange, title: "Developing")
+        case .reactive:
+            return FeedbackVisual(icon: "exclamationmark.triangle.fill", color: .red, title: "Reactive")
+        }
+    }
+
+    private var recentRecommendationScores: [Int] {
+        let sessions = profileManager.profile(id: session.playerID)?.sessionResults ?? []
+        return sessions.sorted(by: { (lhs: SessionResult, rhs: SessionResult) in
+            lhs.date < rhs.date
+        }).map { result in
+            if let score = result.decisionTotalScore {
+                return max(0, min(100, Int(score.rounded())))
+            }
+            return result.estimatedDecisionSpeedScore ?? 0
+        }
+    }
+
+    /// Last five sessions for this player (oldest → newest), for progression UI.
+    private var recentProgressionSessions: [SessionPerformance] {
+        let pool = profileManager.profile(id: session.playerID)?.sessionResults ?? []
+        return getRecentSessions(from: pool, limit: 5)
+    }
+
+    private var progressionScoreTrend: TrendDirection {
+        calculateTrend(values: recentProgressionSessions.map { Double($0.score) })
+    }
+
+    private var progressionWindowTrend: TrendDirection {
+        calculateTrend(values: recentProgressionSessions.map(\.avgDecisionWindow))
+    }
+
+    private var progressionAccuracyTrend: TrendDirection {
+        calculateTrend(values: recentProgressionSessions.map(\.accuracy))
+    }
+
+    private var progressionInsight: String {
+        generateInsight(
+            scoreTrend: progressionScoreTrend,
+            windowTrend: progressionWindowTrend,
+            accuracyTrend: progressionAccuracyTrend
+        )
+    }
+
+    /// All stored sessions as performance snapshots; `generateProgression` / `getAverages` use the last 5 by date.
+    private var sessionPerformancesForLevel: [SessionPerformance] {
+        profileManager.profile(id: session.playerID)?.sessionResults.map(\.sessionPerformance) ?? []
+    }
+
+    private var summaryPlayerProgression: PlayerProgression {
+        generateProgression(sessions: sessionPerformancesForLevel)
+    }
+
+    private var levelTrainingRecommendation: LevelRecommendation {
+        getLevelRecommendation(level: summaryPlayerProgression.currentLevel)
+    }
+
+    private var levelTrainingDifficulty: DifficultySettings {
+        getDifficulty(for: summaryPlayerProgression.currentLevel)
+    }
+
+    private var sessionPlayerReport: PlayerReport {
+        generatePlayerReport(
+            playerName: playerName,
+            progression: summaryPlayerProgression,
+            score: decisionScoreValue,
+            accuracy: coreSummary.accuracy,
+            decisionWindow: session.avgDecisionWindowSeconds ?? 0,
+            trendWindow: progressionWindowTrend,
+            trendAccuracy: progressionAccuracyTrend,
+            recommendation: levelTrainingRecommendation
+        )
+    }
+
+    init(
+        session: SessionResult,
+        playerName: String,
+        profileManager: UserProfileManager,
+        settingsViewModel: SettingsViewModel
+    ) {
+        self.session = session
+        self.playerName = playerName
+        self.profileManager = profileManager
+        self.settingsViewModel = settingsViewModel
+    }
+
+    init(
+        session: SessionResult,
+        playerName: String,
+        isNewPersonalBest: Bool = false,
+        newPersonalBests: [NewPersonalBest] = [],
+        xpEarned: Int = 0,
+        newlyUnlockedBadges: [PlayerBadge] = [],
+        onBackToHome: (() -> Void)? = nil,
+        profileManager: UserProfileManager,
+        settingsViewModel: SettingsViewModel
+    ) {
+        self.session = session
+        self.playerName = playerName
+        self.isNewPersonalBest = isNewPersonalBest
+        self.newPersonalBests = newPersonalBests
+        self.xpEarned = xpEarned
+        self.newlyUnlockedBadges = newlyUnlockedBadges
+        self.onBackToHome = onBackToHome
+        self.profileManager = profileManager
+        self.settingsViewModel = settingsViewModel
+    }
+
+    init(
+        summary: DecisionSummaryTuple,
+        activityType: ActivityKind = .oneTouchPassing,
+        playerName: String = "Player",
+        directionCounts: [Gate: Int] = [:],
+        profileManager: UserProfileManager = UserProfileManager(),
+        settingsViewModel: SettingsViewModel = SettingsViewModel()
+    ) {
+        self.session = SessionResult(
+            playerID: profileManager.currentProfile?.id ?? UUID(),
+            activityType: activityType,
+            correctCount: summary.correct,
+            totalReps: summary.total,
+            speedCounts: SessionSpeedCounts(
+                fast: summary.fastCount,
+                medium: summary.mediumCount,
+                slow: summary.slowCount
+            ),
+            avgDecisionTime: summary.avgTime,
+            directionCounts: directionCounts
+        )
+        self.playerName = playerName
+        self.profileManager = profileManager
+        self.settingsViewModel = settingsViewModel
+    }
 
     private var activityName: String { activityDisplayName(session.activityType) }
     private var avgReactionTimeSecondsDisplay: String {
@@ -67,6 +244,31 @@ struct SessionSummaryView: View {
     }
     private var accuracyDisplayText: String {
         "\(session.correctCount)/\(session.totalReps) (\(accuracyPercentValue)%)"
+    }
+    private var coreSummary: (
+        total: Int,
+        correct: Int,
+        accuracy: Double,
+        avgTime: Double,
+        fastCount: Int,
+        mediumCount: Int,
+        slowCount: Int
+    ) {
+        (
+            total: session.totalReps,
+            correct: session.correctCount,
+            accuracy: Double(accuracyPercentValue) / 100.0,
+            avgTime: session.avgDecisionTime ?? 0,
+            fastCount: session.speedCounts.fast,
+            mediumCount: session.speedCounts.medium,
+            slowCount: session.speedCounts.slow
+        )
+    }
+    private var decisionScoreValue: Int {
+        if let score = session.decisionTotalScore {
+            return max(0, min(100, Int(score.rounded())))
+        }
+        return session.estimatedDecisionSpeedScore ?? 0
     }
     private var forwardThinkingStats: (choices: Int, opportunities: Int, percent: Int)? {
         guard let opp = session.forwardOpportunityCount, opp > 0,
@@ -230,21 +432,19 @@ struct SessionSummaryView: View {
     }
 
     private var sessionSummaryContent: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                if !newPersonalBests.isEmpty || isNewPersonalBest || !newlyUnlockedBadges.isEmpty {
-                    sessionCelebrationStrip
+        ZStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    simpleSummarySection
+
+                    buttonsSection
                 }
-
-                PBAPostSessionNarrativeStack(narrative: postSessionNarrative)
-
-                xpFeedbackCard
-
-                yourNumbersSection
-
-                buttonsSection
+                .padding(24)
             }
-            .padding(24)
+            if showAlmostTherePrompt, let prompt = almostTherePrompt {
+                almostThereOverlay(prompt: prompt)
+                    .zIndex(10)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(red: 0.08, green: 0.08, blue: 0.12))
@@ -263,12 +463,16 @@ struct SessionSummaryView: View {
         .onAppear {
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
             runFeedbackAnimations()
+            evaluateAlmostTherePrompt()
         }
         .sheet(isPresented: $showShare) {
             ShareSheet(items: shareReportItems)
         }
-        .navigationDestination(isPresented: $navigateToTrainAnother) {
-            trainAnotherDestination
+        .sheet(isPresented: $showPlayerReport) {
+            SessionPlayerReportView(report: sessionPlayerReport)
+        }
+        .navigationDestination(isPresented: $navigateToRoleSelection) {
+            roleSelectionDestination(for: roleSelectionTarget)
         }
         .navigationDestination(isPresented: $navigateToProgress) {
             PBAProgressView(settingsViewModel: settingsViewModel, profileManager: profileManager)
@@ -276,6 +480,102 @@ struct SessionSummaryView: View {
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
+        }
+    }
+
+    private var simpleSummarySection: some View {
+        VStack(spacing: 24) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Level: \(summaryPlayerProgression.currentLevel.rawValue)")
+                    .font(.title2)
+                    .bold()
+                    .foregroundColor(.white)
+                Text(summaryPlayerProgression.currentLevel.progressionSubtitle)
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.72))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Recommended Next")
+                    .font(.headline)
+                    .foregroundColor(.white.opacity(0.95))
+                Text(levelTrainingRecommendation.activity.displayName)
+                    .font(.body.weight(.semibold))
+                    .foregroundColor(.white)
+                Text("Focus")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.75))
+                Text(levelTrainingRecommendation.focus)
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+            .background(Color.white.opacity(0.06))
+            .cornerRadius(14)
+
+            if !newPersonalBests.isEmpty || isNewPersonalBest || !newlyUnlockedBadges.isEmpty {
+                sessionCelebrationStrip
+            }
+
+            SessionSummaryView(
+                score: decisionScoreValue,
+                visual: levelFeedbackVisual,
+                tags: PlayerFeedbackEngine.feedbackTags(from: session),
+                accuracy: coreSummary.accuracy,
+                avgDecisionTime: session.avgDecisionTime ?? 0,
+                decisionWindow: session.avgDecisionWindowSeconds ?? 0,
+                level: playerRecommendation.level.rawValue,
+                shortFeedback: playerRecommendation.shortFeedback,
+                message: playerSessionFeedback.message,
+                nextFocus: playerRecommendation.nextFocusText,
+                tempoGuidance: playerRecommendation.tempoGuidance,
+                progressionSuggestion: playerRecommendation.progressionSuggestion,
+                earlyCount: session.speedCounts.fast,
+                onTimeCount: session.speedCounts.medium,
+                lateCount: session.speedCounts.slow
+            )
+
+            if !recentProgressionSessions.isEmpty {
+                ProgressionView(
+                    sessions: recentProgressionSessions,
+                    scoreTrend: progressionScoreTrend,
+                    windowTrend: progressionWindowTrend,
+                    accuracyTrend: progressionAccuracyTrend,
+                    insight: progressionInsight
+                )
+            }
+
+            if let next = coachNextRecommendation {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Next session (coach)")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(.white)
+                    Text(next.message)
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.92))
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 8) {
+                        Text("Focus: \(next.focusTag.rawValue)")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.cyan.opacity(0.95))
+                        Text("·")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.4))
+                        Text(next.activity)
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.75))
+                            .lineLimit(3)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(16)
+                .background(Color.white.opacity(0.08))
+                .cornerRadius(14)
+            }
         }
     }
 
@@ -413,14 +713,58 @@ struct SessionSummaryView: View {
     private var buttonsSection: some View {
         VStack(spacing: 12) {
             Button {
-                navigateToTrainAnother = true
+                startRecommended()
             } label: {
-                Text("Train Again")
+                Text("Start Recommended")
                     .font(.headline)
                     .foregroundColor(.black)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 16)
                     .background(Color.yellow)
+                    .cornerRadius(14)
+            }
+            .buttonStyle(PlainButtonStyle())
+
+            Button {
+                runItBack()
+            } label: {
+                Text("Run It Back")
+                    .font(.headline)
+                    .foregroundColor(.yellow)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                    .background(Color.yellow.opacity(0.18))
+                    .cornerRadius(14)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14)
+                            .stroke(Color.yellow.opacity(0.55), lineWidth: 1)
+                    )
+            }
+            .buttonStyle(PlainButtonStyle())
+
+            Button {
+                showPlayerReport = true
+            } label: {
+                Text("View player report")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.95))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(Color.white.opacity(0.1))
+                    .cornerRadius(14)
+            }
+            .buttonStyle(PlainButtonStyle())
+
+            Button {
+                shareReportItems = [shareText]
+                showShare = true
+            } label: {
+                Text("Share Result")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.95))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(Color.white.opacity(0.1))
                     .cornerRadius(14)
             }
             .buttonStyle(PlainButtonStyle())
@@ -437,24 +781,116 @@ struct SessionSummaryView: View {
         .padding(.top, 8)
     }
 
+    @ViewBuilder
+    private func almostThereOverlay(prompt: SessionAlmostTherePrompt) -> some View {
+        ZStack {
+            Color.black.opacity(0.35).ignoresSafeArea()
+            VStack(spacing: 12) {
+                Text("So close.")
+                    .font(.headline.weight(.bold))
+                    .foregroundColor(.yellow)
+                Text(prompt.milestoneName)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.95))
+                Text(prompt.mainMessage)
+                    .font(.title3.weight(.semibold))
+                    .foregroundColor(.white)
+                    .multilineTextAlignment(.center)
+                Text(prompt.supportText)
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.86))
+                    .multilineTextAlignment(.center)
+                ProgressView(value: prompt.progress, total: 1)
+                    .tint(.yellow)
+                    .padding(.top, 2)
+                Button {
+                    runItBack()
+                } label: {
+                    Text("Run It Back")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.black)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Color.yellow)
+                        .cornerRadius(12)
+                }
+                .buttonStyle(PlainButtonStyle())
+                Button {
+                    showAlmostTherePrompt = false
+                } label: {
+                    Text("Done")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.white.opacity(0.88))
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
+            .padding(20)
+            .frame(maxWidth: 420)
+            .background(Color.black.opacity(0.9))
+            .cornerRadius(16)
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(Color.yellow.opacity(0.35), lineWidth: 1)
+            )
+            .padding(.horizontal, 24)
+        }
+    }
+
+    private func evaluateAlmostTherePrompt() {
+        let completedReps = max(1, session.totalReps)
+        let earlyCount = session.speedCounts.fast
+        let score = decisionScoreValue
+        let streak = profileManager.profile(id: session.playerID)?.sessionStreakCount ?? 0
+        almostTherePrompt = SessionMilestoneNudgeEvaluator.endOfSessionPrompt(
+            score: score,
+            earlyCount: earlyCount,
+            completedReps: completedReps,
+            targetReps: completedReps,
+            sessionStreakCount: streak
+        )
+        showAlmostTherePrompt = (almostTherePrompt != nil)
+    }
+
+    private func runItBack() {
+        showAlmostTherePrompt = false
+        profileManager.pendingLevelDifficulty = nil
+        roleSelectionTarget = session.activityType
+        navigateToRoleSelection = true
+    }
+
+    private func startRecommended() {
+        showAlmostTherePrompt = false
+        profileManager.pendingLevelDifficulty = levelTrainingDifficulty
+        roleSelectionTarget = levelTrainingRecommendation.activity
+        navigateToRoleSelection = true
+    }
+
     private var shareText: String {
-        var lines: [String] = [
+        let lines: [String] = [
             "\(playerName) — Session Summary",
             activityName,
-            "Correct: \(session.correctCount)/\(session.totalReps)",
-            "Rep tempo: \(BlockSummarySpeedCountsFormatting.summaryLine(fast: session.speedCounts.fast, medium: session.speedCounts.medium, slow: session.speedCounts.slow))",
-            "Bias: \(session.biasDirection != nil ? biasLabel(session.biasDirection) : "none")",
-            "Coach insight: \(postSessionNarrative.coachInsight)"
+            "Score: \(decisionScoreValue)",
+            "Level: \(playerRecommendation.level.rawValue)",
+            "Total reps: \(session.totalReps)",
+            "Correct: \(session.correctCount)",
+            "Missed scan: \(max(0, session.totalReps - session.correctCount))",
+            "Accuracy: \(accuracyPercentValue)%",
+            "Average time: \(avgReactionTimeSecondsDisplay)",
+            "Decision speed: \(session.speedCounts.fast) fast, \(session.speedCounts.medium) on-time, \(session.speedCounts.slow) late",
+            "Fast: \(session.speedCounts.fast)",
+            "Medium: \(session.speedCounts.medium)",
+            "Slow: \(session.speedCounts.slow)",
+            "Forward: \(session.directionCounts[.up, default: 0])",
+            "Back: \(session.directionCounts[.down, default: 0])",
+            "Left: \(session.directionCounts[.left, default: 0])",
+            "Right: \(session.directionCounts[.right, default: 0])"
         ]
-        if let window = session.avgDecisionWindowSeconds {
-            lines.insert("Decision window: \(DecisionTimingModel.summaryText(windowSeconds: window))", at: 4)
-        }
         return lines.joined(separator: "\n")
     }
 
     @ViewBuilder
-    private var trainAnotherDestination: some View {
-        switch session.activityType {
+    private func roleSelectionDestination(for activity: ActivityKind) -> some View {
+        switch activity {
         case .twoMinuteTest:
             TwoMinuteRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
                 .environmentObject(progressStore)
@@ -524,7 +960,7 @@ struct SessionSummaryView: View {
 
 #Preview {
     NavigationStack {
-        SessionSummaryView(
+        SessionSummaryScreenView(
             session: SessionResult(
                 playerID: UUID(),
                 activityType: .awayFromPressure,

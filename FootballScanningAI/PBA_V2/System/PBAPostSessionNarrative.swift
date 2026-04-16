@@ -165,7 +165,7 @@ enum PBAPostSessionNarrativeBuilder {
         } else if accPct >= 65 {
             headline = "Good foundation — push for earlier decisions next block"
         } else {
-            headline = "Every rep counts — one clear picture before the ball arrives"
+            headline = "Every rep counts — one clear picture before expected arrival"
         }
 
         var lines: [String] = []
@@ -437,17 +437,17 @@ enum PBAPostSessionNarrativeBuilder {
         case (.dribbleOrPass, .fieldMeaning):
             return "Speed of play is speed of thought."
         case (.oneTouchPassing, .fieldMeaning):
-            return "One-touch only works if your decision is made before the ball arrives."
+            return "One-touch only works if your decision is made before expected arrival."
         case (.twoMinuteTest, .fieldMeaning):
-            return "Decide before the ball arrives."
+            return "Decide before expected arrival."
         case (.awayFromPressure, .nextStep):
-            return "Decide before the ball arrives"
+            return "Decide before expected arrival"
         case (.dribbleOrPass, .nextStep):
             return "The window closes before the ball gets to you"
         case (.oneTouchPassing, .nextStep):
             return "Speed of play is speed of thought"
         case (.twoMinuteTest, .nextStep):
-            return "Decide before the ball arrives"
+            return "Decide before expected arrival"
         }
     }
 

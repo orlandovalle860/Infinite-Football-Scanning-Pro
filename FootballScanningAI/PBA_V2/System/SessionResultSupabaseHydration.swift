@@ -255,10 +255,18 @@ enum SessionResultSupabaseHydration {
                 correct = reps.filter(\.correct).count
                 let times = reps.compactMap(\.decision_time_seconds)
                 if !times.isEmpty {
-                    avgRaw = times.reduce(0, +) / Double(times.count)
+                    let windows = times.map { DecisionTimingModel.decisionWindow(rawRepInterval: $0, activity: activity, difficulty: nil) }
+                    avgRaw = windows.reduce(0, +) / Double(windows.count)
                 }
+                let accuracy = total > 0 ? Double(correct) / Double(total) : 0
+                let adaptiveScore = DecisionTimingModel.decisionScore(
+                    accuracy: accuracy,
+                    windows: times.map { DecisionTimingModel.decisionWindow(rawRepInterval: $0, activity: activity, difficulty: nil) },
+                    activity: activity
+                )
                 for t in times {
-                    switch TimingThresholds.speedBucket(for: t, activity: activity) {
+                    let window = DecisionTimingModel.decisionWindow(rawRepInterval: t, activity: activity, difficulty: nil)
+                    switch DecisionTimingModel.speedBucket(forDecisionWindow: window, activity: activity, score: adaptiveScore) {
                     case .fast: fast += 1
                     case .medium: medium += 1
                     case .slow: slow += 1

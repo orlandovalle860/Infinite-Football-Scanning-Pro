@@ -8,6 +8,20 @@
 import Foundation
 import Combine
 
+enum RepDecisionBucket: String, Codable, Hashable {
+    case fast
+    case medium
+    case slow
+}
+
+struct RepDecision: Codable, Hashable {
+    let repIndex: Int
+    let direction: Gate
+    let isCorrect: Bool
+    let decisionWindowSeconds: Double
+    let bucket: RepDecisionBucket
+}
+
 enum OneTouchPassingPhase: Equatable {
     case waitingForNextRep
     case armedScanning(repIndex: Int, endsAt: Date)
@@ -26,6 +40,7 @@ final class OneTouchPassingEngine: ObservableObject {
     @Published var instructionSubtitle: String = ""
     @Published private(set) var revealedGates: Set<Gate> = []
     @Published private(set) var showCheckCue: Bool = false
+    @Published private(set) var repDecisions: [RepDecision] = []
 
     private let config: OneTouchPassingConfig
     private let trainingMode: TrainingMode
@@ -36,6 +51,12 @@ final class OneTouchPassingEngine: ObservableObject {
     private var checkEndTimer: Timer?
     private var revealTimers: [Timer] = []
     private var cueHideTimer: Timer?
+    /// [CueTiming-Debug] anchor when `cueVisible` phase starts (full greens + timer).
+    private var cueTimingDebugVisibleAt: Date?
+    private var passTriggeredByRep: [Int: Date] = [:]
+    private var directionLoggedByRep: [Int: Date] = [:]
+    private var adaptiveState = AdaptiveState()
+    private var sessionAdaptiveDifficulty = DifficultySettings(cueDuration: 1.0, travelTime: 1.0, thresholdAdjustment: 0.0)
 
     init(config: OneTouchPassingConfig, trainingMode: TrainingMode = .solo, plan: [OneTouchRepPlan] = OneTouchPassingScenarioGenerator.generatePlan()) {
         self.config = config
@@ -58,7 +79,7 @@ final class OneTouchPassingEngine: ObservableObject {
             if trainingMode == .partner {
                 instructionSubtitle = "\(ActivityInstructionData.partnerPlayerBeepLine)\n\(ActivityInstructionData.timingLine)\nCHECK is coming."
             } else {
-                instructionSubtitle = "CHECK is coming."
+                instructionSubtitle = "Scan multiple options early.\nCHECK is coming."
             }
         case .showingCheck:
             instructionTitle = "CHECK"
@@ -70,13 +91,13 @@ final class OneTouchPassingEngine: ObservableObject {
                 : "Coach: press PASS at the strike."
         case .cueRevealing:
             instructionTitle = "Decide now"
-            instructionSubtitle = "Pass to any green."
+            instructionSubtitle = "Decide before expected arrival."
         case .cueVisible:
-            instructionTitle = "Decide now"
-            instructionSubtitle = "Pass to any green."
+            instructionTitle = "Swipe now"
+            instructionSubtitle = "Swipe immediately on contact."
         case .awaitingExitLog:
-            instructionTitle = "Play the rep"
-            instructionSubtitle = "Waiting for coach log…"
+            instructionTitle = "Great anticipation"
+            instructionSubtitle = "Waiting for coach swipe log…"
         case .blockComplete:
             instructionTitle = "Block complete."
             instructionSubtitle = ""
@@ -94,6 +115,8 @@ final class OneTouchPassingEngine: ObservableObject {
             return
         }
         passTriggeredAt = nil
+        passTriggeredByRep[repIndex] = nil
+        directionLoggedByRep[repIndex] = nil
         revealedGates = []
         showCheckCue = false
         cancelTimers()
@@ -141,6 +164,7 @@ final class OneTouchPassingEngine: ObservableObject {
         guard repIndex == currentRepIndex else { return }
         guard case .awaitingPassTrigger(let r) = phase, r == repIndex else { return }
         passTriggeredAt = timestamp
+        passTriggeredByRep[repIndex] = timestamp
         #if DEBUG
         DecisionSpeedDebugLog.logEngineRepLive(activity: .oneTouchPassing, repIndex: repIndex, passEmbeddedStored: timestamp)
         #endif
@@ -171,7 +195,7 @@ final class OneTouchPassingEngine: ObservableObject {
             RunLoop.main.add(t, forMode: .common)
             revealTimers.append(t)
         case .sequential:
-            let spacing = config.revealSpacingSeconds
+            let spacing = config.revealSpacingSeconds * sessionAdaptiveDifficulty.cueDuration
             let order = gates.shuffled()
             revealedGates = []
             phase = .cueRevealing(repIndex: repIndex, revealedGates: [])
@@ -198,8 +222,25 @@ final class OneTouchPassingEngine: ObservableObject {
     private func transitionToCueVisible(repIndex: Int) {
         cancelRevealTimers()
         revealedGates = [.up, .down, .left, .right]
-        let duration = config.cueVisibleSeconds
+        let duration = config.cueVisibleSeconds * sessionAdaptiveDifficulty.cueDuration
         let endsAt = Date().addingTimeInterval(duration)
+        cueTimingDebugVisibleAt = Date()
+        let revealNote: String
+        switch config.revealStyle {
+        case .simultaneous:
+            revealNote = "reveal=simultaneous"
+        case .twoStage:
+            revealNote = "reveal=twoStage +0.25s stagger before cueVisible"
+        case .sequential:
+            let spacing = config.revealSpacingSeconds * sessionAdaptiveDifficulty.cueDuration
+            revealNote = "reveal=sequential spacing=\(String(format: "%.3f", spacing))s"
+        }
+        CueTimingDebugLog.logVisible(
+            activity: "oneTouchPassing",
+            repIndex: repIndex,
+            configuredWindowSeconds: duration,
+            note: "\(revealNote); phase=cueVisible (greens fixed window); CHECK cue 0.6s is separate earlier"
+        )
         phase = .cueVisible(repIndex: repIndex, endsAt: endsAt)
         updateInstructions()
 
@@ -210,6 +251,18 @@ final class OneTouchPassingEngine: ObservableObject {
     }
 
     private func onCueHide(repIndex: Int) {
+        guard case .cueVisible(let currentRep, _) = phase, currentRep == repIndex else { return }
+        if let v = cueTimingDebugVisibleAt {
+            let hiddenAt = Date()
+            CueTimingDebugLog.logHidden(
+                activity: "oneTouchPassing",
+                repIndex: repIndex,
+                visibleAt: v,
+                hiddenAt: hiddenAt,
+                reason: "cue_hide_timer"
+            )
+            cueTimingDebugVisibleAt = nil
+        }
         cueHideTimer?.invalidate()
         cueHideTimer = nil
         revealedGates = []
@@ -246,7 +299,20 @@ final class OneTouchPassingEngine: ObservableObject {
         var rIdx: Int?
         switch phase {
         case .awaitingExitLog(let ri): rIdx = ri
-        case .cueVisible(let ri, _): rIdx = ri
+        case .cueVisible(let ri, _):
+            rIdx = ri
+            if ri == repIndex, let v = cueTimingDebugVisibleAt {
+                CueTimingDebugLog.logHidden(
+                    activity: "oneTouchPassing",
+                    repIndex: repIndex,
+                    visibleAt: v,
+                    hiddenAt: Date(),
+                    reason: "exit_logged"
+                )
+                cueTimingDebugVisibleAt = nil
+            }
+            cueHideTimer?.invalidate()
+            cueHideTimer = nil
         case .cueRevealing(let ri, _): rIdx = ri
         default: return nil
         }
@@ -255,15 +321,34 @@ final class OneTouchPassingEngine: ObservableObject {
 
         let reactionTimeSeconds = timestamp.timeIntervalSince(triggerTime)
         if reactionTimeSeconds > Self.maxReactionTimeSeconds {
+            print("ERROR: Rep cannot complete without exitLogged")
             passTriggeredAt = nil
-            if repIndex + 1 >= plan.count { phase = .blockComplete } else { phase = .waitingForNextRep }
-            updateInstructions()
             return nil
         }
 
         let p = plan[repIndex]
         let correct = p.greenDirections.contains(gate)
-        let speed = TimingThresholds.oneTouchDecisionSpeed(for: reactionTimeSeconds)
+        let expectedArrivalTime = triggerTime.addingTimeInterval(travelTimeSeconds)
+        let decisionWindowSeconds = expectedArrivalTime.timeIntervalSince(timestamp)
+        let score = adaptiveSessionScore(including: decisionWindowSeconds, isCorrect: correct)
+        let speed: DecisionSpeed
+        switch DecisionTimingModel.speedBucket(forDecisionWindow: decisionWindowSeconds, activity: .oneTouchPassing, score: score) {
+        case .fast: speed = .fast
+        case .medium: speed = .medium
+        case .slow: speed = .slow
+        }
+        directionLoggedByRep[repIndex] = timestamp
+        repDecisions.append(
+            RepDecision(
+                repIndex: repIndex,
+                direction: gate,
+                isCorrect: correct,
+                decisionWindowSeconds: decisionWindowSeconds,
+                bucket: Self.bucket(for: decisionWindowSeconds, score: score)
+            )
+        )
+        applyAdaptiveAfterRep(wasCorrect: correct, decisionWindow: decisionWindowSeconds)
+        print("[DecisionWindowDebug] repIndex=\(repIndex) passTS=\(triggerTime.timeIntervalSince1970) expectedArrivalTS=\(expectedArrivalTime.timeIntervalSince1970) decisionTS=\(timestamp.timeIntervalSince1970) decisionWindowSeconds=\(decisionWindowSeconds)")
         #if DEBUG
         let engineWallEntry = Date()
         DecisionSpeedDebugLog.logScoredRep(
@@ -296,13 +381,26 @@ final class OneTouchPassingEngine: ObservableObject {
         return reactionTimeSeconds
     }
 
-    /// Coach ✕ — human override; base `correct` is usually from `onExitLogged` vs greens.
+    /// Coach ✕ is not allowed to complete One-Touch reps; rep must end via exitLogged direction.
     func onIncorrectDecision(repIndex: Int, timestamp: Date) -> Double? {
         guard repIndex == currentRepIndex else { return nil }
         var rIdx: Int?
         switch phase {
         case .awaitingExitLog(let ri): rIdx = ri
-        case .cueVisible(let ri, _): rIdx = ri
+        case .cueVisible(let ri, _):
+            rIdx = ri
+            if ri == repIndex, let v = cueTimingDebugVisibleAt {
+                CueTimingDebugLog.logHidden(
+                    activity: "oneTouchPassing",
+                    repIndex: repIndex,
+                    visibleAt: v,
+                    hiddenAt: Date(),
+                    reason: "incorrect_before_timer"
+                )
+                cueTimingDebugVisibleAt = nil
+            }
+            cueHideTimer?.invalidate()
+            cueHideTimer = nil
         case .cueRevealing(let ri, _): rIdx = ri
         default: return nil
         }
@@ -311,44 +409,14 @@ final class OneTouchPassingEngine: ObservableObject {
 
         let reactionTimeSeconds = timestamp.timeIntervalSince(triggerTime)
         if reactionTimeSeconds > Self.maxReactionTimeSeconds {
+            print("ERROR: Rep cannot complete without exitLogged")
             passTriggeredAt = nil
-            if repIndex + 1 >= plan.count { phase = .blockComplete } else { phase = .waitingForNextRep }
-            updateInstructions()
             return nil
         }
 
-        let p = plan[repIndex]
-        let speed = TimingThresholds.oneTouchDecisionSpeed(for: reactionTimeSeconds)
-        #if DEBUG
-        let engineWallEntryIncorrect = Date()
-        DecisionSpeedDebugLog.logScoredRep(
-            activity: .oneTouchPassing,
-            repIndex: repIndex,
-            passTimestamp: triggerTime,
-            directionLogTimestamp: timestamp,
-            rawDeltaSeconds: reactionTimeSeconds,
-            difficulty: config.difficulty,
-            engineEntryWallTime: engineWallEntryIncorrect
-        )
-        #endif
-        let result = OneTouchRepResult(
-            repIndex: repIndex,
-            correct: false,
-            chosenGate: .down,
-            decisionTime: reactionTimeSeconds,
-            decisionSpeed: speed,
-            greenDirections: p.greenDirections
-        )
-        repResults.append(result)
-        passTriggeredAt = nil
-
-        if repIndex + 1 >= plan.count {
-            phase = .blockComplete
-        } else {
-            phase = .waitingForNextRep
-        }
-        updateInstructions()
-        return reactionTimeSeconds
+        _ = reactionTimeSeconds
+        print("ERROR: Rep cannot complete without exitLogged")
+        return nil
     }
 
     var currentPlan: OneTouchRepPlan? {
@@ -357,6 +425,73 @@ final class OneTouchPassingEngine: ObservableObject {
     }
 
     deinit { cancelTimers() }
+
+    func decisionSummary() -> (
+        total: Int,
+        correct: Int,
+        accuracy: Double,
+        avgTime: Double,
+        fastCount: Int,
+        mediumCount: Int,
+        slowCount: Int
+    ) {
+        let total = repDecisions.count
+        let correct = repDecisions.filter(\.isCorrect).count
+        let avgTime = total > 0 ? repDecisions.map(\.decisionWindowSeconds).reduce(0, +) / Double(total) : 0
+        let accuracy = total > 0 ? Double(correct) / Double(total) : 0
+        let fastCount = repDecisions.filter { $0.bucket == .fast }.count
+        let mediumCount = repDecisions.filter { $0.bucket == .medium }.count
+        let slowCount = repDecisions.filter { $0.bucket == .slow }.count
+        return (total, correct, accuracy, avgTime, fastCount, mediumCount, slowCount)
+    }
+
+    func computeDecisionScore() -> (score: Int, accuracy: Double, avgTime: Double) {
+        let summary = decisionSummary()
+        guard summary.total > 0 else { return (0, 0, 0) }
+
+        let accuracyComponent = summary.accuracy
+        let summaryScoreBaseline = Int((accuracyComponent * 100).rounded())
+        let speedValues = repDecisions.map { decision in
+            Self.speedScoreValue(for: decision.decisionWindowSeconds, score: summaryScoreBaseline)
+        }
+        let avgSpeedScore = speedValues.reduce(0, +) / Double(speedValues.count)
+        let weighted = (accuracyComponent * 0.70) + (avgSpeedScore * 0.30)
+        let score = Int((weighted * 100).rounded())
+        return (score, summary.accuracy, summary.avgTime)
+    }
+
+    private var travelTimeSeconds: Double {
+        CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds
+            ?? config.difficulty.passTempo.expectedBallTravelTime(distanceMeters: 11.0)
+    }
+
+    private func applyAdaptiveAfterRep(wasCorrect: Bool, decisionWindow: Double) {
+        updateAdaptiveState(state: &adaptiveState, wasCorrect: wasCorrect, decisionWindow: decisionWindow)
+        sessionAdaptiveDifficulty = adjustDifficulty(state: &adaptiveState, current: sessionAdaptiveDifficulty)
+    }
+
+    private func adaptiveSessionScore(including newWindow: Double, isCorrect: Bool) -> Int {
+        let existingWindows = repDecisions.map(\.decisionWindowSeconds)
+        let windows = existingWindows + [newWindow]
+        let existingCorrect = repDecisions.filter(\.isCorrect).count
+        let correct = existingCorrect + (isCorrect ? 1 : 0)
+        let total = windows.count
+        guard total > 0 else { return 70 }
+        let accuracy = Double(correct) / Double(total)
+        return DecisionTimingModel.decisionScore(accuracy: accuracy, windows: windows, activity: .oneTouchPassing)
+    }
+
+    private static func bucket(for decisionWindowSeconds: Double, score: Int) -> RepDecisionBucket {
+        DecisionTimingModel.speedBucket(forDecisionWindow: decisionWindowSeconds, activity: .oneTouchPassing, score: score)
+    }
+
+    private static func speedScoreValue(for decisionWindowSeconds: Double, score: Int) -> Double {
+        switch bucket(for: decisionWindowSeconds, score: score) {
+        case .fast: return 1.0
+        case .medium: return 0.85
+        case .slow: return 0.4
+        }
+    }
 }
 
 // MARK: - Partner relay reconnect checkpoint (no scoring impact)

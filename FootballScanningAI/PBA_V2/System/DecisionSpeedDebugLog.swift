@@ -87,8 +87,8 @@ enum DecisionSpeedDebugLog {
             activity: activity,
             difficulty: difficulty
         )
-        let bucket = TimingThresholds.speedBucket(for: rawDeltaSeconds, activity: activity)
-        let thr = thresholdSummary(activity: activity)
+        let score = 70
+        let bucket = DecisionTimingModel.speedBucket(forDecisionWindow: window, activity: activity, score: score)
         let processingLagAfterEmbeddedDirection = engineEntryWallTime.timeIntervalSince(directionLogTimestamp)
 
         var line = """
@@ -97,7 +97,7 @@ enum DecisionSpeedDebugLog {
         rawDeltaSeconds_FOR_BUCKET=\(fmt(rawDeltaSeconds)) \
         engineEntryWallTS=\(ts(engineEntryWallTime)) processingLagAfterDirectionEmbedded=\(fmt(processingLagAfterEmbeddedDirection))s \
         expectedBallTravel=\(fmt(travel)) expectedArrivalTS=\(ts(expectedArrival)) decisionWindow=\(fmt(window)) \
-        thresholds=\(thr) finalBucket=\(bucket.rawValue)
+        unifiedWindowBuckets=fast_gt_0.25_medium_gt_0_slow_lte_0 finalBucket=\(bucket.rawValue)
         """
         if let v = visualRevealTimestamp {
             line += " visualRevealTS=\(ts(v))"
@@ -113,7 +113,8 @@ enum DecisionSpeedDebugLog {
         let avg = times.reduce(0, +) / Double(times.count)
         var f = 0, m = 0, s = 0
         for t in times {
-            switch TimingThresholds.pressureSpeedBucket(for: t) {
+            let window = DecisionTimingModel.decisionWindow(rawRepInterval: t, activity: .awayFromPressure, difficulty: difficulty)
+            switch DecisionTimingModel.speedBucket(forDecisionWindow: window, activity: .awayFromPressure, score: 70) {
             case .fast: f += 1
             case .medium: m += 1
             case .slow: s += 1
@@ -125,7 +126,8 @@ enum DecisionSpeedDebugLog {
         print("[DecisionSpeedDebug] seq=\(nextSeq()) aggregate=AFP_block_summary difficulty=\(difficulty?.rawValue ?? "nil") repCount=\(times.count) avgRawDeltaSeconds=\(fmt(avg)) headlineBucketFromDominant=\(headline.rawValue) tieBreak=\(tie ? "worse_wins" : "none") NOTE=headline_matches_UniversalBlockSummaryHeadline")
         for log in logs {
             guard let t = log.decisionTimeSeconds else { continue }
-            let b = TimingThresholds.pressureSpeedBucket(for: t)
+            let window = DecisionTimingModel.decisionWindow(rawRepInterval: t, activity: .awayFromPressure, difficulty: difficulty)
+            let b = DecisionTimingModel.speedBucket(forDecisionWindow: window, activity: .awayFromPressure, score: 70)
             print("[DecisionSpeedDebug] aggregateRep repIndex=\(log.repIndex) rawDelta=\(fmt(t)) bucket=\(b.rawValue)")
         }
     }
@@ -136,18 +138,5 @@ enum DecisionSpeedDebugLog {
     }
 
     private static func fmt(_ x: Double) -> String { String(format: "%.4f", x) }
-
-    private static func thresholdSummary(activity: ActivityKind) -> String {
-        switch activity {
-        case .awayFromPressure:
-            return "AFP_fast_lt_\(TimingThresholds.pressureFast)_medium_to_\(TimingThresholds.pressureMediumUpper)"
-        case .dribbleOrPass:
-            return "DOP_fast_lt_\(TimingThresholds.dribblePassFast)_medium_to_\(TimingThresholds.dribblePassMediumUpper)"
-        case .oneTouchPassing:
-            return "OTP_fast_lt_\(TimingThresholds.oneTouchFast)_medium_to_\(TimingThresholds.oneTouchMediumUpper)"
-        case .twoMinuteTest:
-            return "2MT_fast_lt_\(TimingThresholds.twoMinuteFast)_medium_lt_\(TimingThresholds.twoMinuteMediumUpper)"
-        }
-    }
 }
 #endif

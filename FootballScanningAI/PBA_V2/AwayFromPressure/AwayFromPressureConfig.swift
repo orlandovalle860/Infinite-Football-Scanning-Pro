@@ -44,4 +44,16 @@ struct AwayFromPressureConfig {
             curriculumLoopLevel: level
         )
     }
+
+    /// Optional level-based multipliers from session summary (marker / decision window ∝ `travelTime`).
+    static func config(for difficulty: TestDifficulty, loopLevel: Int, levelModifiers: DifficultySettings?) -> AwayFromPressureConfig {
+        let base = config(for: difficulty, loopLevel: loopLevel)
+        guard let m = levelModifiers else { return base }
+        return AwayFromPressureConfig(
+            difficulty: base.difficulty,
+            scanDelayRange: base.scanDelayRange,
+            markerVisibleSeconds: max(0.35, base.markerVisibleSeconds * m.travelTime),
+            curriculumLoopLevel: base.curriculumLoopLevel
+        )
+    }
 }

@@ -51,7 +51,7 @@ enum CoachingTrainingNotificationCopy {
             ]
         case .performanceSlowDecisions:
             return [
-                "The window closes before the ball arrives — decide a step earlier on each rep.",
+                "The window closes before expected arrival — decide a step earlier on each rep.",
                 "Your last block was a tick late but mostly right. Steal time with an earlier scan.",
                 "You're seeing it — now trigger the first action sooner; match speed starts there.",
             ]

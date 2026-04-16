@@ -37,6 +37,13 @@ struct OneTouchPassingDisplaySessionView: View {
     @State private var nextRepIndex = 0
     @State private var audioInterruptionObserver: NSObjectProtocol?
     @State private var hasSentSessionEnded = false
+    @State private var hasCompletedPassTempoCalibration = false
+    @State private var showPassTempoCalibration = false
+    @State private var partnerCalibration = PartnerPassTempoCalibrationTracker()
+    @State private var showConnectedConfirmation = false
+    @State private var hasStartedConnectedToCalibrationTransition = false
+    @State private var milestoneNudgeText: String?
+    @State private var lastNudgeRepCount: Int = -1
     /// True while ``SessionCountdownModifier`` shows 3–2–1–Go; coach drill messages must not advance the engine until the drill is visible.
     @State private var blockCoachDrillDuringSessionCountdown = false
     @State private var pendingCoachNextRepWhileCountdown: Int?
@@ -63,15 +70,25 @@ struct OneTouchPassingDisplaySessionView: View {
             statusOverlay
                 .opacity(statusOverlayOpacity)
             repCountOverlay
-            if mode != .partner {
-                SessionVolumeTriggerView(enabled: canVolumeTrigger) { handleWallSoloTrigger() }
-                    .allowsHitTesting(false)
+            if let milestoneNudgeText {
+                VStack {
+                    SessionMilestoneNudgeBanner(text: milestoneNudgeText)
+                        .padding(.top, 86)
+                    Spacer()
+                }
+                .transition(.opacity)
+                .zIndex(3)
             }
             if showExitLogButtons, let repIndex = repIndexForExit {
                 exitLogOverlay(repIndex: repIndex)
                     .zIndex(2)
             }
             waitingForCoachRelayOverlay
+            if showConnectedConfirmation {
+                PartnerConnectedConfirmationView()
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    .zIndex(5)
+            }
             if mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket {
                 PartnerRelayLifecycleBannerOverlay()
             }
@@ -87,94 +104,7 @@ struct OneTouchPassingDisplaySessionView: View {
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
         }
-        .onReceive(NotificationCenter.default.publisher(for: .twoMinuteMessageReceived).receive(on: RunLoop.main)) { notification in
-            guard mode.requiresPhoneDisplayRelay, let msg = notification.object as? TwoMinuteMessage else { return }
-            if PartnerCountdownCoachMessagePolicy.shouldDeferWhileCountdown(
-                msg: msg,
-                isBlockingDrillMessagesFromCoach: blockCoachDrillDuringSessionCountdown,
-                pendingNextRepIndex: &pendingCoachNextRepWhileCountdown
-            ) {
-                #if DEBUG
-                OTPPersistDebug.log("deferred drill message during session countdown (nextRep queued if applicable): \(otpMessageKind(msg))")
-                #endif
-                return
-            }
-            #if DEBUG
-            OTPPersistDebug.log("coach message received: \(otpMessageKind(msg))")
-            #endif
-            switch msg {
-            case .nextRep(let repIndex):
-                pendingCoachNextRepWhileCountdown = nil
-                #if DEBUG
-                if sessionTransportMode == .relayWebSocket {
-                    if !partnerRelaySession.isCoachPaired {
-                        otpRelayDisplayLog("incoming nextRep repIndex=\(repIndex) while isCoachPaired=false (still applying — relay UI can lag peer_joined)")
-                    }
-                    otpRelayDisplayLog("incoming nextRep repIndex=\(repIndex)")
-                }
-                #endif
-                engine.onNextRep(repIndex: repIndex)
-            case .passTriggered(let repIndex, let timestamp):
-                #if DEBUG
-                if sessionTransportMode == .relayWebSocket {
-                    otpRelayDisplayLog("incoming passTriggered repIndex=\(repIndex)")
-                }
-                let displayReceiveWall = Date()
-                DecisionSpeedDebugLog.logDisplayRelayIngress(activity: .oneTouchPassing, kind: "passTriggered", repIndex: repIndex, embeddedTimestamp: timestamp, displayReceiveWallTime: displayReceiveWall)
-                #endif
-                otpApplyPassTrigger(repIndex: repIndex, passTimestamp: timestamp)
-            case .exitLogged(let repIndex, let gate, let timestamp):
-                #if DEBUG
-                if sessionTransportMode == .relayWebSocket {
-                    otpRelayDisplayLog("incoming exitLogged repIndex=\(repIndex) gate=\(gate)")
-                }
-                let displayReceiveWall = Date()
-                DecisionSpeedDebugLog.logDisplayRelayIngress(activity: .oneTouchPassing, kind: "exitLogged", repIndex: repIndex, embeddedTimestamp: timestamp, displayReceiveWallTime: displayReceiveWall)
-                let wallBeforeEngine = Date()
-                DecisionSpeedDebugLog.logDisplayBeforeEngineExit(activity: .oneTouchPassing, repIndex: repIndex, embeddedDirection: timestamp, displayWallBeforeEngine: wallBeforeEngine, kind: "exitLogged")
-                #endif
-                if engine.onExitLogged(repIndex: repIndex, gate: gate, timestamp: timestamp) != nil, let result = engine.repResults.last {
-                    saveDecisionForRep(result: result)
-                }
-            case .firstTouchLogged: break
-            case .incorrectDecision(let repIndex, let timestamp):
-                #if DEBUG
-                if sessionTransportMode == .relayWebSocket {
-                    otpRelayDisplayLog("incoming incorrectDecision repIndex=\(repIndex)")
-                }
-                let displayReceiveWall = Date()
-                DecisionSpeedDebugLog.logDisplayRelayIngress(activity: .oneTouchPassing, kind: "incorrectDecision", repIndex: repIndex, embeddedTimestamp: timestamp, displayReceiveWallTime: displayReceiveWall)
-                let wallBeforeEngine = Date()
-                DecisionSpeedDebugLog.logDisplayBeforeEngineExit(activity: .oneTouchPassing, repIndex: repIndex, embeddedDirection: timestamp, displayWallBeforeEngine: wallBeforeEngine, kind: "incorrectDecision")
-                #endif
-                if engine.onIncorrectDecision(repIndex: repIndex, timestamp: timestamp) != nil, let result = engine.repResults.last {
-                    saveDecisionForRep(result: result)
-                }
-            case .coachPaired:
-                #if DEBUG
-                if sessionTransportMode == .relayWebSocket {
-                    otpRelayDisplayLog("incoming coachPaired (envelope)")
-                }
-                #endif
-                break
-            case .sessionEnded:
-                #if DEBUG
-                if sessionTransportMode == .relayWebSocket {
-                    otpRelayDisplayLog("sessionEnded received")
-                }
-                #endif
-                break
-            case .partnerTrainingEnded:
-                #if DEBUG
-                if sessionTransportMode == .relayWebSocket {
-                    otpRelayDisplayLog("partnerTrainingEnded received (coordinator also tears down relay)")
-                }
-                #endif
-                break
-            case .partnerSessionCheckpoint:
-                break
-            }
-        }
+        .onReceive(NotificationCenter.default.publisher(for: .twoMinuteMessageReceived).receive(on: RunLoop.main), perform: handleOneTouchCoachRelayMessage)
         .onChange(of: engine.phase) { _, newPhase in
             #if DEBUG
             OTPPersistDebug.log("engine.phase -> \(String(describing: newPhase)) | blockCoachDrillDuringSessionCountdown=\(blockCoachDrillDuringSessionCountdown) waitingOverlay=\(shouldShowRelayWaiting) relayCoachPaired=\(partnerRelaySession.isCoachPaired)")
@@ -191,8 +121,38 @@ struct OneTouchPassingDisplaySessionView: View {
                 #endif
                 playBeep()
             }
+            if case .waitingForNextRep = newPhase {
+                showMilestoneNudgeIfNeeded()
+            }
         }
         .onAppear {
+            let coordinator = TrainingPartnerConnectionCoordinator.shared
+            hasCompletedPassTempoCalibration = false
+            if mode.requiresPhoneDisplayRelay {
+                showPassTempoCalibration = false
+                let partnerNeedsCalibration = PBASessionFlowPolicy.shouldPromptCalibration(for: .partner) && !coordinator.sessionCalibrationResolved
+                if partnerNeedsCalibration {
+                    CurrentSessionStore.shared.setExpectedBallTravelTimeOverrideSeconds(nil)
+                } else {
+                    CurrentSessionStore.shared.setExpectedBallTravelTimeOverrideSeconds(
+                        coordinator.sessionCalibrationAverageTravelTime ?? PartnerPassTempoCalibrationStore.savedAverageTravelTimeSeconds()
+                    )
+                    hasCompletedPassTempoCalibration = true
+                }
+            } else {
+                showPassTempoCalibration = PBASessionFlowPolicy.shouldPromptCalibration(for: mode)
+                if let calibrated = PartnerPassTempoCalibrationStore.savedAverageTravelTimeSeconds(),
+                   !PBASessionFlowPolicy.shouldPromptCalibration(for: mode) {
+                    CurrentSessionStore.shared.setExpectedBallTravelTimeOverrideSeconds(calibrated)
+                    hasCompletedPassTempoCalibration = true
+                } else {
+                    CurrentSessionStore.shared.setExpectedBallTravelTimeOverrideSeconds(nil)
+                }
+            }
+            partnerCalibration.reset()
+            showConnectedConfirmation = false
+            hasStartedConnectedToCalibrationTransition = false
+            beginConnectedToCalibrationTransitionIfNeeded()
             #if DEBUG
             PartnerPersistDebug.log("OneTouchPassingDisplaySessionView onAppear")
             otpPersistDebugSnapshot("onAppear")
@@ -261,6 +221,16 @@ struct OneTouchPassingDisplaySessionView: View {
             let flag = UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey)
             connectionManager.sendDisplaySessionInfo(hasCompletedInitialTest: flag)
         }
+        .onChange(of: coachConnectedForCalibration) { _, connected in
+            guard mode.requiresPhoneDisplayRelay else { return }
+            if connected {
+                beginConnectedToCalibrationTransitionIfNeeded()
+            } else {
+                showConnectedConfirmation = false
+                hasStartedConnectedToCalibrationTransition = false
+                showPassTempoCalibration = false
+            }
+        }
         .onChange(of: playerStore.selectedPlayerId) { _, _ in
             wedgeStyle = WedgeDifficultyEngine.currentStyle(playerId: playerStore.selectedPlayerId ?? profileManager.currentProfile?.id)
         }
@@ -323,12 +293,141 @@ struct OneTouchPassingDisplaySessionView: View {
             otpPersistDebugSnapshot("multipeer connectedPeerName=\(name ?? "nil")")
         }
         #endif
+        .fullScreenCover(
+            isPresented: Binding(
+                get: { showPassTempoCalibration && !mode.requiresPhoneDisplayRelay },
+                set: { showPassTempoCalibration = $0 }
+            )
+        ) {
+            PassTempoCalibrationScreen { calibrated in
+                PartnerPassTempoCalibrationStore.save(averageTravelTimeSeconds: calibrated, trainingMode: mode)
+                CurrentSessionStore.shared.setExpectedBallTravelTimeOverrideSeconds(calibrated)
+                hasCompletedPassTempoCalibration = true
+                showPassTempoCalibration = false
+            }
+            .interactiveDismissDisabled()
+        }
     }
 
-    private var canVolumeTrigger: Bool {
-        switch engine.phase {
-        case .waitingForNextRep, .awaitingPassTrigger: return true
-        default: return false
+    private func handleOneTouchCoachRelayMessage(_ notification: Notification) {
+        guard mode.requiresPhoneDisplayRelay, let msg = notification.object as? TwoMinuteMessage else { return }
+        switch msg {
+        case .calibrationPassTapped(let timestamp):
+            partnerCalibration.handlePassTap(timestamp: timestamp)
+            return
+        case .calibrationArrivalTapped(let timestamp):
+            partnerCalibration.handleArrivalTap(timestamp: timestamp)
+            if partnerCalibration.reachedTarget {
+                completePartnerCalibration(averageTravelTime: partnerCalibration.averageTravelTime)
+            }
+            return
+        case .calibrationFinished(let averageTravelTimeSeconds):
+            completePartnerCalibration(averageTravelTime: averageTravelTimeSeconds)
+            return
+        default:
+            break
+        }
+        if !hasCompletedPassTempoCalibration && !mode.requiresPhoneDisplayRelay { return }
+        let shouldBlockCoachDrillMessages = blockCoachDrillDuringSessionCountdown && !coachConnectedForCalibration
+        if PartnerCountdownCoachMessagePolicy.shouldDeferWhileCountdown(
+            msg: msg,
+            isBlockingDrillMessagesFromCoach: shouldBlockCoachDrillMessages,
+            pendingNextRepIndex: &pendingCoachNextRepWhileCountdown
+        ) {
+            #if DEBUG
+            OTPPersistDebug.log("deferred drill message during session countdown (nextRep queued if applicable): \(otpMessageKind(msg))")
+            #endif
+            return
+        }
+        #if DEBUG
+        OTPPersistDebug.log("coach message received: \(otpMessageKind(msg))")
+        #endif
+        switch msg {
+        case .nextRep(let repIndex):
+            pendingCoachNextRepWhileCountdown = nil
+            #if DEBUG
+            if sessionTransportMode == .relayWebSocket {
+                if !partnerRelaySession.isCoachPaired {
+                    otpRelayDisplayLog("incoming nextRep repIndex=\(repIndex) while isCoachPaired=false (still applying — relay UI can lag peer_joined)")
+                }
+                otpRelayDisplayLog("incoming nextRep repIndex=\(repIndex)")
+            }
+            #endif
+            engine.onNextRep(repIndex: repIndex)
+        case .passTriggered(let repIndex, let timestamp):
+            if case .waitingForNextRep = engine.phase {
+                print("Ignoring late message for completed rep:", repIndex)
+                break
+            }
+            #if DEBUG
+            if sessionTransportMode == .relayWebSocket {
+                otpRelayDisplayLog("incoming passTriggered repIndex=\(repIndex)")
+            }
+            let displayReceiveWall = Date()
+            DecisionSpeedDebugLog.logDisplayRelayIngress(activity: .oneTouchPassing, kind: "passTriggered", repIndex: repIndex, embeddedTimestamp: timestamp, displayReceiveWallTime: displayReceiveWall)
+            #endif
+            otpApplyPassTrigger(repIndex: repIndex, passTimestamp: timestamp)
+        case .exitLogged(let repIndex, let gate, let timestamp):
+            if case .waitingForNextRep = engine.phase {
+                print("Ignoring late message for completed rep:", repIndex)
+                break
+            }
+            print("🔥🔥 DISPLAY RECEIVED exitLogged -> rep:", repIndex)
+            #if DEBUG
+            if sessionTransportMode == .relayWebSocket {
+                otpRelayDisplayLog("incoming exitLogged repIndex=\(repIndex) gate=\(gate)")
+            }
+            let displayReceiveWall = Date()
+            DecisionSpeedDebugLog.logDisplayRelayIngress(activity: .oneTouchPassing, kind: "exitLogged", repIndex: repIndex, embeddedTimestamp: timestamp, displayReceiveWallTime: displayReceiveWall)
+            let wallBeforeEngine = Date()
+            DecisionSpeedDebugLog.logDisplayBeforeEngineExit(activity: .oneTouchPassing, repIndex: repIndex, embeddedDirection: timestamp, displayWallBeforeEngine: wallBeforeEngine, kind: "exitLogged")
+            #endif
+            if engine.onExitLogged(repIndex: repIndex, gate: gate, timestamp: timestamp) != nil, let result = engine.repResults.last {
+                saveDecisionForRep(result: result)
+            }
+        case .firstTouchLogged: break
+        case .incorrectDecision(let repIndex, let timestamp):
+            if case .waitingForNextRep = engine.phase {
+                print("Ignoring late message for completed rep:", repIndex)
+                break
+            }
+            #if DEBUG
+            if sessionTransportMode == .relayWebSocket {
+                otpRelayDisplayLog("incoming incorrectDecision repIndex=\(repIndex)")
+            }
+            let displayReceiveWall = Date()
+            DecisionSpeedDebugLog.logDisplayRelayIngress(activity: .oneTouchPassing, kind: "incorrectDecision", repIndex: repIndex, embeddedTimestamp: timestamp, displayReceiveWallTime: displayReceiveWall)
+            let wallBeforeEngine = Date()
+            DecisionSpeedDebugLog.logDisplayBeforeEngineExit(activity: .oneTouchPassing, repIndex: repIndex, embeddedDirection: timestamp, displayWallBeforeEngine: wallBeforeEngine, kind: "incorrectDecision")
+            #endif
+            if engine.onIncorrectDecision(repIndex: repIndex, timestamp: timestamp) != nil, let result = engine.repResults.last {
+                saveDecisionForRep(result: result)
+            }
+        case .coachPaired:
+            #if DEBUG
+            if sessionTransportMode == .relayWebSocket {
+                otpRelayDisplayLog("incoming coachPaired (envelope)")
+            }
+            #endif
+            break
+        case .sessionEnded:
+            #if DEBUG
+            if sessionTransportMode == .relayWebSocket {
+                otpRelayDisplayLog("sessionEnded received")
+            }
+            #endif
+            break
+        case .partnerTrainingEnded:
+            #if DEBUG
+            if sessionTransportMode == .relayWebSocket {
+                otpRelayDisplayLog("partnerTrainingEnded received (coordinator also tears down relay)")
+            }
+            #endif
+            break
+        case .partnerSessionCheckpoint:
+            break
+        case .calibrationPassTapped, .calibrationArrivalTapped, .calibrationFinished:
+            break
         }
     }
 
@@ -376,12 +475,54 @@ struct OneTouchPassingDisplaySessionView: View {
 
     /// Partner: countdown only after coach is connected (Multipeer) or paired on relay. Solo: always ready.
     private var partnerReadyForCountdown: Bool {
+        mode.requiresPhoneDisplayRelay ? coachConnectedForCalibration : hasCompletedPassTempoCalibration
+    }
+
+    private var coachConnectedForCalibration: Bool {
         guard mode.requiresPhoneDisplayRelay else { return true }
         switch sessionTransportMode {
         case .multipeer:
             return connectionManager.connectedPeerName != nil
         case .relayWebSocket:
             return partnerRelaySession.isCoachPaired
+        }
+    }
+
+    private func completePartnerCalibration(averageTravelTime: Double?) {
+        CurrentSessionStore.shared.setExpectedBallTravelTimeOverrideSeconds(averageTravelTime)
+        hasCompletedPassTempoCalibration = true
+        showPassTempoCalibration = false
+    }
+
+    private func beginConnectedToCalibrationTransitionIfNeeded() {
+        guard coachConnectedForCalibration,
+              !hasCompletedPassTempoCalibration,
+              !hasStartedConnectedToCalibrationTransition else { return }
+        hasStartedConnectedToCalibrationTransition = true
+        withAnimation(.easeInOut(duration: 0.2)) {
+            showConnectedConfirmation = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + PartnerCalibrationTransition.connectedConfirmationDuration) {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showConnectedConfirmation = false
+            }
+            guard coachConnectedForCalibration else {
+                // Connection dropped during transition; do not enter calibration waiting.
+                hasStartedConnectedToCalibrationTransition = false
+                showPassTempoCalibration = false
+                return
+            }
+            let coordinator = TrainingPartnerConnectionCoordinator.shared
+            let shouldPrompt = PBASessionFlowPolicy.shouldPromptCalibration(for: .partner) && !coordinator.sessionCalibrationResolved
+            if shouldPrompt {
+                showPassTempoCalibration = true
+            } else {
+                CurrentSessionStore.shared.setExpectedBallTravelTimeOverrideSeconds(
+                    coordinator.sessionCalibrationAverageTravelTime ?? PartnerPassTempoCalibrationStore.savedAverageTravelTimeSeconds()
+                )
+                hasCompletedPassTempoCalibration = true
+                showPassTempoCalibration = false
+            }
         }
     }
 
@@ -400,17 +541,55 @@ struct OneTouchPassingDisplaySessionView: View {
         Group {
             if !mode.requiresPhoneDisplayRelay || sessionTransportMode != .relayWebSocket || partnerRelaySession.isCoachPaired {
                 VStack {
-                    HStack {
-                        Text(repCountText)
-                            .font(.subheadline.monospacedDigit())
-                            .foregroundColor(.white.opacity(0.7))
-                        Spacer()
+                    VStack(spacing: 2) {
+                        HStack {
+                            Text(repCountText)
+                                .font(.subheadline.monospacedDigit())
+                                .foregroundColor(.white.opacity(0.7))
+                            Spacer()
+                        }
+                        HStack {
+                            Text("Tempo: \(config.difficulty.passTempo.displayName)")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.62))
+                            Spacer()
+                        }
                     }
                     .padding(.horizontal, 20)
                     .padding(.top, 12)
                     Spacer()
                 }
                 .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private func showMilestoneNudgeIfNeeded() {
+        let completed = engine.repResults.count
+        guard completed > 0, completed != lastNudgeRepCount else { return }
+
+        let earlyCount = engine.repResults.filter { $0.decisionSpeed == .fast }.count
+        let score = Int(round((Double(engine.repResults.filter(\.correct).count) / Double(max(1, completed))) * 100.0))
+        let streak = profileManager.currentProfile?.sessionStreakCount ?? 0
+        let targetReps = 12
+
+        guard let text = SessionMilestoneNudgeEvaluator.nextNudge(
+            score: score,
+            earlyCount: earlyCount,
+            completedReps: completed,
+            targetReps: targetReps,
+            sessionStreakCount: streak
+        ) else { return }
+
+        lastNudgeRepCount = completed
+        withAnimation(.easeInOut(duration: 0.2)) {
+            milestoneNudgeText = text
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                if milestoneNudgeText == text {
+                    milestoneNudgeText = nil
+                }
             }
         }
     }
@@ -489,7 +668,9 @@ struct OneTouchPassingDisplaySessionView: View {
 
     private func saveDecisionForRep(result: OneTouchRepResult) {
         guard let sessionId = CurrentSessionStore.shared.sessionId else { return }
-        let reactionTimeMs = Int(result.decisionTime * 1000)
+        let travelTimeSeconds = CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds
+            ?? config.difficulty.passTempo.expectedBallTravelTime(distanceMeters: 11.0)
+        let reactionTimeMs = Int((travelTimeSeconds - result.decisionTime) * 1000)
         guard reactionTimeMs <= SupabaseDecisionService.maxReactionTimeMs else { return }
         let decision = Decision(
             sessionId: sessionId,
@@ -580,7 +761,7 @@ struct OneTouchPassingDisplaySessionView: View {
             if mode.requiresPhoneDisplayRelay {
                 CoachRemoteConnectionStatusView(connectionState: otpPartnerConnectionState)
             } else {
-                Text(mode == .solo ? "Tap screen or volume to trigger" : "Volume button to trigger")
+                Text("Tap screen to trigger")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.7))
             }
@@ -604,7 +785,12 @@ struct OneTouchPassingDisplaySessionView: View {
     @ViewBuilder
     private var waitingForCoachRelayOverlay: some View {
         if shouldShowRelayWaiting {
-            PartnerRelayDisplayWaitingOverlay(joinCode: partnerRelaySession.joinCode)
+            PartnerRelayDisplayWaitingOverlay(
+                joinCode: partnerRelaySession.joinCode,
+                onExitSession: {
+                    router.popToRoot(endingPartnerSession: false)
+                }
+            )
         }
     }
 
@@ -633,9 +819,12 @@ struct OneTouchPassingDisplaySessionView: View {
         case .firstTouchLogged(let i, let g, _): return "firstTouchLogged(\(i),\(g))"
         case .incorrectDecision(let i, _): return "incorrectDecision(\(i))"
         case .coachPaired(let sid): return "coachPaired(\(sid))"
-        case .sessionEnded: return "sessionEnded"
-        case .partnerTrainingEnded: return "partnerTrainingEnded"
-        case .partnerSessionCheckpoint: return "partnerSessionCheckpoint"
+        case .sessionEnded(_): return "sessionEnded"
+        case .partnerTrainingEnded(_): return "partnerTrainingEnded"
+        case .partnerSessionCheckpoint(_, _, _, _, _, _): return "partnerSessionCheckpoint"
+        case .calibrationPassTapped: return "calibrationPassTapped"
+        case .calibrationArrivalTapped: return "calibrationArrivalTapped"
+        case .calibrationFinished(let s): return "calibrationFinished(\(String(describing: s)))"
         }
     }
     #endif

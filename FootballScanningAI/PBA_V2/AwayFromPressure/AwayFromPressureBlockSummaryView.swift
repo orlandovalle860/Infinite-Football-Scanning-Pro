@@ -18,7 +18,7 @@ struct AwayFromPressureBlockSummaryView: View {
     @EnvironmentObject private var router: AppRouter
     @Environment(\.dismiss) private var dismiss
     @State private var didSave = false
-    @State private var showSessionFeedback = true
+    @State private var showSessionFeedback = false
     @State private var showDetails = false
     @State private var navigateToNewBlock = false
     @State private var navigateToCurriculum = false
@@ -35,11 +35,31 @@ struct AwayFromPressureBlockSummaryView: View {
 
     private var correctCount: Int { logs.filter(\.correct).count }
 
-    /// Decision Speed Score (0–100) from correctness and reaction times (timing = trigger → coach direction). Nil when no reps.
     private var decisionSpeedScoreValue: Int? {
-        let ms = logs.map { Int(($0.decisionTimeSeconds ?? 2.0) * 1000) }
-        let correct = logs.map(\.correct)
-        return DecisionSpeedScore.sessionScore(reactionTimesMs: ms, correct: correct)
+        guard !logs.isEmpty else { return nil }
+        let accuracy = Double(correctCount) / Double(logs.count)
+        return DecisionTimingModel.decisionScore(accuracy: accuracy, windows: decisionWindowSeconds, activity: .awayFromPressure)
+    }
+
+    private var integratedDecisionScore: Double {
+        guard !logs.isEmpty else { return 0 }
+        let accuracy = Double(correctCount) / Double(logs.count)
+        let speedValues = decisionWindowSeconds.map { window -> Double in
+            if window > 0.25 { return 1.0 }
+            if window > 0 { return 0.85 }
+            return 0.4
+        }
+        let avgSpeed = speedValues.isEmpty ? 0 : (speedValues.reduce(0, +) / Double(speedValues.count))
+        return ((accuracy * 0.70) + (avgSpeed * 0.30)) * 100.0
+    }
+
+    private var travelTimeSeconds: Double {
+        CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds
+            ?? config.difficulty.passTempo.expectedBallTravelTime(distanceMeters: 11.0)
+    }
+
+    private var decisionWindowSeconds: [Double] {
+        logs.compactMap(\.decisionTimeSeconds).map { travelTimeSeconds - $0 }
     }
 
     private var performanceLabel: String {
@@ -92,13 +112,13 @@ struct AwayFromPressureBlockSummaryView: View {
 
     private var speedCounts: SessionSpeedCounts {
         var f = 0, m = 0, s = 0
-        for log in logs {
-            guard let t = log.decisionTimeSeconds else { continue }
-            let bucket = TimingThresholds.pressureSpeedBucket(for: t)
-            switch bucket {
-            case .fast: f += 1
-            case .medium: m += 1
-            case .slow: s += 1
+        for window in decisionWindowSeconds {
+            if window > 0.25 {
+                f += 1
+            } else if window > 0 {
+                m += 1
+            } else {
+                s += 1
             }
         }
         return SessionSpeedCounts(fast: f, medium: m, slow: s)
@@ -189,7 +209,7 @@ struct AwayFromPressureBlockSummaryView: View {
             correctCount: correctCount,
             totalReps: 12,
             speedCounts: speedCounts,
-            avgDecisionTime: avgLatency,
+            avgDecisionTime: decisionWindowSeconds.isEmpty ? nil : (decisionWindowSeconds.reduce(0, +) / Double(decisionWindowSeconds.count)),
             biasDirection: biasGate,
             directionCounts: directionCounts,
             firstTouchCounts: firstTouchCountsFromLogs,
@@ -198,6 +218,7 @@ struct AwayFromPressureBlockSummaryView: View {
             firstTouchHesitantCount: firstTouchHesitantCountFromLogs,
             lateAdjustments: repsWithFirstTouchLogged >= 3 ? lateCorrectionsCount : nil,
             difficulty: config.difficulty,
+            decisionTotalScore: integratedDecisionScore,
             preReceiveDecisionCount: preReceiveDecisionCountFromLogs,
             decisionTimeStdDev: decisionTimeStdDev
         )
@@ -229,29 +250,8 @@ struct AwayFromPressureBlockSummaryView: View {
 
     var body: some View {
         Group {
-            if showSessionFeedback {
-                TrainingCompleteFeedbackView(
-                    activityName: "Playing Away From Pressure",
-                    activityKind: .awayFromPressure,
-                    correct: correctCount,
-                    total: 12,
-                    firstTouchAccuracy: nil,
-                    decisionSpeedLabel: decisionSpeedComparisonLabel(current: speedBucket, previous: previousBlockSpeedBucket),
-                    avgDecisionTimeSeconds: avgLatency,
-                    decisionSpeedScore: decisionSpeedScoreValue,
-                    previousDecisionSpeedScore: previousSessionForComparison?.decisionSpeedScore,
-                    previousAvgReactionTimeSeconds: previousSessionForComparison?.avgLatency,
-                    previousCorrect: previousSessionForComparison?.correct,
-                    previousTotal: previousSessionForComparison?.decisionsCompleted,
-                    personalBest: personalBestScore,
-                    isNewPersonalBest: isNewPersonalBestForDecisionSpeed,
-                    coachFeedback: sessionFeedbackCoachSentence,
-                    sessionResultForDebrief: sessionResult,
-                    previousSessionRecordForDebrief: previousSessionForComparison,
-                    onContinue: { showSessionFeedback = false }
-                )
-            } else if let s = sessionResultForSummary {
-                SessionSummaryView(
+            if let s = sessionResultForSummary {
+                SessionSummaryScreenView(
                     session: s,
                     playerName: profileManager.currentProfile?.name ?? "Player",
                     isNewPersonalBest: isNewPersonalBestForSummary,
@@ -264,18 +264,20 @@ struct AwayFromPressureBlockSummaryView: View {
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
-            } else {
-                blockSummaryContent
             }
+            else { blockSummaryContent }
         }
         .onAppear {
+            PBASessionFlowPolicy.handleResultsPresented()
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
             #if DEBUG
             if !didSave {
                 DecisionSpeedDebugLog.logAwayFromPressureAggregate(logs: logs, difficulty: config.difficulty)
+                let adaptiveScore = decisionSpeedScoreValue ?? 70
                 let repLabels = logs.map { log -> String in
                     guard let t = log.decisionTimeSeconds else { return "none" }
-                    return TimingThresholds.pressureSpeedBucket(for: t).rawValue
+                    let window = DecisionTimingModel.decisionWindow(rawRepInterval: t, activity: .awayFromPressure, difficulty: config.difficulty)
+                    return DecisionTimingModel.speedBucket(forDecisionWindow: window, activity: .awayFromPressure, score: adaptiveScore).rawValue
                 }
                 let c = speedCounts
                 UniversalSummaryBucketDebugLog.log(

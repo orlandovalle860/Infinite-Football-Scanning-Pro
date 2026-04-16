@@ -2,7 +2,7 @@
 //  TrainingMode.swift
 //  FootballScanningAI
 //
-//  PBA V2 — Training mode selection: who triggers each rep (Partner = coach remote, Wall = volume, Solo = tap or volume).
+//  PBA V2 — Training mode selection: who triggers each rep (Partner = coach remote, Wall/Solo = tap).
 //
 
 import Foundation
@@ -15,8 +15,8 @@ enum TrainingMode: String, CaseIterable, Hashable {
     var shortDescription: String {
         switch self {
         case .partner: return "Coach remote triggers each rep."
-        case .wall: return "You trigger with volume button."
-        case .solo: return "You trigger with screen tap or volume."
+        case .wall: return "You trigger with screen tap."
+        case .solo: return "You trigger with screen tap."
         }
     }
 

@@ -46,8 +46,12 @@ struct SessionResult: Identifiable, Codable, Hashable {
     let preReceiveDecisionCount: Int?
     /// Standard deviation of decision times within the session (seconds). Lower = more consistent. Optional for backward compatibility.
     let decisionTimeStdDev: Double?
+    /// Dribble or Pass: reps scored **optimal** (environment-based correct, not merely safe).
+    let decisionOptimalCount: Int?
+    /// Dribble or Pass: reps that were **safe but not optimal** (`acceptable` tier).
+    let decisionAcceptableOnlyCount: Int?
 
-    init(id: UUID = UUID(), date: Date = Date(), playerID: UUID, activityType: ActivityKind, correctCount: Int, totalReps: Int, speedCounts: SessionSpeedCounts, avgDecisionTime: Double? = nil, biasDirection: Gate? = nil, directionCounts: [Gate: Int] = [:], firstTouchCounts: [Gate: Int]? = nil, firstTouchMatchCount: Int? = nil, firstTouchTowardPressureCount: Int? = nil, firstTouchHesitantCount: Int? = nil, lateAdjustments: Int? = nil, notes: String? = nil, difficulty: TestDifficulty? = nil, decisionTotalScore: Double? = nil, forwardChoiceCount: Int? = nil, forwardOpportunityCount: Int? = nil, preReceiveDecisionCount: Int? = nil, decisionTimeStdDev: Double? = nil) {
+    init(id: UUID = UUID(), date: Date = Date(), playerID: UUID, activityType: ActivityKind, correctCount: Int, totalReps: Int, speedCounts: SessionSpeedCounts, avgDecisionTime: Double? = nil, biasDirection: Gate? = nil, directionCounts: [Gate: Int] = [:], firstTouchCounts: [Gate: Int]? = nil, firstTouchMatchCount: Int? = nil, firstTouchTowardPressureCount: Int? = nil, firstTouchHesitantCount: Int? = nil, lateAdjustments: Int? = nil, notes: String? = nil, difficulty: TestDifficulty? = nil, decisionTotalScore: Double? = nil, forwardChoiceCount: Int? = nil, forwardOpportunityCount: Int? = nil, preReceiveDecisionCount: Int? = nil, decisionTimeStdDev: Double? = nil, decisionOptimalCount: Int? = nil, decisionAcceptableOnlyCount: Int? = nil) {
         self.id = id
         self.date = date
         self.playerID = playerID
@@ -70,6 +74,8 @@ struct SessionResult: Identifiable, Codable, Hashable {
         self.forwardOpportunityCount = forwardOpportunityCount
         self.preReceiveDecisionCount = preReceiveDecisionCount
         self.decisionTimeStdDev = decisionTimeStdDev
+        self.decisionOptimalCount = decisionOptimalCount
+        self.decisionAcceptableOnlyCount = decisionAcceptableOnlyCount
     }
 }
 
@@ -80,6 +86,7 @@ extension SessionResult {
         case biasDirection, directionCounts, firstTouchCounts, firstTouchMatchCount
         case firstTouchTowardPressureCount, firstTouchHesitantCount, lateAdjustments, notes, difficulty
         case decisionTotalScore, forwardChoiceCount, forwardOpportunityCount, preReceiveDecisionCount, decisionTimeStdDev
+        case decisionOptimalCount, decisionAcceptableOnlyCount
     }
 
     init(from decoder: Decoder) throws {
@@ -106,6 +113,8 @@ extension SessionResult {
         forwardOpportunityCount = try c.decodeIfPresent(Int.self, forKey: .forwardOpportunityCount)
         preReceiveDecisionCount = try c.decodeIfPresent(Int.self, forKey: .preReceiveDecisionCount)
         decisionTimeStdDev = try c.decodeIfPresent(Double.self, forKey: .decisionTimeStdDev)
+        decisionOptimalCount = try c.decodeIfPresent(Int.self, forKey: .decisionOptimalCount)
+        decisionAcceptableOnlyCount = try c.decodeIfPresent(Int.self, forKey: .decisionAcceptableOnlyCount)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -132,6 +141,8 @@ extension SessionResult {
         try c.encodeIfPresent(forwardOpportunityCount, forKey: .forwardOpportunityCount)
         try c.encodeIfPresent(preReceiveDecisionCount, forKey: .preReceiveDecisionCount)
         try c.encodeIfPresent(decisionTimeStdDev, forKey: .decisionTimeStdDev)
+        try c.encodeIfPresent(decisionOptimalCount, forKey: .decisionOptimalCount)
+        try c.encodeIfPresent(decisionAcceptableOnlyCount, forKey: .decisionAcceptableOnlyCount)
     }
 }
 
@@ -150,16 +161,9 @@ extension SessionResult {
     /// Use with `DecisionSpeedBand.band(forScore:curve:)` so labels align with the session score.
     var estimatedDecisionSpeedScore: Int? {
         guard totalReps > 0 else { return nil }
-        let ms = Int((avgDecisionTime ?? 1.0) * 1000)
-        let reactionTimesMs = [Int](repeating: ms, count: totalReps)
-        let correct = (0..<correctCount).map { _ in true } + (0..<(totalReps - correctCount)).map { _ in false }
-        switch activityType {
-        case .dribbleOrPass:
-            return DecisionSpeedScore.dribbleOrPassSessionScore(reactionTimesMs: reactionTimesMs, correct: correct)
-        case .oneTouchPassing:
-            return DecisionSpeedScore.oneTouchSessionScore(reactionTimesMs: reactionTimesMs, correct: correct)
-        case .awayFromPressure, .twoMinuteTest:
-            return DecisionSpeedScore.sessionScore(reactionTimesMs: reactionTimesMs, correct: correct)
-        }
+        let accuracy = Double(correctCount) / Double(totalReps)
+        let avgWindow = avgDecisionTime ?? 0
+        let windows = [Double](repeating: avgWindow, count: totalReps)
+        return DecisionTimingModel.decisionScore(accuracy: accuracy, windows: windows, activity: activityType)
     }
 }

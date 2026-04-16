@@ -14,6 +14,55 @@ enum DribbleOrPassGateContent: String, Codable, CaseIterable, Hashable {
     case open      // CLEAR — dribble
 }
 
+/// Environment-based decision tolerance (Dribble or Pass). Drives fairness vs a single “expected gate”.
+enum DecisionQuality: String, Codable, CaseIterable, Hashable {
+    case correct
+    case acceptable
+    case incorrect
+}
+
+/// Rules: evaluate from **environment** (gate contents), not a single creative “best story”.
+/// - Forward lane open (up = open or teammate): using **up** is correct; safe lateral is acceptable; backward / ignoring forward when viable is not optimal.
+/// - Forward blocked (up = opponent): must move off pressure; `expectedCorrectGate` is the coached optimal; other non-red escapes are acceptable.
+enum DribbleOrPassDecisionRules {
+    static func quality(plan: DribbleOrPassRepPlan, chosen: Gate) -> DecisionQuality {
+        let chosenContent = plan.content(for: chosen)
+        if chosenContent == .opponent {
+            return .incorrect
+        }
+
+        let forwardUp = plan.up
+        if forwardUp == .open || forwardUp == .teammate {
+            if chosen == .up { return .correct }
+            if chosen == .left || chosen == .right {
+                let side = plan.content(for: chosen)
+                if side == .open || side == .teammate { return .acceptable }
+            }
+            if chosen == .down {
+                let d = plan.down
+                if d == .opponent { return .incorrect }
+                return .acceptable
+            }
+            return .incorrect
+        }
+
+        // Forward not available (pressure ahead).
+        if chosen == .up { return .incorrect }
+        if chosen == plan.expectedCorrectGate { return .correct }
+        if chosen == .left || chosen == .right || chosen == .down {
+            let c = plan.content(for: chosen)
+            if c == .opponent { return .incorrect }
+            return .acceptable
+        }
+        return .incorrect
+    }
+
+    /// Session `correctCount`: treat acceptable as not wrong (safe play), incorrect only when into pressure / clearly wrong.
+    static func countsAsCorrect(_ q: DecisionQuality) -> Bool {
+        q != .incorrect
+    }
+}
+
 /// Decision timing bucket for player feedback.
 enum DecisionSpeed: String, Codable, CaseIterable {
     case fast
@@ -21,8 +70,12 @@ enum DecisionSpeed: String, Codable, CaseIterable {
     case slow
 }
 
-func classifyDecisionSpeed(_ time: Double) -> DecisionSpeed {
-    TimingThresholds.dribblePassDecisionSpeed(for: time)
+func classifyDecisionSpeed(windowSeconds: Double, score: Int) -> DecisionSpeed {
+    switch DecisionTimingModel.speedBucket(forDecisionWindow: windowSeconds, activity: .dribbleOrPass, score: score) {
+    case .fast: return .fast
+    case .medium: return .medium
+    case .slow: return .slow
+    }
 }
 
 /// Decision hierarchy (v1: up=forward, left/right=lateral, down=backward). Green=pass, clear=dribble, red=avoid.
@@ -48,10 +101,13 @@ func dribbleOrPassTimingBonus(_ speed: DecisionSpeed) -> Double {
     }
 }
 
-/// Result of one rep. correct = chose expected gate; decisionPoints (0–4) + timingBonus = repScore; max 5.
+/// Result of one rep. `correct` = not wrong (correct or acceptable); `decisionQuality` refines coaching.
 struct DribbleOrPassRepResult {
     let repIndex: Int
     let correct: Bool
+    let decisionQuality: DecisionQuality
+    /// True when `up` was open or teammate on that rep (forward lane viable).
+    let forwardLaneOpen: Bool
     let decisionTime: Double
     let decisionSpeed: DecisionSpeed
     let expectedGate: Gate
@@ -64,15 +120,18 @@ struct DribbleOrPassRepResult {
     let firstTouchGate: Gate?
     /// decisionPoints + timingBonus. Max 5 per rep.
     var repScore: Double { Double(decisionPoints) + timingBonus }
-    /// True when optional early direction matched intended gate; nil when not logged.
+    /// Early direction aligned with environment-based optimal cue (forward when lane open, else coached escape).
     var firstTouchAccurate: Bool? {
         guard let ft = firstTouchGate else { return nil }
+        if forwardLaneOpen { return ft == .up }
         return ft == expectedGate
     }
 
-    init(repIndex: Int, correct: Bool, decisionTime: Double, decisionSpeed: DecisionSpeed, expectedGate: Gate, chosenGate: Gate, decisionPoints: Int, timingBonus: Double, firstTouchGate: Gate? = nil) {
+    init(repIndex: Int, correct: Bool, decisionQuality: DecisionQuality, forwardLaneOpen: Bool, decisionTime: Double, decisionSpeed: DecisionSpeed, expectedGate: Gate, chosenGate: Gate, decisionPoints: Int, timingBonus: Double, firstTouchGate: Gate? = nil) {
         self.repIndex = repIndex
         self.correct = correct
+        self.decisionQuality = decisionQuality
+        self.forwardLaneOpen = forwardLaneOpen
         self.decisionTime = decisionTime
         self.decisionSpeed = decisionSpeed
         self.expectedGate = expectedGate

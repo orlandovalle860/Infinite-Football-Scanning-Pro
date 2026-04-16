@@ -7,6 +7,8 @@
 
 import SwiftUI
 
+private let pbaLastTrainingModeKey = "pba.lastSelectedTrainingMode"
+
 struct TrainingModeSelectionView<Next: View>: View {
     let activityTitle: String
     let nextDestination: ((TrainingMode) -> Next)?
@@ -15,6 +17,9 @@ struct TrainingModeSelectionView<Next: View>: View {
     @EnvironmentObject private var playerStore: PlayerStore
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
     @EnvironmentObject private var router: AppRouter
+    @State private var savedMode: TrainingMode?
+    @State private var showModeSelection = false
+    @State private var continueMode: TrainingMode?
 
     init(activityTitle: String, onSelectMode: ((TrainingMode) -> Void)? = nil, @ViewBuilder nextDestination: @escaping (TrainingMode) -> Next) {
         self.activityTitle = activityTitle
@@ -30,28 +35,64 @@ struct TrainingModeSelectionView<Next: View>: View {
                 .foregroundColor(.white)
                 .padding(.horizontal)
 
-            Text("Who triggers each rep?")
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.7))
-                .multilineTextAlignment(.center)
+            if let savedMode, !showModeSelection {
+                Text("\(savedMode.rawValue) setup")
+                    .font(.system(size: 24, weight: .bold, design: .rounded))
+                    .foregroundColor(.white)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 28)
+
+                Button {
+                    continueWithMode(savedMode)
+                } label: {
+                    Text("Continue")
+                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .foregroundColor(.black)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 20)
+                        .padding(.horizontal, 24)
+                        .background(Color.yellow)
+                        .cornerRadius(18)
+                }
+                .buttonStyle(PlainButtonStyle())
                 .padding(.horizontal, 28)
 
-            VStack(spacing: 16) {
-                ForEach(TrainingMode.allCases, id: \.self) { mode in
-                    if onSelectMode != nil {
-                        Button {
-                            onSelectMode?(mode)
-                        } label: {
-                            modeRowLabel(mode: mode)
+                Button {
+                    showModeSelection = true
+                } label: {
+                    Text("Change setup")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white.opacity(0.86))
+                }
+                .buttonStyle(PlainButtonStyle())
+            } else {
+                Text("Who triggers each rep?")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.7))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 28)
+
+                VStack(spacing: 16) {
+                    ForEach(TrainingMode.allCases, id: \.self) { mode in
+                        if onSelectMode != nil {
+                            Button {
+                                saveLastMode(mode)
+                                onSelectMode?(mode)
+                            } label: {
+                                modeRowLabel(mode: mode)
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                            .padding(.horizontal, 28)
+                        } else if let next = nextDestination {
+                            NavigationLink(destination: next(mode)) {
+                                modeRowLabel(mode: mode)
+                            }
+                            .simultaneousGesture(TapGesture().onEnded {
+                                saveLastMode(mode)
+                            })
+                            .buttonStyle(PlainButtonStyle())
+                            .padding(.horizontal, 28)
                         }
-                        .buttonStyle(PlainButtonStyle())
-                        .padding(.horizontal, 28)
-                    } else if let next = nextDestination {
-                        NavigationLink(destination: next(mode)) {
-                            modeRowLabel(mode: mode)
-                        }
-                        .buttonStyle(PlainButtonStyle())
-                        .padding(.horizontal, 28)
                     }
                 }
             }
@@ -74,6 +115,19 @@ struct TrainingModeSelectionView<Next: View>: View {
         .navigationTitle(activityTitle)
         .navigationBarTitleDisplayMode(.inline)
         .pbaHomeToolbar(router: router)
+        .navigationDestination(item: $continueMode) { mode in
+            if let nextDestination {
+                nextDestination(mode)
+            }
+        }
+        .onAppear {
+            if let raw = UserDefaults.standard.string(forKey: pbaLastTrainingModeKey) {
+                savedMode = TrainingMode(rawValue: raw)
+            } else {
+                savedMode = nil
+            }
+            showModeSelection = false
+        }
     }
 
     private func modeRowLabel(mode: TrainingMode) -> some View {
@@ -94,5 +148,19 @@ struct TrainingModeSelectionView<Next: View>: View {
         .padding(.horizontal, 24)
         .background(mode == .partner ? Color.yellow : Color.white.opacity(0.12))
         .cornerRadius(18)
+    }
+
+    private func continueWithMode(_ mode: TrainingMode) {
+        saveLastMode(mode)
+        if let onSelectMode {
+            onSelectMode(mode)
+        } else {
+            continueMode = mode
+        }
+    }
+
+    private func saveLastMode(_ mode: TrainingMode) {
+        UserDefaults.standard.set(mode.rawValue, forKey: pbaLastTrainingModeKey)
+        savedMode = mode
     }
 }

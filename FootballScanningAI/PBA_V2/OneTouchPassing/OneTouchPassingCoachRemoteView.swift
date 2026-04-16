@@ -38,9 +38,6 @@ struct OneTouchPassingCoachRemoteView: View {
     }
     @State private var state: OneTouchPassingCoachState = .ready
     @State private var currentRepIndex = 0
-    @State private var volumeTriggerEnabled = true
-    @State private var showVolumeEdgeWarning = false
-    @State private var passVolumeFlashSignal = 0
     @State private var coachRelayJoinCodeInput = ""
     @State private var coachRelayJoinError: String?
     @State private var coachRelayJoinBusy = false
@@ -48,15 +45,25 @@ struct OneTouchPassingCoachRemoteView: View {
     @FocusState private var relayJoinCodeFieldFocused: Bool
     @State private var coachRelayDisplayPeerJoined = false
     @State private var didAttemptCoachRelayAutoReconnect = false
+    @State private var hasCompletedPassTempoCalibration = false
+    @State private var partnerCalibration = PartnerPassTempoCalibrationTracker()
+    @State private var showConnectedConfirmation = false
+    @State private var hasStartedConnectedToCalibrationTransition = false
+    @State private var hasChosenCalibrationAction = false
+    @State private var shouldRunCalibration = true
+    @State private var showCalibrationCompletionFeedback = false
 
     private let totalReps = 12
 
     private var coachSessionConnected: Bool {
+        if TrainingPartnerConnectionCoordinator.shared.isConnected {
+            return true
+        }
         switch Self.partnerTransportMode {
         case .multipeer:
             return connectionManager.connectedPeerName != nil
         case .relayWebSocket:
-            return remoteService.connectionState == .connected
+            return remoteService.connectionState == .connected && coachRelayDisplayPeerJoined
         }
     }
 
@@ -74,8 +81,8 @@ struct OneTouchPassingCoachRemoteView: View {
             Color.clear.contentShape(Rectangle()).onTapGesture { }
             VStack(spacing: 24) {
                 switch state {
-                case .ready: readyView
-                case .logging(let repIndex): loggingView(repIndex: repIndex)
+                case .ready, .logging:
+                    readyView
                 case .blockComplete: blockCompleteView
                 }
             }
@@ -85,22 +92,27 @@ struct OneTouchPassingCoachRemoteView: View {
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .overlay(volumeTriggerOverlay)
         .onReceive(NotificationCenter.default.publisher(for: .twoMinuteMessageReceived)) { notification in
             guard let msg = notification.object as? TwoMinuteMessage else { return }
             if case .sessionEnded = msg {
                 #if DEBUG
                 if Self.partnerTransportMode == .relayWebSocket {
                     otpCoachRelayLog("sessionEnded received")
-                    CoachPersistDebug.log("sessionEnded notification — clearing join form", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+                    CoachPersistDebug.log(
+                        "sessionEnded notification — preserve join code for quick restart (clear only on explicit end/disconnect)",
+                        joinField: coachRelayJoinCodeInput,
+                        peerJoined: coachRelayDisplayPeerJoined
+                    )
                 }
                 #endif
-                if Self.partnerTransportMode == .relayWebSocket {
-                    clearCoachRelayJoinForm()
-                }
                 state = .ready
-                volumeTriggerEnabled = true
-                popToCoachRemoteHubAfterDisplayDisconnect()
+                hasCompletedPassTempoCalibration = false
+                partnerCalibration.reset()
+                hasChosenCalibrationAction = false
+                shouldRunCalibration = true
+                showConnectedConfirmation = false
+                hasStartedConnectedToCalibrationTransition = false
+                // Stay in activity-ready state; explicit end/disconnect paths handle full reset.
             }
             PartnerRelayCheckpointCoachUI.handleDisplayCheckpointMessage(
                 msg,
@@ -112,18 +124,40 @@ struct OneTouchPassingCoachRemoteView: View {
         .onAppear {
             didNavigateBackToCoachHubAfterDisplayDisconnect = false
             didAttemptCoachRelayAutoReconnect = false
+            hasCompletedPassTempoCalibration = false
+            partnerCalibration.reset()
+            showConnectedConfirmation = false
+            hasStartedConnectedToCalibrationTransition = false
+            hasChosenCalibrationAction = false
+            shouldRunCalibration = true
             #if DEBUG
             if Self.partnerTransportMode == .relayWebSocket {
                 CoachPersistDebug.log("onAppear", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
             }
             #endif
             TrainingPartnerConnectionCoordinator.shared.beginPartnerTrainingSessionIfNeeded()
+            let coordinator = TrainingPartnerConnectionCoordinator.shared
+            if coordinator.sessionCalibrationResolved {
+                hasCompletedPassTempoCalibration = true
+                hasChosenCalibrationAction = true
+                shouldRunCalibration = false
+            } else if coordinator.isConnected,
+                      !PartnerPassTempoCalibrationStore.requiresCalibration(for: .partner) {
+                hasCompletedPassTempoCalibration = true
+                hasChosenCalibrationAction = true
+                shouldRunCalibration = false
+                coordinator.markSessionCalibrationResolved(
+                    averageTravelTimeSeconds: PartnerPassTempoCalibrationStore.savedAverageTravelTimeSeconds(),
+                    trainingMode: .partner
+                )
+            }
             if Self.partnerTransportMode == .multipeer {
                 TrainingPartnerConnectionCoordinator.shared.prepareMultipeerCoachRemote(connectionManager: connectionManager)
             }
             if Self.partnerTransportMode == .relayWebSocket {
                 attemptCoachRelayAutoReconnectIfNeeded()
             }
+            beginConnectedToCalibrationTransitionIfNeeded()
         }
         .onDisappear {
             #if DEBUG
@@ -131,42 +165,14 @@ struct OneTouchPassingCoachRemoteView: View {
                 CoachPersistDebug.log("onDisappear — enter", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
             }
             #endif
-            if TrainingPartnerConnectionCoordinator.shared.shouldPersistPartnerPairing {
-                #if DEBUG
-                if Self.partnerTransportMode == .relayWebSocket {
-                    otpCoachRelayLog("persist coach pairing — skip relay disconnect on activity disappear")
-                    CoachPersistDebug.log("onDisappear — skip remoteService.disconnect (persist pairing)", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
-                }
-                if Self.partnerTransportMode == .multipeer {
-                    print("[Multipeer] TrainingPartnerSession: coach onDisappear — skip stopBrowsing (training session active)")
-                }
-                #endif
-                if Self.partnerTransportMode == .multipeer {
-                    return
-                }
-                return
-            }
             #if DEBUG
-            if Self.partnerTransportMode == .relayWebSocket {
-                CoachPersistDebug.log("onDisappear — before remoteService.disconnect (pairing not persisting)", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
-            }
+            CoachPersistDebug.log("onDisappear — no transport teardown from view", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
             #endif
-            if Self.partnerTransportMode == .multipeer {
-                connectionManager.stopBrowsing()
-            }
-            remoteService.disconnect()
-            if Self.partnerTransportMode == .relayWebSocket {
-                #if DEBUG
-                CoachPersistDebug.log("onDisappear — after remoteService.disconnect, before clearCoachRelayJoinForm", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
-                #endif
-                clearCoachRelayJoinForm()
-            }
         }
         .onChange(of: connectionManager.connectedPeerName) { oldName, newName in
             guard Self.partnerTransportMode == .multipeer else { return }
             guard oldName != nil, newName == nil else { return }
             resetLocalUIForDisconnect(source: "connectedPeerName=nil")
-            popToCoachRemoteHubAfterDisplayDisconnect()
         }
         .onChange(of: remoteService.connectionState) { oldState, newState in
             #if DEBUG
@@ -187,11 +193,19 @@ struct OneTouchPassingCoachRemoteView: View {
                 return
             }
             #if DEBUG
-            CoachPersistDebug.log("onChange disconnect — clearCoachRelayJoinForm (pairing not active)", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+            CoachPersistDebug.log("onChange disconnect — local UI reset only (pairing teardown belongs to coordinator)", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
             #endif
-            clearCoachRelayJoinForm()
             resetLocalUIForDisconnect(source: "relayRemoteService=disconnected")
-            popToCoachRemoteHubAfterDisplayDisconnect()
+        }
+        .onChange(of: coachSessionConnected) { _, connected in
+            if connected {
+                beginConnectedToCalibrationTransitionIfNeeded()
+            } else {
+                showConnectedConfirmation = false
+                hasStartedConnectedToCalibrationTransition = false
+                hasChosenCalibrationAction = false
+                shouldRunCalibration = true
+            }
         }
         .preferredColorScheme(.dark)
         .navigationTitle("Coach — One-Touch Passing (12 reps)")
@@ -202,136 +216,94 @@ struct OneTouchPassingCoachRemoteView: View {
         VStack(spacing: 20) {
             if !coachSessionConnected {
                 connectionSection
-            } else {
-                CoachRemoteConnectionStatusBar(
-                    isRelay: Self.partnerTransportMode == .relayWebSocket,
-                    peerDisplayName: connectionManager.connectedPeerName
+            } else if showConnectedConfirmation {
+                PartnerConnectedConfirmationView()
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+            } else if !hasChosenCalibrationAction {
+                CoachCalibrationDecisionView(
+                    hasPreviousCalibration: PartnerPassTempoCalibrationStore.hasSavedCalibration,
+                    onStartCalibration: chooseStartCalibration,
+                    onSkip: skipCalibrationAndStartSession
                 )
-                Text(CoachRemoteCopy.readyForNextRep)
-                    .font(.title3.weight(.semibold))
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Text("Rep \(currentRepIndex + 1) of \(totalReps)")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.45))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Spacer(minLength: 16)
-                Button {
-                    if Self.partnerTransportMode == .multipeer {
-                        connectionManager.lastError = nil
+            } else if shouldRunCalibration && !hasCompletedPassTempoCalibration {
+                CoachRemotePassTempoCalibrationView(
+                    sampleCount: partnerCalibration.sampleCount,
+                    targetSamples: partnerCalibration.targetSamples,
+                    step: partnerCalibration.step,
+                    canFinish: partnerCalibration.canFinish,
+                    onTapPass: handleCalibrationPassTap,
+                    onTapArrival: handleCalibrationArrivalTap,
+                    onFinish: finishCalibrationAndStartSession,
+                    showCompletionFeedback: showCalibrationCompletionFeedback
+                )
+            } else {
+                VStack(spacing: 10) {
+                    sharedSessionInput(repIndex: currentRepIndex)
+                    Button("Recalibrate timing") {
+                        chooseStartCalibration()
                     }
-                    #if DEBUG
-                    if Self.partnerTransportMode == .relayWebSocket {
-                        otpCoachRelayLog("send nextRep repIndex=\(currentRepIndex)")
-                    }
-                    #endif
-                    remoteService.sendNextRep(repIndex: currentRepIndex)
-                    state = .logging(repIndex: currentRepIndex)
-                } label: {
-                    Text("NEXT REP")
-                        .font(.system(size: 26, weight: .bold, design: .rounded))
-                        .foregroundColor(.black)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 26)
-                        .background(Color.yellow)
-                        .cornerRadius(18)
-                }
-                .buttonStyle(PlainButtonStyle())
-                Spacer(minLength: 0)
-            }
-        }
-    }
-
-    private func loggingView(repIndex: Int) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Rep \(repIndex + 1) of \(totalReps)")
-                .font(.caption)
-                .foregroundColor(.white.opacity(0.45))
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            VStack(alignment: .leading, spacing: 12) {
-                Text(CoachRemoteCopy.partnerCoachSetupLine)
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.55))
-                Text(CoachRemoteCopy.partnerCoachBallLine)
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.55))
-                Text(CoachRemoteCopy.passTimingInstruction)
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.92))
-                if showVolumeEdgeWarning {
-                    Text(CoachRemoteVolumeTriggerConfig.edgeWarningMessage)
-                        .font(.caption2)
-                        .foregroundColor(.orange.opacity(0.95))
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 12) {
-                Text(CoachRemoteCopy.coachFirstDecisionLoggingLine)
-                    .font(.caption)
-                    .foregroundColor(.cyan.opacity(0.88))
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Text(CoachRemoteCopy.playerDecisionQuestion)
                     .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.white.opacity(0.88))
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                directionPad
+                    .foregroundColor(.white.opacity(0.82))
+                    .buttonStyle(.plain)
+                }
             }
-
-            Spacer(minLength: 12)
-
-            CoachRemotePassPrimaryButton(
-                activity: ActivityKind.oneTouchPassing.rawValue,
-                repIndex: repIndex,
-                send: {
-                    #if DEBUG
-                    if Self.partnerTransportMode == .relayWebSocket {
-                        otpCoachRelayLog("send passTriggered repIndex=\(repIndex)")
-                    }
-                    let t = Date()
-                    DecisionSpeedDebugLog.logCoachPassSend(activity: .oneTouchPassing, repIndex: repIndex, embeddedTimestamp: t)
-                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: t)
-                    #else
-                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
-                    #endif
-                },
-                volumeFlashSignal: $passVolumeFlashSignal
-            )
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    private var directionPad: some View {
-        VStack(spacing: 10) {
-            directionButton(gate: .up)
-            HStack(spacing: 10) {
-                directionButton(gate: .left)
-                CoachRemoteIncorrectPadButton(action: logIncorrect)
-                directionButton(gate: .right)
+    private func sharedSessionInput(repIndex: Int) -> some View {
+        CoachSessionView(
+            mode: .playPicture,
+            totalReps: totalReps,
+            preBeepDelayRange: 0.0...0.0,
+            onRepStarted: { rep in
+                startNextRep(repIndex: rep)
+            },
+            onPassTriggered: { rep in
+                sendPassTrigger(repIndex: rep)
+            },
+            onDirectionLogged: { rep, swipe in
+                logExit(repIndex: rep, gate: swipe.gate)
             }
-            directionButton(gate: .down)
+        )
+    }
+
+    private func startNextRep(repIndex: Int) {
+        guard repIndex < totalReps else { return }
+        if Self.partnerTransportMode == .multipeer {
+            connectionManager.lastError = nil
         }
-        .frame(height: 200)
+        #if DEBUG
+        if Self.partnerTransportMode == .relayWebSocket {
+            otpCoachRelayLog("send nextRep repIndex=\(repIndex)")
+        }
+        #endif
+        remoteService.sendNextRep(repIndex: repIndex)
+        currentRepIndex = repIndex
+        state = .logging(repIndex: repIndex)
+    }
+
+    private func sendPassTrigger(repIndex: Int) {
+        #if DEBUG
+        if Self.partnerTransportMode == .relayWebSocket {
+            otpCoachRelayLog("send passTriggered repIndex=\(repIndex)")
+        }
+        let t = Date()
+        DecisionSpeedDebugLog.logCoachPassSend(activity: .oneTouchPassing, repIndex: repIndex, embeddedTimestamp: t)
+        remoteService.sendPassTriggered(repIndex: repIndex, timestamp: t)
+        #else
+        remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
+        #endif
     }
 
     private var connectionSection: some View {
         Group {
             if Self.partnerTransportMode == .relayWebSocket {
                 VStack(spacing: 20) {
-                    Text("Rep \(currentRepIndex + 1) of \(totalReps)")
-                        .font(.footnote)
-                        .foregroundColor(.white.opacity(0.5))
                     PartnerRelayCoachJoinSection(
                         joinCodeInput: $coachRelayJoinCodeInput,
                         joinFieldFocused: $relayJoinCodeFieldFocused,
                         joinBusy: coachRelayJoinBusy,
                         joinBanner: coachRelayJoinBanner,
-                        relayTransportConnected: remoteService.connectionState == .connected,
-                        displayPeerJoined: coachRelayDisplayPeerJoined,
                         onJoin: {
                             otpCoachRelayLog("UI: Join session (button or auto-submit)")
                             Task { await startOTPCoachRelayJoin() }
@@ -350,10 +322,6 @@ struct OneTouchPassingCoachRemoteView: View {
     private var multipeerConnectionScrollContent: some View {
         ScrollView {
             VStack(spacing: 20) {
-                Text("Rep \(currentRepIndex + 1) of \(totalReps)")
-                    .font(.footnote)
-                    .foregroundColor(.white.opacity(0.5))
-
                 Text(CoachRemoteCopy.multipeerSetupHint)
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.85))
@@ -474,7 +442,6 @@ struct OneTouchPassingCoachRemoteView: View {
                     switch api {
                     case .httpError(let code, let body):
                         if code == 409, body?.contains("COACH_SLOT_TAKEN") == true {
-                            clearCoachRelayJoinForm()
                             let friendly = "That code doesn’t match the relay session on the iPad. Enter the join code shown on the display **right now**, then tap Join session."
                             coachRelayJoinError = friendly
                             coachRelayJoinBanner = friendly
@@ -501,51 +468,16 @@ struct OneTouchPassingCoachRemoteView: View {
     private func attemptCoachRelayAutoReconnectIfNeeded() {
         guard !didAttemptCoachRelayAutoReconnect else { return }
         let coord = TrainingPartnerConnectionCoordinator.shared
-        guard coord.shouldPersistPartnerPairing,
-              let code = coord.lastCoachRelayJoinCode,
+        guard let code = coord.lastCoachRelayJoinCode,
               !code.isEmpty,
               remoteService.connectionState != .connected else {
-            CoachPersistDebug.log("auto-reconnect skipped (no code, not persisting, or already connected)", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+            CoachPersistDebug.log("auto-reconnect skipped (no code or already connected)", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
             return
         }
         didAttemptCoachRelayAutoReconnect = true
         coachRelayJoinCodeInput = code
         CoachPersistDebug.log("auto-reconnect starting with stored join code", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
         Task { await startOTPCoachRelayJoin() }
-    }
-
-    private var volumeTriggerOverlay: some View {
-        CoachRemoteVolumeTriggerView(
-            connected: coachSessionConnected,
-            enabled: volumeTriggerEnabled,
-            repIndex: { if case .logging(let r) = state { return r }; return nil },
-            onTrigger: {
-                guard case .logging(let repIndex) = state else { return }
-                let sent = CoachRemotePassTrigger.perform(
-                    source: .volume,
-                    activity: ActivityKind.oneTouchPassing.rawValue,
-                    repIndex: repIndex
-                ) {
-                    #if DEBUG
-                    if Self.partnerTransportMode == .relayWebSocket {
-                        otpCoachRelayLog("send passTriggered (volume) repIndex=\(repIndex)")
-                    }
-                    let t = Date()
-                    DecisionSpeedDebugLog.logCoachPassSend(activity: .oneTouchPassing, repIndex: repIndex, embeddedTimestamp: t)
-                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: t)
-                    #else
-                    remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
-                    #endif
-                }
-                if sent {
-                    passVolumeFlashSignal += 1
-                }
-            },
-            onVolumeEdgeWarningChange: { showVolumeEdgeWarning = $0 }
-        )
-        .id("vol-\(currentRepIndex)-\(state)")
-        .allowsHitTesting(false)
-        .frame(width: 1, height: 1)
     }
 
     private var blockCompleteView: some View {
@@ -564,57 +496,21 @@ struct OneTouchPassingCoachRemoteView: View {
         }
     }
 
-    private func directionButton(gate: Gate) -> some View {
-        let name: String
-        switch gate {
-        case .up: name = "arrow.up"
-        case .down: name = "arrow.down"
-        case .left: name = "arrow.left"
-        case .right: name = "arrow.right"
-        }
-        return CoachRemoteFeedbackTap(kind: .direction, clipCornerRadius: 12) {
-            logExit(gate)
-        } label: {
-            Image(systemName: name)
-                .font(.system(size: 36, weight: .bold))
-                .foregroundColor(.white)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.white.opacity(0.12))
-                .cornerRadius(12)
-                .contentShape(Rectangle())
-        }
-    }
-
-    private func logExit(_ gate: Gate) {
-        guard case .logging(let repIndex) = state else { return }
+    private func logExit(repIndex: Int, gate: Gate) {
+        guard repIndex < totalReps else { return }
         #if DEBUG
         if Self.partnerTransportMode == .relayWebSocket {
             otpCoachRelayLog("send exitLogged repIndex=\(repIndex) gate=\(gate)")
         }
         let t = Date()
         DecisionSpeedDebugLog.logCoachExitSend(activity: .oneTouchPassing, repIndex: repIndex, gate: gate, embeddedTimestamp: t)
+        print("🔥🔥 COACH SEND exitLogged -> rep:", repIndex)
         remoteService.sendExitLogged(repIndex: repIndex, gate: gate, timestamp: t)
         #else
+        print("🔥🔥 COACH SEND exitLogged -> rep:", repIndex)
         remoteService.sendExitLogged(repIndex: repIndex, gate: gate, timestamp: Date())
         #endif
-        currentRepIndex = repIndex + 1
-        state = currentRepIndex >= totalReps ? .blockComplete : .ready
-    }
-
-    private func logIncorrect() {
-        guard case .logging(let repIndex) = state else { return }
-        #if DEBUG
-        if Self.partnerTransportMode == .relayWebSocket {
-            otpCoachRelayLog("send incorrectDecision repIndex=\(repIndex)")
-        }
-        let t = Date()
-        DecisionSpeedDebugLog.logCoachIncorrectSend(activity: .oneTouchPassing, repIndex: repIndex, embeddedTimestamp: t)
-        remoteService.sendIncorrectDecision(repIndex: repIndex, timestamp: t)
-        #else
-        remoteService.sendIncorrectDecision(repIndex: repIndex, timestamp: Date())
-        #endif
-        currentRepIndex = repIndex + 1
-        state = currentRepIndex >= totalReps ? .blockComplete : .ready
+        state = (repIndex + 1) >= totalReps ? .blockComplete : .ready
     }
 
     private func coachSyncRepIndexForCheckpoint() -> Int {
@@ -634,7 +530,81 @@ struct OneTouchPassingCoachRemoteView: View {
         print("[OTP Coach] disconnect reset -> state=.ready [\(source)]")
 #endif
         state = .ready
-        volumeTriggerEnabled = true
+    }
+
+
+    private func handleCalibrationPassTap() {
+        let now = Date()
+        partnerCalibration.handlePassTap(timestamp: now)
+        remoteService.sendCalibrationPassTapped(timestamp: now)
+    }
+
+    private func handleCalibrationArrivalTap() {
+        let now = Date()
+        partnerCalibration.handleArrivalTap(timestamp: now)
+        remoteService.sendCalibrationArrivalTapped(timestamp: now)
+        if partnerCalibration.reachedTarget {
+            showCalibrationCompletionAndAutoStart()
+        }
+    }
+
+    private func finishCalibrationAndStartSession() {
+        guard partnerCalibration.canFinish else { return }
+        let avg = partnerCalibration.averageTravelTime
+        PartnerPassTempoCalibrationStore.save(averageTravelTimeSeconds: avg, trainingMode: .partner)
+        TrainingPartnerConnectionCoordinator.shared.markSessionCalibrationResolved(
+            averageTravelTimeSeconds: avg,
+            trainingMode: .partner
+        )
+        remoteService.sendCalibrationFinished(averageTravelTimeSeconds: avg)
+        showCalibrationCompletionFeedback = false
+        hasCompletedPassTempoCalibration = true
+    }
+
+    private func chooseStartCalibration() {
+        hasChosenCalibrationAction = true
+        shouldRunCalibration = true
+        showCalibrationCompletionFeedback = false
+        partnerCalibration.reset()
+    }
+
+    private func skipCalibrationAndStartSession() {
+        hasChosenCalibrationAction = true
+        shouldRunCalibration = false
+        showCalibrationCompletionFeedback = false
+        hasCompletedPassTempoCalibration = true
+        let fallback = PartnerPassTempoCalibrationStore.savedAverageTravelTimeSeconds()
+        TrainingPartnerConnectionCoordinator.shared.markSessionCalibrationResolved(
+            averageTravelTimeSeconds: fallback,
+            trainingMode: .partner
+        )
+        remoteService.sendCalibrationFinished(averageTravelTimeSeconds: fallback)
+    }
+
+    private func showCalibrationCompletionAndAutoStart() {
+        guard !showCalibrationCompletionFeedback else { return }
+        showCalibrationCompletionFeedback = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+            finishCalibrationAndStartSession()
+        }
+    }
+
+
+    private func beginConnectedToCalibrationTransitionIfNeeded() {
+        guard coachSessionConnected,
+              !hasCompletedPassTempoCalibration,
+              !hasStartedConnectedToCalibrationTransition else { return }
+        hasStartedConnectedToCalibrationTransition = true
+        relayJoinCodeFieldFocused = false
+        PartnerRelayCoachJoinKeyboard.dismiss()
+        withAnimation(.easeInOut(duration: 0.2)) {
+            showConnectedConfirmation = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + PartnerCalibrationTransition.connectedConfirmationDuration) {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showConnectedConfirmation = false
+            }
+        }
     }
 
     private func clearCoachRelayJoinForm() {
@@ -643,7 +613,6 @@ struct OneTouchPassingCoachRemoteView: View {
             CoachPersistDebug.log("clearCoachRelayJoinForm BEFORE", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
         }
         #endif
-        TrainingPartnerConnectionCoordinator.shared.clearRecordedCoachRelayJoinCode()
         coachRelayJoinCodeInput = ""
         coachRelayJoinError = nil
         coachRelayJoinBanner = nil

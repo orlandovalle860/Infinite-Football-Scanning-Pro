@@ -20,6 +20,7 @@ enum CriticalScanPhase: Equatable {
 final class TwoMinuteCriticalScanEngine: ObservableObject {
     @Published private(set) var phase: CriticalScanPhase = .waitingForNextRep
     @Published private(set) var repLogs: [RepLog] = []
+    @Published private(set) var repDecisions: [RepDecision] = []
 
     private let config: TwoMinuteTestConfig
     private let plan: [RepPlan]
@@ -30,6 +31,10 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
     private var infoHiddenAtForCurrentRep: Date?
     private var scanDelayTimer: Timer?
     private var ballHideTimer: Timer?
+    /// [CueTiming-Debug] anchor for ball cue visibility (PASS → ball hide).
+    private var cueTimingDebugVisibleAt: Date?
+    private var passTriggeredByRep: [Int: Date] = [:]
+    private var directionLoggedByRep: [Int: Date] = [:]
 
     init(config: TwoMinuteTestConfig, repPlans: [RepPlan] = TwoMinuteRepPlanner.generatePlan()) {
         self.config = config
@@ -46,6 +51,8 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
 
         let p = plan[repIndex]
         passTriggeredAt = nil
+        passTriggeredByRep[repIndex] = nil
+        directionLoggedByRep[repIndex] = nil
         startedAtForCurrentRep = Date()
         infoShownAtForCurrentRep = nil
         infoHiddenAtForCurrentRep = nil
@@ -85,6 +92,7 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
         }
 
         passTriggeredAt = timestamp
+        passTriggeredByRep[repIndex] = timestamp
         infoShownAtForCurrentRep = timestamp
         #if DEBUG
         DecisionSpeedDebugLog.logEngineRepLive(activity: .twoMinuteTest, repIndex: repIndex, passEmbeddedStored: timestamp)
@@ -92,6 +100,13 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
         ballHideTimer?.invalidate()
         let duration = config.ballVisibleSeconds
         let endsAt = Date().addingTimeInterval(duration)
+        cueTimingDebugVisibleAt = Date()
+        CueTimingDebugLog.logVisible(
+            activity: "twoMinuteCriticalScan",
+            repIndex: repIndex,
+            configuredWindowSeconds: duration,
+            note: "PASS→ballVisible"
+        )
         phase = .ballVisible(repIndex: repIndex, ballGate: ballGate, endsAt: endsAt)
 
         ballHideTimer = Timer.scheduledTimer(withTimeInterval: duration, repeats: false) { [weak self] _ in
@@ -114,6 +129,14 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
         case .ballVisible(let ri, _, _):
             rIdx = ri
             if ri != repIndex { return nil }
+            CueTimingDebugLog.logHidden(
+                activity: "twoMinuteCriticalScan",
+                repIndex: repIndex,
+                visibleAt: cueTimingDebugVisibleAt,
+                hiddenAt: Date(),
+                reason: "exit_logged_before_timer"
+            )
+            cueTimingDebugVisibleAt = nil
             ballHideTimer?.invalidate()
             ballHideTimer = nil
             infoHiddenAtForCurrentRep = Date()
@@ -155,6 +178,20 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
         #endif
 
         let p = plan[repIndex]
+        let expectedArrivalTime = triggerTime.addingTimeInterval(travelTimeSeconds)
+        let decisionWindowSeconds = expectedArrivalTime.timeIntervalSince(timestamp)
+        let score = adaptiveSessionScore(including: decisionWindowSeconds, isCorrect: gate == p.ballGate)
+        directionLoggedByRep[repIndex] = timestamp
+        repDecisions.append(
+            RepDecision(
+                repIndex: repIndex,
+                direction: gate,
+                isCorrect: gate == p.ballGate,
+                decisionWindowSeconds: decisionWindowSeconds,
+                bucket: DecisionTimingModel.speedBucket(forDecisionWindow: decisionWindowSeconds, activity: .twoMinuteTest, score: score)
+            )
+        )
+        print("[DecisionWindowDebug] repIndex=\(repIndex) passTS=\(triggerTime.timeIntervalSince1970) expectedArrivalTS=\(expectedArrivalTime.timeIntervalSince1970) decisionTS=\(timestamp.timeIntervalSince1970) decisionWindowSeconds=\(decisionWindowSeconds)")
         let startedAt = startedAtForCurrentRep ?? Date()
         let infoShownAt = infoShownAtForCurrentRep ?? startedAt
         let infoHiddenAt = infoHiddenAtForCurrentRep ?? Date()
@@ -185,7 +222,21 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
         var ballGate: Gate?
         switch phase {
         case .awaitingExitLog(let ri, let g): if ri == repIndex { ballGate = g }
-        case .ballVisible(let ri, let g, _): if ri == repIndex { ballGate = g; ballHideTimer?.invalidate(); ballHideTimer = nil; infoHiddenAtForCurrentRep = Date() }
+        case .ballVisible(let ri, let g, _):
+            if ri == repIndex {
+                ballGate = g
+                CueTimingDebugLog.logHidden(
+                    activity: "twoMinuteCriticalScan",
+                    repIndex: repIndex,
+                    visibleAt: cueTimingDebugVisibleAt,
+                    hiddenAt: Date(),
+                    reason: "incorrect_before_timer"
+                )
+                cueTimingDebugVisibleAt = nil
+                ballHideTimer?.invalidate()
+                ballHideTimer = nil
+                infoHiddenAtForCurrentRep = Date()
+            }
         default: break
         }
         guard ballGate != nil else { return nil }
@@ -223,6 +274,9 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
         #endif
 
         let p = plan[repIndex]
+        let expectedArrivalTime = triggerTime.addingTimeInterval(travelTimeSeconds)
+        let decisionWindowSeconds = expectedArrivalTime.timeIntervalSince(timestamp)
+        print("[DecisionWindowDebug] repIndex=\(repIndex) passTS=\(triggerTime.timeIntervalSince1970) expectedArrivalTS=\(expectedArrivalTime.timeIntervalSince1970) decisionTS=\(timestamp.timeIntervalSince1970) decisionWindowSeconds=\(decisionWindowSeconds)")
         let startedAt = startedAtForCurrentRep ?? Date()
         let infoShownAt = infoShownAtForCurrentRep ?? startedAt
         let infoHiddenAt = infoHiddenAtForCurrentRep ?? Date()
@@ -248,6 +302,14 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
     }
 
     private func transitionToAwaitingExitLog(repIndex: Int, ballGate: Gate) {
+        CueTimingDebugLog.logHidden(
+            activity: "twoMinuteCriticalScan",
+            repIndex: repIndex,
+            visibleAt: cueTimingDebugVisibleAt,
+            hiddenAt: Date(),
+            reason: "ball_hide_timer"
+        )
+        cueTimingDebugVisibleAt = nil
         ballHideTimer?.invalidate()
         ballHideTimer = nil
         infoHiddenAtForCurrentRep = Date()
@@ -268,6 +330,22 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
 
     deinit {
         cancelTimers()
+    }
+
+    private var travelTimeSeconds: Double {
+        CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds
+            ?? config.difficulty.passTempo.expectedBallTravelTime(distanceMeters: 11.0)
+    }
+
+    private func adaptiveSessionScore(including newWindow: Double, isCorrect: Bool) -> Int {
+        let existingWindows = repDecisions.map(\.decisionWindowSeconds)
+        let windows = existingWindows + [newWindow]
+        let existingCorrect = repDecisions.filter(\.isCorrect).count
+        let correct = existingCorrect + (isCorrect ? 1 : 0)
+        let total = windows.count
+        guard total > 0 else { return 70 }
+        let accuracy = Double(correct) / Double(total)
+        return DecisionTimingModel.decisionScore(accuracy: accuracy, windows: windows, activity: .twoMinuteTest)
     }
 }
 

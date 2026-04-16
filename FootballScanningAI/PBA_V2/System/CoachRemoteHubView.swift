@@ -6,82 +6,107 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct CoachRemoteHubView: View {
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
     @EnvironmentObject private var router: AppRouter
     @AppStorage(AppRole.storageKey) private var appRoleRaw: String = AppRole.player.rawValue
+    @AppStorage("coachRemoteLastUsedActivityV1") private var lastUsedActivityKey: String = ""
     @State private var partnerSessionActive = false
     @State private var showDisconnectCoachConfirm = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Coach Remote")
-                        .font(.title2.weight(.bold))
-                        .foregroundColor(.white)
-                    Text("Which activity is the player on? Tap the same one as the Display.")
-                        .font(.subheadline)
-                        .foregroundColor(.white.opacity(0.85))
-                        .multilineTextAlignment(.leading)
-                }
-                .padding(.horizontal, 4)
-
-                // Coach Remote: all activities available; navigation uses router so path-based stack works.
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-                    CoachRemoteGridTile(
-                        title: "Dribble or Pass",
-                        subtitle: "12 reps",
-                        icon: "arrow.triangle.branch",
-                        route: .dribbleOrPassCoachRemote,
-                        router: router
-                    )
-                    CoachRemoteGridTile(
-                        title: "Playing Away From Pressure",
-                        subtitle: "12 reps",
-                        icon: "exclamationmark.triangle.fill",
-                        route: .awayFromPressureCoachRemote,
-                        router: router
-                    )
-                    CoachRemoteGridTile(
-                        title: "One-Touch Passing",
-                        subtitle: "12 reps",
-                        icon: "hand.tap.fill",
-                        route: .oneTouchPassingCoachRemote,
-                        router: router
-                    )
-                    CoachRemoteGridTile(
-                        title: "2-Minute Test",
-                        subtitle: "10 reps",
-                        icon: "soccerball",
-                        route: .twoMinuteCoachRemote,
-                        router: router
-                    )
-                }
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Start Session")
+                    .font(.system(size: 34, weight: .bold, design: .rounded))
+                    .foregroundColor(.white)
+                Text("Tap the activity to start the session")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.65))
+                    .multilineTextAlignment(.leading)
             }
-            .padding(20)
+            .padding(.horizontal, 24)
+            .padding(.top, 16)
 
-            if partnerSessionActive {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Ends coach/display connection")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.55))
-                        .padding(.horizontal, 4)
-                    Button {
-                        showDisconnectCoachConfirm = true
-                    } label: {
-                        Text("Disconnect Coach")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundColor(.orange.opacity(0.95))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
+            // Action zone: always visible at the top.
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+                CoachRemoteGridTile(
+                    title: "Dribble or Pass",
+                    subtitle: "12 reps",
+                    icon: "arrow.triangle.branch",
+                    isLastUsed: lastUsedActivityKey == "dribble_or_pass",
+                    route: .dribbleOrPassCoachRemote,
+                    onTap: { lastUsedActivityKey = "dribble_or_pass" },
+                    router: router
+                )
+                CoachRemoteGridTile(
+                    title: "Playing Away From Pressure",
+                    subtitle: "12 reps",
+                    icon: "exclamationmark.triangle.fill",
+                    isLastUsed: lastUsedActivityKey == "away_from_pressure",
+                    route: .awayFromPressureCoachRemote,
+                    onTap: { lastUsedActivityKey = "away_from_pressure" },
+                    router: router
+                )
+                CoachRemoteGridTile(
+                    title: "One-Touch Passing",
+                    subtitle: "12 reps",
+                    icon: "hand.tap.fill",
+                    isLastUsed: lastUsedActivityKey == "one_touch_passing",
+                    route: .oneTouchPassingCoachRemote,
+                    onTap: { lastUsedActivityKey = "one_touch_passing" },
+                    router: router
+                )
+                CoachRemoteGridTile(
+                    title: "2-Minute Test",
+                    subtitle: "10 reps",
+                    icon: "soccerball",
+                    isLastUsed: lastUsedActivityKey == "two_minute_test",
+                    route: .twoMinuteCoachRemote,
+                    onTap: { lastUsedActivityKey = "two_minute_test" },
+                    router: router
+                )
+            }
+            .padding(.horizontal, 20)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Team Insights")
+                            .font(.headline.weight(.semibold))
+                            .foregroundColor(.white.opacity(0.95))
+                            .padding(.horizontal, 4)
+                        TeamChallengeCoachDashboardView(
+                            data: makeCoachChallengeDashboardData(profiles: profileManager.profiles)
+                        )
                     }
-                    .buttonStyle(PlainButtonStyle())
+                    .padding(.top, 28)
+                    .padding(.horizontal, 20)
+
+                    if partnerSessionActive {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Ends coach/display connection")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.55))
+                                .padding(.horizontal, 4)
+                            Button {
+                                showDisconnectCoachConfirm = true
+                            } label: {
+                                Text("Disconnect Coach")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundColor(.orange.opacity(0.95))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 24)
+                    }
                 }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 24)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -165,17 +190,30 @@ private struct CoachRemoteGridTile: View {
     let title: String
     let subtitle: String
     let icon: String
+    let isLastUsed: Bool
     let route: AppRoute
+    let onTap: () -> Void
     @ObservedObject var router: AppRouter
 
     var body: some View {
         Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            onTap()
             router.push(route)
         } label: {
             VStack(alignment: .leading, spacing: 10) {
                 Image(systemName: icon)
                     .font(.title2)
                     .foregroundColor(.yellow)
+                if isLastUsed {
+                    Text("Last Used")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundColor(.black)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color.yellow.opacity(0.95))
+                        .cornerRadius(8)
+                }
                 Text(title)
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(.white)
@@ -192,6 +230,16 @@ private struct CoachRemoteGridTile: View {
             .cornerRadius(14)
             .contentShape(Rectangle())
         }
-        .buttonStyle(PlainButtonStyle())
+        .buttonStyle(CoachRemoteTileButtonStyle())
+    }
+}
+
+private struct CoachRemoteTileButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+            .opacity(configuration.isPressed ? 0.86 : 1.0)
+            .brightness(configuration.isPressed ? 0.06 : 0)
+            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
     }
 }

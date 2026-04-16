@@ -65,6 +65,10 @@ enum TwoMinuteMessage: Codable {
     case partnerTrainingEnded(timestamp: Date)
     /// After reconnect: minimal drill snapshot so coach can compare rep/phase (does not change scores).
     case partnerSessionCheckpoint(sourceRole: String, activityId: String, repIndex: Int, phaseToken: String, relaySessionId: String?, timestamp: Date)
+    /// Coach-driven pass-tempo calibration taps (partner mode).
+    case calibrationPassTapped(timestamp: Date)
+    case calibrationArrivalTapped(timestamp: Date)
+    case calibrationFinished(averageTravelTimeSeconds: Double?)
 
     enum CodingKeys: String, CodingKey {
         case kind
@@ -76,6 +80,7 @@ enum TwoMinuteMessage: Codable {
         case activityId
         case phaseToken
         case relaySessionId
+        case averageTravelTimeSeconds
     }
 
     init(from decoder: Decoder) throws {
@@ -107,6 +112,12 @@ enum TwoMinuteMessage: Codable {
                 relaySessionId: try c.decodeIfPresent(String.self, forKey: .relaySessionId),
                 timestamp: try c.decode(Date.self, forKey: .timestamp)
             )
+        case "calibrationPassTapped":
+            self = .calibrationPassTapped(timestamp: try c.decode(Date.self, forKey: .timestamp))
+        case "calibrationArrivalTapped":
+            self = .calibrationArrivalTapped(timestamp: try c.decode(Date.self, forKey: .timestamp))
+        case "calibrationFinished":
+            self = .calibrationFinished(averageTravelTimeSeconds: try c.decodeIfPresent(Double.self, forKey: .averageTravelTimeSeconds))
         default:
             throw DecodingError.dataCorruptedError(forKey: .kind, in: c, debugDescription: "Unknown kind: \(kind)")
         }
@@ -153,6 +164,15 @@ enum TwoMinuteMessage: Codable {
             try c.encode(phaseToken, forKey: .phaseToken)
             try c.encodeIfPresent(relaySessionId, forKey: .relaySessionId)
             try c.encode(timestamp, forKey: .timestamp)
+        case .calibrationPassTapped(let timestamp):
+            try c.encode("calibrationPassTapped", forKey: .kind)
+            try c.encode(timestamp, forKey: .timestamp)
+        case .calibrationArrivalTapped(let timestamp):
+            try c.encode("calibrationArrivalTapped", forKey: .kind)
+            try c.encode(timestamp, forKey: .timestamp)
+        case .calibrationFinished(let averageTravelTimeSeconds):
+            try c.encode("calibrationFinished", forKey: .kind)
+            try c.encodeIfPresent(averageTravelTimeSeconds, forKey: .averageTravelTimeSeconds)
         }
     }
 }
@@ -163,7 +183,7 @@ extension TwoMinuteMessage {
         switch self {
         case .nextRep, .passTriggered, .exitLogged, .firstTouchLogged, .incorrectDecision:
             return true
-        case .coachPaired, .sessionEnded, .partnerTrainingEnded, .partnerSessionCheckpoint:
+        case .coachPaired, .sessionEnded, .partnerTrainingEnded, .partnerSessionCheckpoint, .calibrationPassTapped, .calibrationArrivalTapped, .calibrationFinished:
             return false
         }
     }

@@ -2,19 +2,15 @@
 //  PressureTriggerView.swift
 //  FootballScanningAI
 //
-//  Use on iPhone: connect to iPad running Pressure Response (e.g. Playing Away from Pressure). Trigger via tap or volume button.
+//  Use on iPhone: connect to iPad running Pressure Response (e.g. Playing Away from Pressure). Trigger via tap.
 //
 
-import AVFoundation
-import MediaPlayer
 import SwiftUI
 
 struct PressureTriggerView: View {
     @EnvironmentObject private var connectionManager: ConnectionManager
     @EnvironmentObject var multipeerManager: MultipeerManager
     @Environment(\.dismiss) private var dismiss
-    @State private var volumeButtonTriggerEnabled = true
-
     var body: some View {
         VStack(spacing: 24) {
             Text("Training Trigger")
@@ -84,7 +80,7 @@ struct PressureTriggerView: View {
             }
 
             if connectionManager.connectedPeerName != nil {
-                Text("Tap below or press a volume button to trigger")
+                Text("Tap below to trigger")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.7))
 
@@ -126,14 +122,6 @@ struct PressureTriggerView: View {
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black)
-        .overlay(VolumeButtonTriggerView(
-            connected: connectionManager.connectedPeerName != nil,
-            volumeTriggerEnabled: volumeButtonTriggerEnabled,
-            onTrigger: {
-                connectionManager.lastError = nil
-                connectionManager.sendTrigger()
-            }
-        ).allowsHitTesting(false).frame(width: 1, height: 1))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
@@ -146,90 +134,6 @@ struct PressureTriggerView: View {
         }
         .onDisappear {
             connectionManager.stopBrowsing()
-        }
-    }
-}
-
-// MARK: - Volume button trigger (invisible; observes volume and fires trigger, then restores level)
-private struct VolumeButtonTriggerView: UIViewRepresentable {
-    let connected: Bool
-    let volumeTriggerEnabled: Bool
-    let onTrigger: () -> Void
-
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView(frame: .zero)
-        view.isUserInteractionEnabled = false
-        return view
-    }
-
-    func updateUIView(_ uiView: UIView, context: Context) {
-        guard connected, volumeTriggerEnabled else {
-            context.coordinator.stopPolling()
-            return
-        }
-        context.coordinator.onTrigger = onTrigger
-        context.coordinator.startPolling()
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-
-    class Coordinator {
-        var timer: Timer?
-        var lastVolume: Float = 0
-        var savedVolume: Float = 0
-        var onTrigger: (() -> Void) = {}
-        var startGeneration: Int = 0
-
-        func startPolling() {
-            guard timer == nil else { return }
-            let session = AVAudioSession.sharedInstance()
-            do { try session.setActive(true) } catch {}
-            lastVolume = session.outputVolume
-            savedVolume = lastVolume
-            startGeneration += 1
-            let gen = startGeneration
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-                guard let self = self, self.timer == nil, self.startGeneration == gen else { return }
-                self.lastVolume = AVAudioSession.sharedInstance().outputVolume
-                self.savedVolume = self.lastVolume
-                self.timer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: true) { [weak self] _ in
-                    self?.checkVolume()
-                }
-                RunLoop.main.add(self.timer!, forMode: .common)
-            }
-        }
-
-        func stopPolling() {
-            startGeneration += 1
-            timer?.invalidate()
-            timer = nil
-        }
-
-        private func checkVolume() {
-            let current = AVAudioSession.sharedInstance().outputVolume
-            if abs(current - lastVolume) > 0.01 {
-                lastVolume = current
-                onTrigger()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-                    self?.restoreVolume()
-                }
-            }
-        }
-
-        private func restoreVolume() {
-            MPVolumeView.setVolume(savedVolume)
-        }
-    }
-}
-
-extension MPVolumeView {
-    static func setVolume(_ volume: Float) {
-        let volumeView = MPVolumeView(frame: .zero)
-        guard let slider = volumeView.subviews.first(where: { $0 is UISlider }) as? UISlider else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
-            slider.value = volume
         }
     }
 }

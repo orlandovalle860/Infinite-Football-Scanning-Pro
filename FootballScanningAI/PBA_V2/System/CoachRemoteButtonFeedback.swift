@@ -2,7 +2,7 @@
 //  CoachRemoteButtonFeedback.swift
 //  FootballScanningAI
 //
-//  PASS + direction tap feedback. PASS uses shared trigger path (touch + volume) with double-pulse
+//  PASS + direction tap feedback. PASS uses shared touch trigger path with double-pulse
 //  rigid haptics, debounce, and [CoachTrigger-Debug] / [HapticDebug] logs.
 //
 
@@ -11,7 +11,6 @@ import UIKit
 
 enum CoachPassTriggerSource: String {
     case touch
-    case volume
 }
 
 /// Shared PASS trigger: haptic first (no network wait), debounce, debug log, then `send`.
@@ -54,7 +53,7 @@ enum CoachRemoteHaptics {
     /// Set to `false` to use `.medium` + `.light` instead of `.rigid` + `.rigid` if rigid feels too strong.
     static var passTriggerUsesRigidDouble: Bool = true
 
-    /// Double-pulse PASS confirmation for both touch and volume. First hit is synchronous; second is scheduled on main.
+    /// Double-pulse PASS confirmation. First hit is synchronous; second is scheduled on main.
     static func passTriggerDoublePulse(source: CoachPassTriggerSource) {
         let ts = Date()
         let patternLabel = passTriggerUsesRigidDouble ? "double_pulse" : "double_pulse_fallback"
@@ -90,13 +89,11 @@ enum CoachRemoteHaptics {
     }
 }
 
-/// Large bottom-oriented PASS control: shared trigger path, brief highlight (~125 ms) on touch and optional volume echo.
+/// Large bottom-oriented PASS control: shared touch trigger path, brief highlight (~125 ms).
 struct CoachRemotePassPrimaryButton: View {
     let activity: String
     let repIndex: Int
     let send: () -> Void
-    /// Increment from parent when volume triggers PASS so the button flashes in sync.
-    @Binding var volumeFlashSignal: Int
 
     @State private var touchFlashOpacity: CGFloat = 0
     @State private var touchScale: CGFloat = 1
@@ -132,14 +129,8 @@ struct CoachRemotePassPrimaryButton: View {
                 .scaleEffect(touchScale)
             }
             .buttonStyle(.plain)
-            Text(CoachRemoteCopy.volumePassHint)
-                .font(.caption2)
-                .foregroundColor(.white.opacity(0.38))
         }
         .frame(maxWidth: .infinity)
-        .onChange(of: volumeFlashSignal) { _, _ in
-            pulsePassVisual()
-        }
     }
 
     private func pulsePassVisual() {

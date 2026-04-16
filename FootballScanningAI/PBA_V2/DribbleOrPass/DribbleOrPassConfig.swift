@@ -93,4 +93,17 @@ struct DribbleOrPassConfig {
             )
         }
     }
+
+    /// Optional level-based multipliers (`cueDuration` scales cue visibility and reveal spacing).
+    static func defaultConfig(for difficulty: TestDifficulty, loopLevel: Int, levelModifiers: DifficultySettings?) -> DribbleOrPassConfig {
+        let base = defaultConfig(for: difficulty, loopLevel: loopLevel)
+        guard let m = levelModifiers else { return base }
+        return DribbleOrPassConfig(
+            difficulty: base.difficulty,
+            revealStyle: base.revealStyle,
+            revealSpacingSeconds: max(0.06, base.revealSpacingSeconds * m.cueDuration),
+            cueVisibleSeconds: max(0.3, base.cueVisibleSeconds * m.cueDuration),
+            curriculumLoopLevel: base.curriculumLoopLevel
+        )
+    }
 }

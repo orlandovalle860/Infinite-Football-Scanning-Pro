@@ -30,20 +30,10 @@ struct TwoMinuteTestResultsView: View {
     @State private var navigateToEmailAuth = false
     @State private var navigateToCreateProfile = false
     @State private var navigateToPlayerReport = false
-    @State private var navigateToTrainingRecommendation = false
-    @State private var didScheduleTrainingRecommendationNavigation = false
+    @State private var showQuickCalibration = false
     private let plannedTestReps: Int = 10
     private var loggedReps: Int { result.totalReps }
 
-    private var type: PlayerType {
-        TwoMinutePlayerType.determinePlayerType(
-            correct: result.correctCount,
-            total: result.totalReps,
-            fast: result.fastCount,
-            medium: result.mediumCount,
-            slow: result.slowCount
-        )
-    }
     /// Onboarding: no profiles yet or first-time test not completed.
     private var isOnboarding: Bool {
         profileManager.profiles.isEmpty || !UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey)
@@ -55,50 +45,11 @@ struct TwoMinuteTestResultsView: View {
         return TwoMinuteBehaviorBadgeEvaluator.evaluate(logs: logs, difficulty: result.difficulty)
     }
 
-    private var primaryProfileTitle: String {
-        if let ev = behaviorBadgeEvaluation {
-            return TwoMinuteBehaviorBadgeEvaluator.primaryProfileTitle(evaluation: ev)
-        }
-        return type.title
-    }
-
-    private var headerSubtext: String {
-        if let ev = behaviorBadgeEvaluation {
-            return TwoMinuteBehaviorBadgeEvaluator.resultsHeaderSubtext(evaluation: ev)
-        }
-        if let avg = result.avgDecisionWindowSeconds {
-            return "Avg decision window: \(DecisionTimingModel.summaryText(windowSeconds: avg))"
-        }
-        return "Connect a full session with rep logs to see early / on-time / late breakdown."
-    }
-
-    /// Speed aggregate (fast/medium/slow rep counts) — game-real pocket line under the profile title.
-    private var pocketSpeedInterpretation: String {
-        UniversalBlockSummaryHeadline.pocketMomentInterpretationLine(
-            fast: result.fastCount,
-            medium: result.mediumCount,
-            slow: result.slowCount
-        )
-    }
-
     private var earlyCount: Int { behaviorBadgeEvaluation?.earlyCount ?? 0 }
     private var idealCount: Int { behaviorBadgeEvaluation?.idealCount ?? 0 }
     private var lateCount: Int { behaviorBadgeEvaluation?.lateCount ?? 0 }
     private var totalCount: Int { behaviorBadgeEvaluation?.total ?? 0 }
-
-    private var insightBlocks: [(title: String, body: String)] {
-        if let ev = behaviorBadgeEvaluation {
-            return TwoMinuteBehaviorBadgeEvaluator.resultsInsightBlocks(evaluation: ev)
-        }
-        return [("Next step", "Run the test with a connected session to unlock per-rep timing insights.")]
-    }
-
-    private var nextFocusBody: String {
-        if let ev = behaviorBadgeEvaluation {
-            return TwoMinuteBehaviorBadgeEvaluator.nextFocusBody(evaluation: ev)
-        }
-        return "Train deciding before the pocket closes — connect a session for full timing insights."
-    }
+    private var shouldShowCalibrationSuggestion: Bool { !PartnerPassTempoCalibrationStore.hasSavedCalibration }
 
     var body: some View {
         ScrollView {
@@ -123,26 +74,7 @@ struct TwoMinuteTestResultsView: View {
                 // 3. Breakdown
                 breakdownSection
 
-                // 4. Insight blocks (max 2 from model)
-                insightSection
-
-                // 5. Next focus
-                nextFocusSection
-
-                if !isOnboarding {
-                    Button {
-                        navigateToTrainingRecommendation = true
-                    } label: {
-                        Text("Your next step")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.yellow)
-                    .foregroundStyle(.black)
-                }
-
-                // 6. Action buttons + existing nav
+                // 4. Action buttons + existing nav
                 actionButtonsSection
             }
             .padding(.horizontal, 20)
@@ -174,15 +106,10 @@ struct TwoMinuteTestResultsView: View {
             }
         }
         .onAppear {
+            PBASessionFlowPolicy.handleResultsPresented()
             logResultsUIDebug()
             AuthFlowOnboardingSync.markLocalBaselineCompleted()
             saveProgressIfNeeded()
-            if !isOnboarding, !didScheduleTrainingRecommendationNavigation {
-                didScheduleTrainingRecommendationNavigation = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) {
-                    navigateToTrainingRecommendation = true
-                }
-            }
         }
         .navigationDestination(item: $trainingTarget) { activity in
             roleSelectionView(for: activity)
@@ -240,7 +167,7 @@ struct TwoMinuteTestResultsView: View {
                 profileManager: profileManager,
                 testResult: TestResultSummary(
                     decisionScore: min(100, result.correctCount * 10),
-                    status: type.title,
+                    status: "Decision Timing Summary",
                     consistency: "First test"
                 ),
                 twoMinuteTestResult: profileManager.profiles.isEmpty ? result : nil,
@@ -250,57 +177,30 @@ struct TwoMinuteTestResultsView: View {
         .navigationDestination(isPresented: $navigateToPlayerReport) {
             PlayerReportView(content: PlayerReportGenerator.report(from: result))
         }
-        .navigationDestination(isPresented: $navigateToTrainingRecommendation) {
-            TrainingRecommendationView(
-                primaryProfileTitle: primaryProfileTitle,
-                earlyCount: earlyCount,
-                idealCount: idealCount,
-                lateCount: lateCount,
-                onStartTrainingAFP: {
-                    navigateToTrainingRecommendation = false
-                    if let onStartTraining = onStartTraining {
-                        onStartTraining(.awayFromPressure)
-                    } else {
-                        trainingTarget = .awayFromPressure
-                    }
-                },
-                onRunTestAgain: {
-                    navigateToTrainingRecommendation = false
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                        navigateToTestAgain = true
-                    }
+        .fullScreenCover(isPresented: $showQuickCalibration) {
+            PassTempoCalibrationScreen { calibrated in
+                CurrentSessionStore.shared.setExpectedBallTravelTimeOverrideSeconds(calibrated)
+                if let calibrated {
+                    PartnerPassTempoCalibrationStore.save(averageTravelTimeSeconds: calibrated)
                 }
-            )
+                showQuickCalibration = false
+            }
+            .interactiveDismissDisabled()
         }
     }
 
     private func logResultsUIDebug() {
-        print("[ResultsUI-Debug] earlyCount=\(earlyCount) idealCount=\(idealCount) lateCount=\(lateCount) totalCount=\(totalCount) primaryProfileTitle=\(primaryProfileTitle)")
+        print("[ResultsUI-Debug] earlyCount=\(earlyCount) idealCount=\(idealCount) lateCount=\(lateCount) totalCount=\(totalCount)")
     }
 
     // MARK: - Sections
 
     private var headerSection: some View {
         VStack(spacing: 8) {
-            Text("Your Decision Profile")
+            Text("Decision Timing Summary")
                 .font(.title2)
                 .fontWeight(.semibold)
                 .foregroundColor(.white.opacity(0.95))
-            Text(primaryProfileTitle)
-                .font(.system(size: 32, weight: .bold))
-                .foregroundColor(.white)
-                .multilineTextAlignment(.center)
-            Text(pocketSpeedInterpretation)
-                .font(.headline)
-                .fontWeight(.semibold)
-                .foregroundColor(Color.yellow.opacity(0.95))
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-            Text(headerSubtext)
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity)
         .multilineTextAlignment(.center)
@@ -336,41 +236,26 @@ struct TwoMinuteTestResultsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var insightSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ForEach(Array(insightBlocks.enumerated()), id: \.offset) { _, block in
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(block.title)
-                        .font(.headline)
-                        .foregroundColor(.white.opacity(0.95))
-                    Text(block.body)
-                        .font(.subheadline)
-                        .foregroundColor(.white.opacity(0.88))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.white.opacity(0.05))
-                .cornerRadius(12)
-            }
-        }
-    }
-
-    private var nextFocusSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Next Focus")
-                .font(.headline)
-                .foregroundColor(.white.opacity(0.95))
-            Text(nextFocusBody)
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.88))
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
     private var actionButtonsSection: some View {
         VStack(spacing: 12) {
+            if shouldShowCalibrationSuggestion {
+                VStack(spacing: 8) {
+                    Text("For more accurate timing, try quick calibration")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.84))
+                        .multilineTextAlignment(.center)
+                    Button {
+                        showQuickCalibration = true
+                    } label: {
+                        Text("Calibrate Timing (10 seconds)")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.white)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.bottom, 6)
+            }
+
             if !isOnboarding {
                 if profileManager.profiles.isEmpty {
                     Button {
@@ -463,9 +348,6 @@ struct TwoMinuteTestResultsView: View {
             Text("Average decision window: \(result.avgDecisionWindowSeconds.map { DecisionTimingModel.summaryText(windowSeconds: $0) } ?? "—")")
                 .font(.body)
                 .foregroundColor(.white.opacity(0.9))
-            Text("Elite academy players average about 0.60 seconds.")
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.75))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(20)
@@ -529,15 +411,37 @@ struct TwoMinuteTestResultsView: View {
 
     @ViewBuilder
     private func roleSelectionView(for activity: ActivityKind) -> some View {
-        switch activity {
-        case .twoMinuteTest:
+        let route = PBASessionFlowPolicy.routeForActivityLaunch(activity)
+        switch route {
+        case .twoMinuteRoleSelection:
             TwoMinuteRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
-        case .awayFromPressure:
+        case .awayFromPressureRoleSelection:
             AwayFromPressureRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
-        case .dribbleOrPass:
+        case .dribbleOrPassRoleSelection:
             DribbleOrPassRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
-        case .oneTouchPassing:
+        case .oneTouchPassingRoleSelection:
             OneTouchPassingRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+        case .coachRemote:
+            CoachRemoteHubView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+        case .trainingModeSelection(let title):
+            TrainingModeSelectionView(activityTitle: title) { mode in
+                TwoMinuteTestSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+            }
+        case .awayFromPressureTrainingModeSelection:
+            TrainingModeSelectionView(activityTitle: "Playing Away From Pressure") { mode in
+                AwayFromPressureSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+            }
+        case .dribbleOrPassTrainingModeSelection:
+            TrainingModeSelectionView(activityTitle: "Dribble or Pass") { mode in
+                DribbleOrPassSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+            }
+        case .oneTouchPassingTrainingModeSelection:
+            TrainingModeSelectionView(activityTitle: "One-Touch Passing") { mode in
+                OneTouchPassingSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+            }
+        default:
+            // For non-training routes that are not expected here, keep a safe empty fallback.
+            EmptyView()
         }
     }
 
@@ -603,8 +507,8 @@ struct TwoMinuteTestResultsView: View {
             let pid = record.playerId ?? playerId
             let activityName = record.activity.rawValue
             for log in logs {
-                guard let sec = log.passTriggeredAt.map({ log.exitLoggedAt.timeIntervalSince($0) }) else { continue }
-                let reactionTimeMs = Int(sec * 1000)
+                guard let window = log.decisionWindowSeconds(activity: .twoMinuteTest, difficulty: result.difficulty) else { continue }
+                let reactionTimeMs = Int(window * 1000)
                 if reactionTimeMs > SupabaseDecisionService.maxReactionTimeMs { continue }
                 let decision = Decision(
                     sessionId: sessionId,

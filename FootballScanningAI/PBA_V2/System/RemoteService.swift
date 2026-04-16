@@ -71,6 +71,18 @@ final class RemoteService: ObservableObject {
         send(.nextRep(repIndex: repIndex))
     }
 
+    func sendCalibrationPassTapped(timestamp: Date) {
+        send(.calibrationPassTapped(timestamp: timestamp))
+    }
+
+    func sendCalibrationArrivalTapped(timestamp: Date) {
+        send(.calibrationArrivalTapped(timestamp: timestamp))
+    }
+
+    func sendCalibrationFinished(averageTravelTimeSeconds: Double?) {
+        send(.calibrationFinished(averageTravelTimeSeconds: averageTravelTimeSeconds))
+    }
+
     private func bindTransportMessageForwarding() {
         transport.onTwoMinuteMessageReceived = { [weak self] message in
             self?.onTwoMinuteMessageReceived?(message)

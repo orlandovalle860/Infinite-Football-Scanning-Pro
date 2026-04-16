@@ -126,7 +126,7 @@ struct PlayerImprovementProgressView: View {
             }
         }
         .navigationDestination(isPresented: $navigateToDashboard) {
-            PlayerDashboardView(profileManager: profileManager, settingsViewModel: settingsViewModel)
+            PlayerProgressView(profileManager: profileManager, settingsViewModel: settingsViewModel)
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)

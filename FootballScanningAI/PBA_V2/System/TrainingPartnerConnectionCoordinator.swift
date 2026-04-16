@@ -34,6 +34,11 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
     /// Cleared when pairing ends or when coach UI explicitly clears the join form after a real disconnect.
     private(set) var lastCoachRelayJoinCode: String?
 
+    /// Session-scoped calibration state (one calibration per active partner training run).
+    private(set) var sessionCalibrationResolved: Bool = false
+    private(set) var sessionCalibrationAverageTravelTime: Double?
+    private(set) var sessionCalibrationMode: TrainingMode?
+
     /// Bumps on each ``endPartnerTrainingSession`` / ``beginPartnerTrainingSessionIfNeeded`` transition so async relay notify completions cannot tear down a **new** session if the user starts the next run before the send finishes.
     private var relaySessionMutationToken: UInt64 = 0
 
@@ -348,8 +353,8 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         lastCoachRelayJoinCode = trimmed
     }
 
-    /// Clears the stored coach join code (e.g. when the coach join UI is reset after a real session end).
-    func clearRecordedCoachRelayJoinCode() {
+    /// Clears the stored coach join code. Only the coordinator should do this as part of an explicit partner-session end.
+    private func clearRecordedCoachRelayJoinCode() {
         lastCoachRelayJoinCode = nil
     }
 
@@ -370,6 +375,9 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         ConnectionManager.shared.stopHosting()
         ConnectionManager.shared.stopBrowsing()
         isPartnerTrainingSessionActive = true
+        sessionCalibrationResolved = false
+        sessionCalibrationAverageTravelTime = nil
+        sessionCalibrationMode = nil
         trackedRelaySessionId = nil
         clearSoftResumeInterruptionState()
         relayLifecycleBanner = .hidden
@@ -397,7 +405,10 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         relaySessionMutationToken += 1
         let endToken = relaySessionMutationToken
         isPartnerTrainingSessionActive = false
-        lastCoachRelayJoinCode = nil
+        clearRecordedCoachRelayJoinCode()
+        sessionCalibrationResolved = false
+        sessionCalibrationAverageTravelTime = nil
+        sessionCalibrationMode = nil
         trackedRelaySessionId = nil
         clearSoftResumeInterruptionState()
         relayLifecycleBanner = .hidden
@@ -481,6 +492,22 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
     /// Explicit Multipeer state: partner training is active **and** Multipeer has a named peer (coach ↔ display).
     var isMultipeerPartnerConnected: Bool {
         isPartnerTrainingSessionActive && ConnectionManager.shared.connectedPeerName != nil
+    }
+
+    /// Global partner connection state for activity entry gates. True means the existing partner pairing
+    /// should be reused and activities should skip fresh role/join flows.
+    var isConnected: Bool {
+        guard isPartnerTrainingSessionActive else { return false }
+        if isMultipeerPartnerConnected { return true }
+        if relayDisplaySession.isCoachPaired { return true }
+        if coachRelayRemoteService.connectionState == .connected { return true }
+        return false
+    }
+
+    func markSessionCalibrationResolved(averageTravelTimeSeconds: Double?, trainingMode: TrainingMode?) {
+        sessionCalibrationResolved = true
+        sessionCalibrationAverageTravelTime = averageTravelTimeSeconds
+        sessionCalibrationMode = trainingMode
     }
 
     /// Display (iPad) partner drills: call after ``beginPartnerTrainingSessionIfNeeded()`` — `ConnectionManager` may skip `startHosting` if already connected.

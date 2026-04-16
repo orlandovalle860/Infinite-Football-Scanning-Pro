@@ -56,9 +56,26 @@ struct SessionSummaryRow: Encodable {
         var fast = 0, medium = 0, slow = 0
         for d in decisions {
             if let t = d.decisionTimeSeconds {
-                sumMs += t * 1000
+                let window = DecisionTimingModel.decisionWindow(rawRepInterval: t, activity: activity, difficulty: record.difficulty)
+                sumMs += window * 1000
                 timeCount += 1
-                switch TimingThresholds.speedBucket(for: t, activity: activity) {
+            }
+        }
+        let adaptiveScore: Int = {
+            guard let accuracy else { return 70 }
+            let windows = decisions.compactMap { d -> Double? in
+                guard let t = d.decisionTimeSeconds else { return nil }
+                return DecisionTimingModel.decisionWindow(rawRepInterval: t, activity: activity, difficulty: record.difficulty)
+            }
+            return DecisionTimingModel.decisionScore(accuracy: accuracy, windows: windows, activity: activity)
+        }()
+        fast = 0
+        medium = 0
+        slow = 0
+        for d in decisions {
+            if let t = d.decisionTimeSeconds {
+                let window = DecisionTimingModel.decisionWindow(rawRepInterval: t, activity: activity, difficulty: record.difficulty)
+                switch DecisionTimingModel.speedBucket(forDecisionWindow: window, activity: activity, score: adaptiveScore) {
                 case .fast: fast += 1
                 case .medium: medium += 1
                 case .slow: slow += 1

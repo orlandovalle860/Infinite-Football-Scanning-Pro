@@ -267,7 +267,7 @@ enum ReportCardGenerator {
         case .aPlus, .a, .aMinus:
             return "You're performing at an Elite level—maintain this standard."
         case .bPlus, .b, .bMinus:
-            return "You're close to Elite (early decisions before arrival)."
+            return "You're close to Elite (early decisions before expected arrival)."
         case .cPlus, .c, .cMinus:
             return "You're close to Strong (On-Time Decisions)."
         case .dPlus, .d, .dMinus:
@@ -324,11 +324,11 @@ enum ReportCardGenerator {
 
     private static func decisionSpeedMessage(from zone: String) -> String {
         switch zone {
-        case "Elite": return "Excellent — consistently deciding well before arrival."
-        case "Advanced": return "Strong timing — usually before arrival."
+        case "Elite": return "Excellent — consistently deciding well before expected arrival."
+        case "Advanced": return "Strong timing — usually before expected arrival."
         case "Competent": return "Solid baseline — decisions land around arrival."
         case "Late": return "You're often a beat late — decide earlier."
-        case "Too Late": return "Decision comes after arrival too often — build earlier pictures."
+        case "Too Late": return "Decision comes after expected arrival too often — build earlier pictures."
         default: return "Complete more sessions to unlock timing feedback."
         }
     }
@@ -351,7 +351,7 @@ enum ReportCardGenerator {
     private static func accuracyMessage(from percent: Int?, speedZone: String) -> String {
         guard let percent else { return "Complete more sessions to unlock accuracy coaching." }
         if percent >= 85 && (speedZone == "Late" || speedZone == "Too Late") {
-            return "Excellent accuracy — now increase time left before arrival."
+            return "Excellent accuracy — now increase time left before expected arrival."
         }
         if percent >= 85 { return "Great decision quality — keep consistency high." }
         if percent >= 70 { return "Good base — sharpen consistency under pressure." }

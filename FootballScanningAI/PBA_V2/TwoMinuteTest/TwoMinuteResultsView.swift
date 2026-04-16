@@ -59,21 +59,21 @@ struct TwoMinuteResultsView: View {
         if r == maxCount && r > l + 1 { return "Right" }
         return "Balanced"
     }
-    /// Average latency (passTriggered -> exitLogged) in seconds; nil if none. Shown in UI / analytics; not used for headline bucket.
+    /// Average decision window (arrival - decision) in seconds; nil if none.
     private var avgLatency: Double? {
-        let withPass = logs.compactMap { log -> Double? in
-            guard let pt = log.passTriggeredAt else { return nil }
-            return log.exitLoggedAt.timeIntervalSince(pt)
-        }
+        let withPass = logs.compactMap { $0.decisionWindowSeconds(activity: .twoMinuteTest, difficulty: difficulty) }
         guard !withPass.isEmpty else { return nil }
         return withPass.reduce(0, +) / Double(withPass.count)
     }
 
     private var twoMinuteSpeedCounts: SessionSpeedCounts {
+        let accuracy = logs.isEmpty ? 0 : Double(earlyDecisions) / Double(logs.count)
+        let windows = logs.compactMap { $0.decisionWindowSeconds(activity: .twoMinuteTest, difficulty: difficulty) }
+        let adaptiveScore = DecisionTimingModel.decisionScore(accuracy: accuracy, windows: windows, activity: .twoMinuteTest)
         var fast = 0, medium = 0, slow = 0
         for log in logs {
-            let t = log.exitLoggedAt.timeIntervalSince(log.passTriggeredAt ?? log.infoShownAt)
-            switch TimingThresholds.speedBucket(for: t, activity: .twoMinuteTest) {
+            guard let window = log.decisionWindowSeconds(activity: .twoMinuteTest, difficulty: difficulty) else { continue }
+            switch DecisionTimingModel.speedBucket(forDecisionWindow: window, activity: .twoMinuteTest, score: adaptiveScore) {
             case .fast: fast += 1
             case .medium: medium += 1
             case .slow: slow += 1
@@ -106,9 +106,12 @@ struct TwoMinuteResultsView: View {
         )
     }
     private var twoMinutePerRepBucketLabels: [String] {
-        logs.map { log in
-            let t = log.exitLoggedAt.timeIntervalSince(log.passTriggeredAt ?? log.infoShownAt)
-            return TimingThresholds.speedBucket(for: t, activity: .twoMinuteTest).rawValue
+        let accuracy = logs.isEmpty ? 0 : Double(earlyDecisions) / Double(logs.count)
+        let windows = logs.compactMap { $0.decisionWindowSeconds(activity: .twoMinuteTest, difficulty: difficulty) }
+        let adaptiveScore = DecisionTimingModel.decisionScore(accuracy: accuracy, windows: windows, activity: .twoMinuteTest)
+        return logs.compactMap { log -> String? in
+            guard let window = log.decisionWindowSeconds(activity: .twoMinuteTest, difficulty: difficulty) else { return nil }
+            return DecisionTimingModel.speedBucket(forDecisionWindow: window, activity: .twoMinuteTest, score: adaptiveScore).rawValue
         }
     }
 
@@ -177,7 +180,7 @@ struct TwoMinuteResultsView: View {
             if showBaselineRecommendation, let rec = baselineRecommendation, let baseline = sessionResult {
                 baselineRecommendationContent(recommendation: rec, baseline: baseline)
             } else if let s = sessionResultForSummary {
-                SessionSummaryView(session: s, playerName: profileManager.currentProfile?.name ?? playerStore.selectedPlayer?.name ?? "Player", isNewPersonalBest: isNewPersonalBestForSummary, newPersonalBests: newPersonalBestsFromBlock, xpEarned: xpEarnedFromBlock, newlyUnlockedBadges: newlyUnlockedBadgesFromBlock, profileManager: profileManager, settingsViewModel: settingsViewModel)
+                SessionSummaryScreenView(session: s, playerName: profileManager.currentProfile?.name ?? playerStore.selectedPlayer?.name ?? "Player", isNewPersonalBest: isNewPersonalBestForSummary, newPersonalBests: newPersonalBestsFromBlock, xpEarned: xpEarnedFromBlock, newlyUnlockedBadges: newlyUnlockedBadgesFromBlock, profileManager: profileManager, settingsViewModel: settingsViewModel)
                     .environmentObject(progressStore)
                     .environmentObject(playerStore)
                     .environmentObject(popToRootTrigger)
@@ -187,6 +190,7 @@ struct TwoMinuteResultsView: View {
             }
         }
         .onAppear {
+            PBASessionFlowPolicy.handleResultsPresented()
             guard !didSave else { return }
             #if DEBUG
             let c = twoMinuteSpeedCounts
@@ -261,8 +265,8 @@ struct TwoMinuteResultsView: View {
             let playerId = record.playerId ?? playerStore.selectedPlayerId
             let activityName = record.activity.rawValue
             for log in logs {
-                guard let sec = log.passTriggeredAt.map({ log.exitLoggedAt.timeIntervalSince($0) }) else { continue }
-                let reactionTimeMs = Int(sec * 1000)
+                guard let window = log.decisionWindowSeconds(activity: .twoMinuteTest, difficulty: difficulty) else { continue }
+                let reactionTimeMs = Int(window * 1000)
                 if reactionTimeMs > SupabaseDecisionService.maxReactionTimeMs { continue }
                 let decision = Decision(
                     sessionId: sessionId,
@@ -342,10 +346,6 @@ struct TwoMinuteResultsView: View {
                 Text("Decision window: \(baseline.avgDecisionWindowSeconds.map { DecisionTimingModel.summaryText(windowSeconds: $0) } ?? "—")")
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.9))
-                let accuracyPct = baseline.totalReps > 0 ? Int(round(Double(baseline.correctCount) / Double(baseline.totalReps) * 100.0)) : 0
-                Text("Accuracy: \(accuracyPct)%")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.9))
             }
 
             VStack(alignment: .leading, spacing: 6) {
@@ -366,13 +366,13 @@ struct TwoMinuteResultsView: View {
             Button {
                 switch recommendation.nextActivity {
                 case .awayFromPressure:
-                    router.push(.awayFromPressureRoleSelection)
+                    router.push(PBASessionFlowPolicy.routeForActivityLaunch(.awayFromPressure))
                 case .dribbleOrPass:
-                    router.push(.dribbleOrPassRoleSelection)
+                    router.push(PBASessionFlowPolicy.routeForActivityLaunch(.dribbleOrPass))
                 case .oneTouchPassing:
-                    router.push(.oneTouchPassingRoleSelection)
+                    router.push(PBASessionFlowPolicy.routeForActivityLaunch(.oneTouchPassing))
                 case .twoMinuteTest:
-                    router.push(.twoMinuteRoleSelection)
+                    router.push(PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest))
                 }
             } label: {
                 Text("Start Training")

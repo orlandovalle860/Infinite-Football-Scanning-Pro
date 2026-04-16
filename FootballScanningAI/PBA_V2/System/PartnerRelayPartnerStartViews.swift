@@ -6,8 +6,20 @@
 //
 
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 // MARK: - Join code length (server may vary; auto-submit uses this)
+
+enum PartnerRelayCoachJoinKeyboard {
+    /// Ensures the join-code field loses focus when transitioning to “Connected” / calibration.
+    static func dismiss() {
+        #if canImport(UIKit)
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        #endif
+    }
+}
 
 enum PartnerRelayJoinCodeConfig {
     /// Expected join code length for auto-submit after typing (HTTP API uses short alphanumeric codes).
@@ -25,6 +37,8 @@ struct PartnerRelayDisplayWaitingOverlay: View {
     /// Optional: show a subtle second line while the display’s DB session is still being created (e.g. Two Minute).
     var isDatabaseSessionCreating: Bool = false
     var scrimOpacity: CGFloat = 0.58
+    var onExitSession: (() -> Void)? = nil
+    @State private var showTimeoutHelper = false
 
     var body: some View {
         ZStack {
@@ -70,19 +84,43 @@ struct PartnerRelayDisplayWaitingOverlay: View {
                 }
 
                 VStack(spacing: 8) {
-                    Text("Waiting for coach")
+                    Text("Waiting for coach...")
                         .font(.headline.weight(.semibold))
                         .foregroundColor(.white.opacity(0.88))
-                    Text("Enter this code on the coach iPhone to connect.")
-                        .font(.subheadline)
-                        .foregroundColor(.white.opacity(0.65))
+                    if showTimeoutHelper {
+                        VStack(spacing: 4) {
+                            Text("Having trouble connecting?")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundColor(.white.opacity(0.9))
+                            Text("Make sure both devices are on the same WiFi")
+                                .font(.subheadline)
+                                .foregroundColor(.white.opacity(0.8))
+                            Text("or connected to the same hotspot")
+                                .font(.subheadline)
+                                .foregroundColor(.white.opacity(0.8))
+                        }
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 28)
+                        .padding(.top, 6)
+                    }
                     if isDatabaseSessionCreating && joinCode != nil {
                         Text("Saving session…")
                             .font(.caption)
                             .foregroundColor(.white.opacity(0.45))
                     }
+                }
+
+                if let onExitSession {
+                    Button("Exit Session") {
+                        onExitSession()
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(Color.white.opacity(0.16))
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .padding(.top, 8)
                 }
 
                 Spacer(minLength: 0)
@@ -91,9 +129,13 @@ struct PartnerRelayDisplayWaitingOverlay: View {
             .padding(.vertical, 32)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .allowsHitTesting(false)
+        .allowsHitTesting(onExitSession != nil)
         .onAppear {
             PartnerPersistDebug.log("PartnerRelayDisplayWaitingOverlay onAppear (join-code / waiting UI)")
+            showTimeoutHelper = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
+                showTimeoutHelper = true
+            }
         }
     }
 }
@@ -104,6 +146,7 @@ struct PartnerRelayDisplayWaitingWithSessionErrorOverlay: View {
     var isDatabaseSessionCreating: Bool
     var databaseSessionError: String?
     var onRetryDatabaseSession: () -> Void
+    var onExitSession: (() -> Void)? = nil
 
     var body: some View {
         ZStack {
@@ -145,7 +188,8 @@ struct PartnerRelayDisplayWaitingWithSessionErrorOverlay: View {
                 PartnerRelayDisplayWaitingOverlay(
                     joinCode: joinCode,
                     isDatabaseSessionCreating: isDatabaseSessionCreating,
-                    scrimOpacity: 0.58
+                    scrimOpacity: 0.58,
+                    onExitSession: onExitSession
                 )
             }
         }
@@ -160,8 +204,6 @@ struct PartnerRelayCoachJoinSection: View {
     @FocusState.Binding var joinFieldFocused: Bool
     var joinBusy: Bool
     var joinBanner: String?
-    var relayTransportConnected: Bool
-    var displayPeerJoined: Bool
     /// Called when user taps Join or submits; also after auto-enter when code length matches.
     var onJoin: () -> Void
 
@@ -203,6 +245,12 @@ struct PartnerRelayCoachJoinSection: View {
                         joinFieldFocused = true
                     }
                 }
+
+            Text("Both devices must be on the same WiFi\nor connected to the same phone hotspot.")
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.72))
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
             Button(action: onJoin) {
                 Group {
@@ -266,36 +314,6 @@ struct PartnerRelayCoachJoinSection: View {
                 .cornerRadius(10)
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("Join failed. \(err)")
-            }
-
-            if relayTransportConnected {
-                HStack(spacing: 8) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.green.opacity(0.95))
-                    Text("Relay connected")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(.green.opacity(0.95))
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            if displayPeerJoined {
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "link.circle.fill")
-                        .foregroundColor(.green.opacity(0.9))
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Joined display successfully")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundColor(.green.opacity(0.95))
-                        Text("control.peer_joined received")
-                            .font(.caption2)
-                            .foregroundColor(.white.opacity(0.55))
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(10)
-                .background(Color.green.opacity(0.12))
-                .cornerRadius(10)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

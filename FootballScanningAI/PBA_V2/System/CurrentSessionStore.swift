@@ -16,6 +16,7 @@ final class CurrentSessionStore: ObservableObject {
     @Published private(set) var sessionId: UUID?
     /// Id of the row in session_activities for the current drill. Events and decisions use session_activity_id = currentSessionActivityId.
     @Published private(set) var currentSessionActivityId: UUID?
+    @Published private(set) var expectedBallTravelTimeOverrideSeconds: Double?
 
     private init() {}
 
@@ -29,8 +30,14 @@ final class CurrentSessionStore: ObservableObject {
         currentSessionActivityId = id
     }
 
+    /// Optional per-session override from quick pass-tempo calibration on display.
+    func setExpectedBallTravelTimeOverrideSeconds(_ value: Double?) {
+        expectedBallTravelTimeOverrideSeconds = value
+    }
+
     func clear() {
         sessionId = nil
         currentSessionActivityId = nil
+        expectedBallTravelTimeOverrideSeconds = nil
     }
 }

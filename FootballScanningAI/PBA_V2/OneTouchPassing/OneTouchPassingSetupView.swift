@@ -15,7 +15,6 @@ struct OneTouchPassingSetupView: View {
     @EnvironmentObject private var playerStore: PlayerStore
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
     @EnvironmentObject private var router: AppRouter
-    @State private var difficulty: TestDifficulty = .beginner
     @State private var showInstructions = false
     @State private var navigateToSession = false
 
@@ -24,36 +23,45 @@ struct OneTouchPassingSetupView: View {
     }
 
     private var config: OneTouchPassingConfig {
-        OneTouchPassingConfig.defaultConfig(for: difficulty, loopLevel: loopLevel)
+        OneTouchPassingConfig.defaultConfig(for: adaptivePlan.recommendedDifficulty, loopLevel: loopLevel, levelModifiers: profileManager.pendingLevelDifficulty)
+    }
+
+    private var adaptivePlan: ActivityAdaptivePlan {
+        makeActivityAdaptivePlan(from: profileManager.recentTrainSessions(limit: 3))
     }
 
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
-                Text("Set up")
+                Text("One-Touch Passing")
                     .font(.system(size: 32, weight: .bold, design: .rounded))
                     .foregroundColor(.white)
                     .padding(.top, 20)
 
-                Text("Difficulty")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.8))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 24)
-                Picker("", selection: $difficulty) {
-                    Text("Beginner").tag(TestDifficulty.beginner)
-                    Text("Intermediate").tag(TestDifficulty.standard)
-                    Text("Advanced").tag(TestDifficulty.advanced)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("• Stand about 12 yards from your partner or wall.")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.9))
+                    Text("• Keep touches one-touch and play the next action quickly.")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.9))
+                    Text("Level: \(adaptivePlan.level.rawValue)")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white)
+                    Text("Focus: \(adaptivePlan.focusCue)")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.78))
+                    Text("Constraints: \(adaptivePlan.constraintsSummary)")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.66))
                 }
-                .pickerStyle(.segmented)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 24)
+                .padding(.top, 4)
 
                 Button {
-                    if ActivityInstructionContent.shouldShowInstructions(for: .oneTouchPassing) {
-                        showInstructions = true
-                    } else {
-                        navigateToSession = true
-                    }
+                    profileManager.pendingLevelDifficulty = adaptivePlan.modifiers
+                    navigateToSession = true
                 } label: {
                     Text("Begin")
                         .font(.system(size: 22, weight: .bold, design: .rounded))
@@ -66,6 +74,13 @@ struct OneTouchPassingSetupView: View {
                 .buttonStyle(PlainButtonStyle())
                 .padding(.horizontal, 28)
                 .padding(.top, 16)
+
+                Button("View Instructions") {
+                    showInstructions = true
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.white.opacity(0.82))
+                .buttonStyle(.plain)
 
                 Spacer(minLength: 40)
             }
@@ -88,6 +103,7 @@ struct OneTouchPassingSetupView: View {
         .pbaHomeToolbar(router: router)
         .onAppear {
             print("[SetupScreen OTP] onAppear, router path count = \(router.pathCount)")
+            profileManager.pendingLevelDifficulty = adaptivePlan.modifiers
         }
         .navigationDestination(isPresented: $showInstructions) {
             ActivityInstructionView(activity: .oneTouchPassing, trainingMode: mode) {
@@ -101,6 +117,9 @@ struct OneTouchPassingSetupView: View {
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
+                .onAppear {
+                    profileManager.pendingLevelDifficulty = nil
+                }
         }
     }
 }

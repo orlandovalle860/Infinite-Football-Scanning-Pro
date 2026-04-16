@@ -6,12 +6,26 @@
 //
 
 import SwiftUI
+import UIKit
 
 /// Trend status for dashboard: derived from recent vs older session metrics.
 enum DevelopmentStatus: String {
     case improving = "Improving"
     case stable = "Stable"
     case declining = "Declining"
+}
+
+private enum DashboardAudienceRole: String {
+    case coach
+    case parentPlayer = "parent_player"
+}
+
+private struct ParentRecommendedNextPlan {
+    let weakness: String
+    let message: String
+    let activity: ActivityKind
+    let activityName: String
+    let focus: String
 }
 
 struct PlayerDashboardView: View {
@@ -28,6 +42,7 @@ struct PlayerDashboardView: View {
     @State private var navigateToReportCard = false
     @State private var navigateToDevelopmentSnapshot = false
     @State private var metricInfoToShow: (title: String, message: String)?
+    @AppStorage("dashboardAudienceRoleV1") private var dashboardAudienceRoleRaw: String = ""
 
     private var activeProfile: UserProfile? { profileManager.currentProfile }
     private var playerId: UUID? { activeProfile?.id }
@@ -44,6 +59,167 @@ struct PlayerDashboardView: View {
 
     private var chartSessions: [SessionResult] {
         profileManager.sessionResultsForCharts()
+    }
+
+    private var dashboardRole: DashboardAudienceRole? {
+        DashboardAudienceRole(rawValue: dashboardAudienceRoleRaw)
+    }
+
+    private var effectiveDashboardRole: DashboardAudienceRole {
+        dashboardRole ?? .parentPlayer
+    }
+
+    private var parentRecommendedNext: ParentRecommendedNextPlan {
+        let recent = profileManager.recentTrainSessions(limit: 3)
+        guard !recent.isEmpty else {
+            return ParentRecommendedNextPlan(
+                weakness: "none",
+                message: "Build your baseline to get personalized guidance.",
+                activity: .twoMinuteTest,
+                activityName: "2-Minute Test",
+                focus: "Establish your baseline"
+            )
+        }
+
+        let sessionsForDecision: [SessionResult]
+        if recent.count >= 3 {
+            sessionsForDecision = recent
+        } else if let latest = recent.first {
+            sessionsForDecision = [latest]
+        } else {
+            sessionsForDecision = []
+        }
+
+        let aggregates = parentRecommendationAggregates(from: sessionsForDecision)
+        let latePercentage = aggregates.latePercentage
+        let accuracy = aggregates.accuracy
+        let score = aggregates.score
+        _ = timingBand(for: latePercentage)
+        _ = accuracyBand(for: accuracy)
+        _ = scoreBand(for: score)
+
+        if latePercentage > 0.40 {
+            return ParentRecommendedNextPlan(
+                weakness: "timing",
+                message: "You’re deciding too late relative to the ball",
+                activity: .oneTouchPassing,
+                activityName: "One-Touch Passing",
+                focus: "Decide earlier before the ball arrives"
+            )
+        }
+
+        if accuracy < 0.70 {
+            return ParentRecommendedNextPlan(
+                weakness: "accuracy",
+                message: "You’re choosing the wrong option too often",
+                activity: .awayFromPressure,
+                activityName: "Playing Away from Pressure",
+                focus: "Choose the correct direction consistently"
+            )
+        }
+        return ParentRecommendedNextPlan(
+            weakness: "none",
+            message: "You’re ahead of the play — keep pushing your speed",
+            activity: .dribbleOrPass,
+            activityName: "Dribble or Pass",
+            focus: "Increase speed under pressure"
+        )
+    }
+
+    private var parentAverageTimingLabel: String {
+        let values = chartSessions.compactMap(\.avgDecisionWindowSeconds)
+        guard !values.isEmpty else { return "—" }
+        let avg = values.reduce(0, +) / Double(values.count)
+        if avg >= 0 {
+            return String(format: "Early by %.2fs", avg)
+        }
+        return String(format: "Late by %.2fs", abs(avg))
+    }
+
+    private var parentSimpleTrend: String {
+        let scores = decisionScorePoints.map(\.value)
+        guard scores.count >= 2 else { return "Build trend: complete more sessions." }
+        let trend = calculateTrend(values: scores)
+        switch trend {
+        case .up: return "Progress trend: Improving"
+        case .down: return "Progress trend: Declining"
+        case .stable: return "Progress trend: Stable"
+        }
+    }
+
+    private var parentLevelLabel: String {
+        activeProfile?.adaptiveTrainingState.currentLevel.rawValue ?? "Reactive"
+    }
+
+    private var parentScoreLabel: String {
+        guard let latest = decisionScorePoints.last?.value else { return "—" }
+        return "\(Int(latest.rounded()))"
+    }
+
+    private var sessionStreakLabel: String {
+        let streak = activeProfile?.sessionStreakCount ?? 0
+        return "🔥 \(streak) Session Streak"
+    }
+
+    private var parentScoreBandLabel: String {
+        guard let latest = decisionScorePoints.last?.value else { return "Getting Started" }
+        let score = Int(latest.rounded())
+        switch score {
+        case 90...100: return "Elite Timing"
+        case 75...89: return "Strong Timing"
+        case 60...74: return "Developing Timing"
+        default: return "Building Timing"
+        }
+    }
+
+    private var parentLastThreeScoresText: String {
+        let values = decisionScorePoints.map { Int($0.value.rounded()) }
+        let last3 = Array(values.suffix(3))
+        guard !last3.isEmpty else { return "—" }
+        return last3.map(String.init).joined(separator: " → ")
+    }
+
+    private var parentImprovementLabel: String {
+        let values = decisionScorePoints.map(\.value)
+        guard values.count >= 2 else { return "Keep building with each session" }
+        let trend = calculateTrend(values: values)
+        switch trend {
+        case .up: return "Improving each session"
+        case .down: return "Keep pushing for earlier decisions"
+        case .stable: return "Staying steady"
+        }
+    }
+
+    private var parentTimingProgressText: String {
+        let windows = chartSessions.compactMap(\.avgDecisionWindowSeconds)
+        let last = Array(windows.suffix(3))
+        guard !last.isEmpty else { return "—" }
+        return last.map(parentTimingPhrase).joined(separator: " → ")
+    }
+
+    private var parentInsightSentence: String {
+        let scoreValues = decisionScorePoints.map(\.value)
+        let timingValues = chartSessions.compactMap(\.avgDecisionWindowSeconds)
+        guard scoreValues.count >= 2, timingValues.count >= 2 else {
+            return "Great start — keep training for earlier decisions."
+        }
+        let scoreTrend = calculateTrend(values: scoreValues)
+        let timingTrend = calculateTrend(values: timingValues)
+        if scoreTrend == .up && timingTrend == .up {
+            return "Great progress — decisions are happening earlier each session."
+        }
+        if scoreTrend == .down || timingTrend == .down {
+            return "Progress dipped slightly — focus on deciding earlier."
+        }
+        return "Steady progress — keep aiming for earlier decisions."
+    }
+
+    private var parentNextFocusText: String {
+        "Decide before the ball reaches halfway"
+    }
+
+    private var parentSayCueText: String {
+        "Say: \"Know your move before the ball gets to you\""
     }
 
     // Snapshot metrics (current)
@@ -284,14 +460,45 @@ struct PlayerDashboardView: View {
         }
     }
 
+    private var teamLeadersSection: some View {
+        Group {
+            if profileManager.profiles.count >= 2 {
+                TeamLeadersThisWeekView(
+                    stats: makeTeamStats(
+                        profiles: profileManager.profiles,
+                        currentPlayerId: activeProfile?.id
+                    )
+                )
+            }
+        }
+    }
+
+    private var coachChallengeSection: some View {
+        Group {
+            if profileManager.profiles.count >= 2 {
+                TeamChallengeCoachDashboardView(
+                    data: makeCoachChallengeDashboardData(profiles: profileManager.profiles)
+                )
+            }
+        }
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 header
-                playerSnapshotCard
-                progressGraphsSection
-                trainingRecommendationCard
-                actionsSection
+                if effectiveDashboardRole == .coach {
+                    coachChallengeSection
+                    teamLeadersSection
+                    playerSnapshotCard
+                    progressGraphsSection
+                    trainingRecommendationCard
+                } else {
+                    parentPlayerDashboardSection
+                }
+                if effectiveDashboardRole == .coach {
+                    actionsSection
+                }
             }
             .padding(20)
         }
@@ -360,13 +567,170 @@ struct PlayerDashboardView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(activeProfile?.name ?? "Player")
+            Text(effectiveDashboardRole == .coach ? (activeProfile?.name ?? "Player") : "Train")
                 .font(.system(size: 28, weight: .bold, design: .rounded))
                 .foregroundColor(.white)
-            Text("Player Dashboard")
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.8))
+            if effectiveDashboardRole == .coach {
+                Text("Coach Dashboard")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.8))
+            }
         }
+    }
+
+    private var parentPlayerDashboardSection: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Recommended Next")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                Text(parentRecommendedNext.activityName)
+                    .font(.title2.weight(.bold))
+                    .foregroundColor(.yellow.opacity(0.95))
+                Text(parentRecommendedNext.focus)
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.9))
+                    .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    router.push(routeForActivity(parentRecommendedNext.activity))
+                } label: {
+                    Text("Start Session")
+                        .font(.headline)
+                        .foregroundColor(.black)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(Color.yellow)
+                        .cornerRadius(14)
+                }
+                .buttonStyle(ParentTapFeedbackButtonStyle())
+                .padding(.top, 6)
+            }
+            .parentCardStyle(prominent: true)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Other Activities")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.92))
+                parentActivityButton(title: "Dribble or Pass", activity: .dribbleOrPass)
+                parentActivityButton(title: "Playing Away From Pressure", activity: .awayFromPressure)
+                parentActivityButton(title: "2-Minute Test", activity: .twoMinuteTest)
+            }
+            .parentCardStyle()
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("This Week")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.82))
+                HStack(spacing: 10) {
+                    Text(parentScoreLabel)
+                        .font(.system(size: 30, weight: .bold, design: .rounded))
+                        .foregroundColor(.white.opacity(0.95))
+                    Text(parentProgressLabel)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundColor(.white.opacity(0.78))
+                }
+            }
+            .parentCardStyle()
+        }
+    }
+
+    private func parentActivityButton(title: String, activity: ActivityKind) -> some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            router.push(routeForActivity(activity))
+        } label: {
+            HStack {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.7))
+            }
+            .padding(.vertical, 12)
+            .padding(.horizontal, 14)
+            .background(Color.white.opacity(0.08))
+            .cornerRadius(12)
+        }
+        .buttonStyle(ParentTapFeedbackButtonStyle())
+    }
+
+    private var parentProgressLabel: String {
+        guard let latest = decisionScorePoints.last?.value else { return "Getting Started" }
+        let score = Int(latest.rounded())
+        switch score {
+        case 90...100: return "Elite Progress"
+        case 75...89: return "Strong Progress"
+        case 60...74: return "Developing Progress"
+        default: return "Building Progress"
+        }
+    }
+
+    private func routeForActivity(_ activity: ActivityKind) -> AppRoute {
+        PBASessionFlowPolicy.routeForActivityLaunch(activity)
+    }
+
+    private func parentRecommendationAggregates(from sessions: [SessionResult]) -> (latePercentage: Double, accuracy: Double, score: Double) {
+        guard !sessions.isEmpty else { return (0, 0, 0) }
+
+        var lateValues: [Double] = []
+        var accuracyValues: [Double] = []
+        var scoreValues: [Double] = []
+
+        for session in sessions {
+            let timingTotal = session.speedCounts.fast + session.speedCounts.medium + session.speedCounts.slow
+            if timingTotal > 0 {
+                lateValues.append(Double(session.speedCounts.slow) / Double(timingTotal))
+            } else {
+                lateValues.append(0)
+            }
+
+            if session.totalReps > 0 {
+                accuracyValues.append(Double(session.correctCount) / Double(session.totalReps))
+            } else {
+                accuracyValues.append(0)
+            }
+
+            if let decisionScore = session.decisionTotalScore {
+                scoreValues.append((decisionScore / 60.0) * 100.0)
+            } else if session.totalReps > 0 {
+                scoreValues.append(Double(session.correctCount) / Double(session.totalReps) * 100.0)
+            } else {
+                scoreValues.append(0)
+            }
+        }
+
+        let avgLate = lateValues.reduce(0, +) / Double(max(1, lateValues.count))
+        let avgAccuracy = accuracyValues.reduce(0, +) / Double(max(1, accuracyValues.count))
+        let avgScore = scoreValues.reduce(0, +) / Double(max(1, scoreValues.count))
+        return (avgLate, avgAccuracy, avgScore)
+    }
+
+    private func timingBand(for latePercentage: Double) -> String {
+        if latePercentage > 0.40 { return "timing_weakness" }
+        if latePercentage >= 0.25 { return "timing_needs_improvement" }
+        return "timing_good"
+    }
+
+    private func accuracyBand(for accuracy: Double) -> String {
+        if accuracy < 0.70 { return "accuracy_weakness" }
+        if accuracy <= 0.85 { return "accuracy_developing" }
+        return "accuracy_strong"
+    }
+
+    private func scoreBand(for score: Double) -> String {
+        if score < 70 { return "score_struggling" }
+        if score <= 85 { return "score_solid" }
+        return "score_strong"
+    }
+
+    private func parentTimingPhrase(_ value: Double) -> String {
+        if value >= 0 {
+            return String(format: "Early by %.2fs", value)
+        }
+        return String(format: "Late by %.2fs", abs(value))
     }
 
     private var playerSnapshotCard: some View {
@@ -675,6 +1039,30 @@ struct PlayerDashboardView: View {
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
         }
+    }
+}
+
+private extension View {
+    func parentCardStyle(prominent: Bool = false) -> some View {
+        self
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(prominent ? Color.white.opacity(0.09) : Color.white.opacity(0.04))
+            .cornerRadius(18)
+            .overlay(
+                RoundedRectangle(cornerRadius: 18)
+                    .stroke(prominent ? Color.yellow.opacity(0.35) : Color.white.opacity(0.08), lineWidth: 1)
+            )
+    }
+}
+
+private struct ParentTapFeedbackButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+            .opacity(configuration.isPressed ? 0.88 : 1.0)
+            .brightness(configuration.isPressed ? 0.05 : 0)
+            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
     }
 }
 

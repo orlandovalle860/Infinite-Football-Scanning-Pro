@@ -445,6 +445,175 @@ struct PostAuthView: View {
 
 private let coachDeviceShownHomeKey = "coachDeviceShownHome"
 
+private struct WhatsNewControlsView: View {
+    let onDismiss: () -> Void
+    @State private var contentVisible = false
+
+    private let bgTop = Color(red: 11.0 / 255.0, green: 15.0 / 255.0, blue: 26.0 / 255.0)
+    private let bgBottom = Color(red: 17.0 / 255.0, green: 24.0 / 255.0, blue: 39.0 / 255.0)
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [bgTop, bgBottom],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                Spacer(minLength: 14)
+
+                Text("What's New")
+                    .font(.system(size: 30, weight: .semibold, design: .default))
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity, alignment: .center)
+
+                Spacer(minLength: 44)
+
+                VStack(spacing: 10) {
+                    Text("New Controls")
+                        .font(.system(size: 18, weight: .regular, design: .default))
+                        .foregroundColor(.gray)
+                    Text("No buttons — just tap and swipe")
+                        .font(.system(size: 24, weight: .bold, design: .default))
+                        .foregroundColor(.white)
+                        .multilineTextAlignment(.center)
+                    Text("Tap → start / pass\nSwipe → log direction")
+                        .font(.system(size: 18, weight: .regular, design: .default))
+                        .foregroundColor(.white)
+                        .multilineTextAlignment(.center)
+                        .padding(.top, 20)
+                }
+                .padding(.horizontal, 24)
+
+                Spacer(minLength: 34)
+
+                VStack(spacing: 8) {
+                    featureRow("More accurate timing")
+                    featureRow("Clearer feedback")
+                    featureRow("Progress tracking")
+                    featureRow("Badges & streaks")
+                }
+                .padding(.horizontal, 28)
+
+                Spacer()
+
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        contentVisible = false
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                        onDismiss()
+                    }
+                } label: {
+                    Text("Got It")
+                        .font(.system(size: 18, weight: .semibold, design: .default))
+                        .foregroundColor(.black)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 52)
+                        .background(Color.white)
+                        .cornerRadius(18)
+                }
+                .padding(.horizontal, 28)
+
+                Text("You can view this again in Settings")
+                    .font(.system(size: 13, weight: .regular, design: .default))
+                    .foregroundColor(.gray)
+                    .padding(.top, 12)
+
+                Spacer(minLength: 18)
+            }
+            .opacity(contentVisible ? 1 : 0)
+            .animation(.easeInOut(duration: 0.2), value: contentVisible)
+        }
+        .onAppear {
+            contentVisible = false
+            withAnimation(.easeInOut(duration: 0.2)) {
+                contentVisible = true
+            }
+        }
+    }
+
+    private func featureRow(_ text: String) -> some View {
+        Text("\u{2022} \(text)")
+            .font(.system(size: 15, weight: .regular, design: .default))
+            .foregroundColor(.gray)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct DashboardAudienceRolePromptSheet: View {
+    let onSelectCoach: () -> Void
+    let onSelectParentPlayer: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("How are you using the app?")
+                    .font(.title3.weight(.semibold))
+                    .foregroundColor(.primary)
+
+                Button {
+                    onSelectParentPlayer()
+                } label: {
+                    roleButtonLabel(
+                        title: "Train Myself / With a Friend",
+                        subtitle: "Run sessions and track your progress"
+                    )
+                }
+                .buttonStyle(PlainButtonStyle())
+
+                Button {
+                    onSelectCoach()
+                } label: {
+                    roleButtonLabel(
+                        title: "Coach a Team",
+                        subtitle: "Run sessions with a group and track players"
+                    )
+                }
+                .buttonStyle(PlainButtonStyle())
+
+                Text("You can change this anytime")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+
+                Button("Not now") {
+                    onDismiss()
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.top, 4)
+
+                Spacer(minLength: 0)
+            }
+            .padding(20)
+        }
+        .presentationDetents([.medium])
+        .presentationDragIndicator(.visible)
+    }
+
+    private func roleButtonLabel(title: String, subtitle: String) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                Text(subtitle)
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemBackground))
+        .cornerRadius(12)
+    }
+}
+
 struct MainAppView: View {
     @ObservedObject var profileManager: UserProfileManager
     @ObservedObject var settingsViewModel: SettingsViewModel
@@ -460,11 +629,30 @@ struct MainAppView: View {
     @State private var showCreatePlayerAfterAuth: Bool = false
     @State private var hasHydratedPlayersForSession: Bool = false
     @AppStorage(hasCompletedInitialTestKey) private var hasCompletedInitialTest = false
+    @AppStorage(hasSeenIntroKey) private var hasSeenIntro = false
     @AppStorage(coachDeviceShownHomeKey) private var coachDeviceShownHome = false
     @AppStorage(AppRole.storageKey) private var appRoleRaw: String = AppRole.player.rawValue
+    @AppStorage("dashboardAudienceRoleV1") private var dashboardAudienceRoleRaw: String = ""
+    @AppStorage("dashboardAudienceRolePromptSeenV2") private var dashboardAudienceRolePromptSeen = false
+    @AppStorage("whatsNewControlsSeenV1") private var whatsNewControlsSeen = false
     @State private var signOutUXPhase: SignOutUXPhase = .idle
+    @State private var showDashboardAudienceRolePrompt = false
+    @State private var showWhatsNewControlsPrompt = false
 
     private var resolvedAppRole: AppRole { AppRole.resolved(from: appRoleRaw) }
+    private var shouldShowAudiencePrompt: Bool {
+        resolvedAppRole != .coachRemote
+            && hasCompletedInitialTest
+            && !dashboardAudienceRolePromptSeen
+            && !authManager.isRestoring
+    }
+    private var shouldShowWhatsNewControlsPrompt: Bool {
+        hasCompletedInitialTest
+            && !whatsNewControlsSeen
+            && !authManager.isRestoring
+            && resolvedAppRole != .coachRemote
+            && !showDashboardAudienceRolePrompt
+    }
 
     /// After reinstall, local stores are empty but Supabase session may still restore from keychain; players then load asynchronously. Don't flash Intro until we know remote is empty too (signed-in + host).
     private var shouldWaitForRemoteHydration: Bool {
@@ -502,8 +690,8 @@ struct MainAppView: View {
                 coachRemoteRootView
             } else if shouldWaitForRemoteHydration {
                 launchBootstrapPlaceholder
-            } else if !hasCompletedInitialTest {
-                // Remote/local may already have players after hydrate; still show first-run until baseline flow marks AppStorage.
+            } else if !hasSeenIntro {
+                // One-time first-launch intro only.
                 IntroOnboardingView(
                     settingsViewModel: settingsViewModel,
                     profileManager: profileManager
@@ -519,21 +707,13 @@ struct MainAppView: View {
                     signOutUXPhase: $signOutUXPhase
                 )
             } else if playerStore.players.isEmpty, profileManager.profiles.isEmpty {
-                if hasCompletedInitialTest {
-                    // Baseline already done (e.g. guest); do not send user through first-run 2-min intro again.
-                    HomeDashboardView(
-                        profileManager: profileManager,
-                        settingsViewModel: settingsViewModel,
-                        showsTopToggle: $showsTopToggle,
-                        showLoginSheet: $showLoginSheet,
-                        signOutUXPhase: $signOutUXPhase
-                    )
-                } else {
-                    IntroOnboardingView(
-                        settingsViewModel: settingsViewModel,
-                        profileManager: profileManager
-                    )
-                }
+                HomeDashboardView(
+                    profileManager: profileManager,
+                    settingsViewModel: settingsViewModel,
+                    showsTopToggle: $showsTopToggle,
+                    showLoginSheet: $showLoginSheet,
+                    signOutUXPhase: $signOutUXPhase
+                )
             } else if Config.isSupabaseConfigured, authManager.currentSession != nil, playerStore.selectedPlayerId == nil {
                 PlayerSelectionView(
                     profileManager: profileManager,
@@ -563,18 +743,19 @@ struct MainAppView: View {
             if authManager.isRestoring { return "bootstrap_auth_restoring" }
             if resolvedAppRole == .coachRemote { return "coach_remote_root" }
             if shouldWaitForRemoteHydration { return "bootstrap_wait_remote_hydration" }
-            if !hasCompletedInitialTest { return "intro_first_run_incomplete_test" }
+            if !hasSeenIntro { return "intro_first_launch" }
             if hasCompletedInitialTest, playerStore.players.isEmpty, profileManager.profiles.isEmpty,
                Config.isSupabaseConfigured, authManager.currentSession != nil {
                 return "player_selection_signed_in_no_local"
             }
-            if playerStore.players.isEmpty, profileManager.profiles.isEmpty { return "intro_no_local_identity" }
+            if playerStore.players.isEmpty, profileManager.profiles.isEmpty { return "home_no_local_identity" }
             if Config.isSupabaseConfigured, authManager.currentSession != nil, playerStore.selectedPlayerId == nil {
                 return "player_selection"
             }
             return "home"
         }()
         LaunchProfileDebug.log("app_launch reason=\(reason) route=\(route)")
+        LaunchProfileDebug.log("first_run hasSeenIntro=\(hasSeenIntro)")
         LaunchProfileDebug.log("first_run hasCompletedInitialTest=\(hasCompletedInitialTest)")
         LaunchProfileDebug.log("session authenticated=\(authManager.currentSession != nil) isRestoring=\(authManager.isRestoring)")
         LaunchProfileDebug.log("local playerCount=\(playerStore.players.count) profileCount=\(profileManager.profiles.count)")
@@ -632,6 +813,33 @@ struct MainAppView: View {
             )
             .environmentObject(progressStore)
         }
+        .sheet(isPresented: $showDashboardAudienceRolePrompt) {
+            DashboardAudienceRolePromptSheet(
+                onSelectCoach: {
+                    dashboardAudienceRoleRaw = "coach"
+                    dashboardAudienceRolePromptSeen = true
+                    showDashboardAudienceRolePrompt = false
+                },
+                onSelectParentPlayer: {
+                    dashboardAudienceRoleRaw = "parent_player"
+                    dashboardAudienceRolePromptSeen = true
+                    showDashboardAudienceRolePrompt = false
+                },
+                onDismiss: {
+                    dashboardAudienceRolePromptSeen = true
+                    showDashboardAudienceRolePrompt = false
+                }
+            )
+        }
+        .sheet(isPresented: $showWhatsNewControlsPrompt, onDismiss: {
+            whatsNewControlsSeen = true
+            showWhatsNewControlsPrompt = false
+        }) {
+            WhatsNewControlsView {
+                whatsNewControlsSeen = true
+                showWhatsNewControlsPrompt = false
+            }
+        }
         .onAppear {
 #if DEBUG
             print("DEBUG SUPABASE_URL:", Bundle.main.object(forInfoDictionaryKey: "SUPABASE_URL") ?? "nil")
@@ -669,6 +877,8 @@ struct MainAppView: View {
             SupabasePlayerService.shared.retryPendingPlayers(profileManager: profileManager)
             SupabasePlayerService.shared.retryPendingDeletes()
             refreshCoachingTrainingNudgesIfNeeded()
+            showDashboardAudienceRolePrompt = shouldShowAudiencePrompt
+            showWhatsNewControlsPrompt = shouldShowWhatsNewControlsPrompt
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             refreshCoachingTrainingNudgesIfNeeded()
@@ -695,10 +905,22 @@ struct MainAppView: View {
         .onChange(of: hasCompletedInitialTest) { _, v in
             logLaunchRouting(reason: "hasCompletedInitialTest=\(v)")
         }
+        .onChange(of: hasSeenIntro) { _, v in
+            logLaunchRouting(reason: "hasSeenIntro=\(v)")
+        }
         .onChange(of: appRoleRaw) { oldValue, newValue in
             AppRoleDebug.log("role_change old=\(oldValue) new=\(newValue) routing=\(AppRole.resolved(from: newValue) == .coachRemote ? "coach_remote_root" : "player_flow")")
             router.popToRoot()
             logLaunchRouting(reason: "app_role_storage_changed")
+        }
+        .onChange(of: hasCompletedInitialTest) { _, _ in
+            showDashboardAudienceRolePrompt = shouldShowAudiencePrompt
+        }
+        .onChange(of: dashboardAudienceRoleRaw) { _, _ in
+            showDashboardAudienceRolePrompt = shouldShowAudiencePrompt
+        }
+        .onChange(of: showDashboardAudienceRolePrompt) { _, _ in
+            showWhatsNewControlsPrompt = shouldShowWhatsNewControlsPrompt
         }
         .onReceive(NetworkReachabilityObserver.shared.reachableSubject) { _ in
             SupabaseSessionService.shared.retryPendingSessions(progressStore: progressStore)
@@ -944,182 +1166,64 @@ struct MainAppView: View {
 struct IntroOnboardingView: View {
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
-    @EnvironmentObject private var progressStore: ProgressStore
-    @EnvironmentObject private var playerStore: PlayerStore
-    @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
     @EnvironmentObject private var router: AppRouter
-    @AppStorage(AppRole.storageKey) private var appRoleRaw: String = AppRole.player.rawValue
-    @State private var showHowItWorks = false
-    @State private var showAccountSignIn = false
-    /// 0…2 = tap-through steps; main content when completed or after persistence.
-    @State private var introStep = 0
-    @AppStorage(hasCompletedPocketOnboardingStepsKey) private var hasCompletedPocketOnboardingSteps = false
-
-    private var showPocketOnboardingSteps: Bool {
-        !hasCompletedPocketOnboardingSteps && introStep < 3
-    }
+    @AppStorage(hasSeenIntroKey) private var hasSeenIntro = false
+    @State private var headlineVisible = false
+    @State private var subtextVisible = false
+    @State private var buttonVisible = false
+    @State private var buttonPressed = false
+    @State private var buttonIdlePulse = false
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 24) {
-                Spacer(minLength: 32)
-                if showPocketOnboardingSteps {
-                    Group {
-                        switch introStep {
-                        case 0:
-                            VStack(spacing: 20) {
-                                Text("Game moment")
-                                    .font(.system(size: 17, weight: .semibold, design: .rounded))
-                                    .foregroundColor(.white.opacity(0.72))
-                                    .textCase(.uppercase)
-                                    .tracking(0.6)
-                                    .multilineTextAlignment(.center)
-                                Text("Check into the pocket.")
-                                    .font(.system(size: 34, weight: .bold, design: .rounded))
-                                    .foregroundColor(.white)
-                                    .multilineTextAlignment(.center)
-                                    .minimumScaleFactor(0.85)
-                                    .lineSpacing(2)
-                                Text("That's your moment.")
-                                    .font(.system(size: 16, weight: .medium, design: .rounded))
-                                    .foregroundColor(.white.opacity(0.58))
-                                    .multilineTextAlignment(.center)
-                            }
-                            .padding(.horizontal, 24)
-                        case 1:
-                            Text("Know your next action before the ball arrives.")
-                                .font(.system(size: 24, weight: .semibold, design: .rounded))
-                                .foregroundColor(.white.opacity(0.96))
-                                .multilineTextAlignment(.center)
-                                .minimumScaleFactor(0.9)
-                                .padding(.horizontal, 24)
-                        case 2:
-                            Text("Coach: tap where the player goes.")
-                                .font(.system(size: 24, weight: .semibold, design: .rounded))
-                                .foregroundColor(.white.opacity(0.96))
-                                .multilineTextAlignment(.center)
-                                .minimumScaleFactor(0.9)
-                                .padding(.horizontal, 24)
-                        default:
-                            EmptyView()
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                    Button {
-                        if introStep < 2 {
-                            introStep += 1
-                        } else {
-                            hasCompletedPocketOnboardingSteps = true
-                        }
-                    } label: {
-                        Text(introStep == 2 ? "Continue" : "Next")
-                            .font(.system(size: 18, weight: .semibold, design: .rounded))
-                            .foregroundColor(.black)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 16)
-                            .background(Color.yellow)
-                            .cornerRadius(14)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    .padding(.horizontal, 28)
-                    .padding(.top, 8)
-                } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("You only need:")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(.white.opacity(0.9))
-                    Text("• a ball")
-                        .font(.subheadline)
-                        .foregroundColor(.white.opacity(0.85))
-                    Text("• one other person")
-                        .font(.subheadline)
-                        .foregroundColor(.white.opacity(0.85))
-                    Text("• two devices")
-                        .font(.subheadline)
-                        .foregroundColor(.white.opacity(0.85))
-                    Text("Best setup: display the training on an iPad and use a phone for the coach remote.")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.75))
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 32)
-                .padding(.bottom, 4)
-                Spacer(minLength: 16)
-                Button {
-                    router.push(.twoMinuteRoleSelection)
-                } label: {
-                    Text("Start 2-Minute Test")
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                        .foregroundColor(.black)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 18)
-                        .background(Color.yellow)
-                        .cornerRadius(16)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(PlainButtonStyle())
+        VStack(spacing: 24) {
+            Spacer(minLength: 48)
+            Text("Do you know what you're going to do before the ball arrives?")
+                .font(.system(size: 30, weight: .bold, design: .rounded))
+                .foregroundColor(.white)
+                .multilineTextAlignment(.center)
+                .minimumScaleFactor(0.85)
                 .padding(.horizontal, 28)
-                if Config.isSupabaseConfigured {
-                    Button {
-                        print("[IntroSignIn-Debug] sign-in tapped from intro")
-                        showAccountSignIn = true
-                        print("[IntroSignIn-Debug] auth flow presented (AccountPromptView)")
-                    } label: {
-                        HStack(alignment: .firstTextBaseline, spacing: 0) {
-                            Text("Already have an account? ")
-                                .font(.subheadline)
-                                .foregroundColor(.white.opacity(0.52))
-                            Text("Sign in")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundColor(.white.opacity(0.78))
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 14)
-                        .padding(.bottom, 4)
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    .padding(.horizontal, 28)
-                    .accessibilityLabel("Already have an account? Sign in")
+                .opacity(headlineVisible ? 1 : 0)
+                .animation(.easeInOut(duration: 0.35), value: headlineVisible)
+
+            Text("Elite players do.")
+                .font(.system(size: 20, weight: .semibold, design: .rounded))
+                .foregroundColor(.white.opacity(0.85))
+                .multilineTextAlignment(.center)
+                .opacity(subtextVisible ? 1 : 0)
+                .animation(.easeInOut(duration: 0.35), value: subtextVisible)
+
+            Spacer(minLength: 12)
+
+            Button {
+                withAnimation(.easeOut(duration: 0.12)) {
+                    buttonPressed = true
                 }
-                Button {
-                    UserDefaults.standard.set(true, forKey: coachDeviceShownHomeKey)
-                    let old = appRoleRaw
-                    appRoleRaw = AppRole.coachRemote.rawValue
-                    AppRoleDebug.log("role_change reason=intro_coach_button old=\(old) new=\(AppRole.coachRemote.rawValue) routing=coach_remote_root")
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "hand.raised.fill")
-                        .font(.body.weight(.medium))
-                        Text("I'm the coach — open Coach Remote")
-                            .font(.system(size: 16, weight: .semibold, design: .rounded))
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                        buttonPressed = false
                     }
-                    .foregroundColor(.white)
+                }
+                hasSeenIntro = true
+                router.push(PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest))
+            } label: {
+                Text("Start 2-Minute Test →")
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .foregroundColor(.black)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .background(Color.white.opacity(0.18))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.white.opacity(0.35), lineWidth: 1)
-                    )
-                    .cornerRadius(12)
+                    .padding(.vertical, 18)
+                    .background(Color.yellow)
+                    .cornerRadius(16)
                     .contentShape(Rectangle())
-                }
-                .buttonStyle(PlainButtonStyle())
-                .padding(.horizontal, 28)
-                .padding(.top, 8)
-                Spacer(minLength: 32)
-                Button {
-                    showHowItWorks = true
-                } label: {
-                    Text("How it works")
-                        .font(.subheadline)
-                        .foregroundColor(.white.opacity(0.8))
-                }
-                .buttonStyle(PlainButtonStyle())
-                Spacer(minLength: 48)
-                }
             }
+            .buttonStyle(PlainButtonStyle())
+            .padding(.horizontal, 28)
+            .opacity(buttonVisible ? 1 : 0)
+            .animation(.easeInOut(duration: 0.35), value: buttonVisible)
+            .scaleEffect(buttonPressed ? 0.97 : (buttonIdlePulse ? 1.02 : 1.0))
+            .animation(.easeInOut(duration: 1.8).repeatForever(autoreverses: true), value: buttonIdlePulse)
+
+            Spacer(minLength: 52)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
@@ -1138,28 +1242,26 @@ struct IntroOnboardingView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             AnalyticsManager.shared.track(.introScreenViewed)
-        }
-        .sheet(isPresented: $showHowItWorks) {
-            HowItWorksView()
-        }
-        .fullScreenCover(isPresented: $showAccountSignIn) {
-            AccountPromptView(
-                profileManager: profileManager,
-                playerStore: playerStore,
-                twoMinuteTestResult: nil,
-                onContinueWithoutAccount: {
-                    showAccountSignIn = false
-                },
-                onAccountComplete: {
-                    showAccountSignIn = false
-                    let baseline = UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey)
-                    let uid = AuthManager.shared.currentUserId?.uuidString ?? "nil"
-                    print("[IntroSignIn-Debug] auth success uid=\(uid) hasCompletedInitialTest(local)=\(baseline)")
-                    print("[IntroSignIn-Debug] routing decision after login: root re-evaluates per AuthFlowOnboardingSync — baseline complete → Home or Player Selection; else → intro/test")
-                    router.popToRoot(endingPartnerSession: false)
+            headlineVisible = false
+            subtextVisible = false
+            buttonVisible = false
+            buttonPressed = false
+            buttonIdlePulse = false
+
+            withAnimation(.easeInOut(duration: 0.35)) {
+                headlineVisible = true
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+                withAnimation(.easeInOut(duration: 0.35)) {
+                    subtextVisible = true
                 }
-            )
-            .environmentObject(progressStore)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                withAnimation(.easeInOut(duration: 0.35)) {
+                    buttonVisible = true
+                }
+                buttonIdlePulse = true
+            }
         }
     }
 }
@@ -1229,7 +1331,7 @@ struct IntroView: View {
         case stageUnlocked(stage: Int, activity: ActivityKind)
         case curriculumComplete(decisionSpeedChange: String?, accuracyChange: String?, forwardThinkingChange: String?, recommendedActivity: ActivityKind)
         case adaptiveWedgeDifficulty(level: Int)
-        case badgeUnlocked(badge: PlayerBadge)
+        case badgeTierUnlocked(event: BadgeTierUnlockEvent)
         case identityChanged(identity: PlayerIdentity)
 
         var id: String {
@@ -1242,8 +1344,8 @@ struct IntroView: View {
                 return "curriculum_complete_\(recommendedActivity.rawValue)"
             case .adaptiveWedgeDifficulty(let level):
                 return "adaptive_wedge_difficulty_\(level)"
-            case .badgeUnlocked(let badge):
-                return "badge_unlocked_\(badge.rawValue)"
+            case .badgeTierUnlocked(let event):
+                return "badge_tier_unlocked_\(event.track.rawValue)_\(event.level)"
             case .identityChanged(let identity):
                 return "identity_changed_\(identity.rawValue)"
             }
@@ -1317,7 +1419,9 @@ struct IntroView: View {
     /// Recommended: 3 sessions (full blocks) per week.
     private static let weeklySessionGoal: Int = 3
     @AppStorage(hasCompletedInitialTestKey) private var hasCompletedInitialTest = false
+    @AppStorage(hasSeenIntroKey) private var hasSeenIntro = false
     @AppStorage(AppRole.storageKey) private var appRoleRaw: String = AppRole.player.rawValue
+    @AppStorage("dashboardAudienceRoleV1") private var dashboardAudienceRoleRaw: String = ""
 
     private var lastAFPSessionResult: SessionResult? {
         profileManager.recentTrainSessions(limit: 20).first { $0.activityType == .awayFromPressure }
@@ -1685,12 +1789,7 @@ struct IntroView: View {
 
     /// Route for the first screen of this activity’s flow (role selection). Train Now uses this so the whole flow stays on the path-based stack.
     private func routeForTrainNowActivity(_ activity: ActivityKind) -> AppRoute {
-        switch activity {
-        case .twoMinuteTest: return .twoMinuteRoleSelection
-        case .awayFromPressure: return .awayFromPressureRoleSelection
-        case .dribbleOrPass: return .dribbleOrPassRoleSelection
-        case .oneTouchPassing: return .oneTouchPassingRoleSelection
-        }
+        PBASessionFlowPolicy.routeForActivityLaunch(activity)
     }
 
     /// Ordered list of 3 activities for Recommended Daily Training (guided activity first).
@@ -1885,6 +1984,7 @@ struct IntroView: View {
             Button("Cancel", role: .cancel) {}
             Button("Sign Out", role: .destructive) {
                 print("[SignOut-UX] sign-out confirm tapped")
+                hasSeenIntro = false
                 Task {
                     await SignOutUXRunner.run(
                         phase: $signOutUXPhase,
@@ -2079,8 +2179,8 @@ struct IntroView: View {
             activeProgressModal = .identityChanged(identity: newIdentity)
             return
         }
-        if let badge = profileManager.dequeuePendingBadgeUnlock(playerId: playerId) {
-            activeProgressModal = .badgeUnlocked(badge: badge)
+        if let event = profileManager.dequeuePendingBadgeTierUnlock(playerId: playerId) {
+            activeProgressModal = .badgeTierUnlocked(event: event)
         }
     }
 
@@ -2146,31 +2246,15 @@ struct IntroView: View {
     private func progressModalView(_ modal: ProgressModalType) -> some View {
         VStack(spacing: 12) {
             switch modal {
-            case .levelUp(let previousTier, let newTier, let previousAvg, let newAvg, let previousAccuracy, let newAccuracy):
-                Text("Level Up")
+            case .levelUp:
+                Text("Session Update")
                     .font(.headline.weight(.bold))
                     .foregroundColor(.yellow)
-                Text("\(newTier) Timing")
-                    .font(.title3.weight(.semibold))
-                    .foregroundColor(.white)
-                Text("You're now making faster decisions under pressure.")
+                Text("Keep training to log more reps.")
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.9))
                     .multilineTextAlignment(.center)
-                if let p = previousAvg, let n = newAvg {
-                    Text(String(format: "%.2fs → %.2fs", p, n))
-                        .font(.subheadline.monospacedDigit())
-                        .foregroundColor(.white.opacity(0.95))
-                }
-                if let pa = previousAccuracy, let na = newAccuracy {
-                    Text("Accuracy: \(pa)% → \(na)%")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.85))
-                }
-                Text("From \(previousTier) to \(newTier)")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.75))
-                Button("Keep Training") {
+                Button("Continue") {
                     dismissProgressModal()
                 }
                 .font(.subheadline.weight(.semibold))
@@ -2205,7 +2289,7 @@ struct IntroView: View {
                 }
                 .font(.caption)
                 .foregroundColor(.white.opacity(0.85))
-            case .curriculumComplete(let decisionSpeedChange, let accuracyChange, let forwardThinkingChange, let recommendedActivity):
+            case .curriculumComplete(_, _, _, let recommendedActivity):
                 Text("Curriculum Complete")
                     .font(.headline.weight(.bold))
                     .foregroundColor(.yellow)
@@ -2213,23 +2297,6 @@ struct IntroView: View {
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.92))
                     .multilineTextAlignment(.center)
-                VStack(alignment: .leading, spacing: 6) {
-                    if let decisionSpeedChange {
-                        Text("Decision Speed: \(decisionSpeedChange)")
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.85))
-                    }
-                    if let accuracyChange {
-                        Text("Accuracy: \(accuracyChange)")
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.85))
-                    }
-                    if let forwardThinkingChange {
-                        Text("Forward Thinking: \(forwardThinkingChange)")
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.85))
-                    }
-                }
                 Text("Next Focus: \(RecommendationEngine.activityTitle(recommendedActivity))")
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(.white)
@@ -2266,14 +2333,17 @@ struct IntroView: View {
                 .padding(.vertical, 12)
                 .background(Color.yellow)
                 .cornerRadius(12)
-            case .badgeUnlocked(let badge):
-                Text("Badge Unlocked")
+            case .badgeTierUnlocked(let event):
+                Text("Level Up!")
                     .font(.headline.weight(.bold))
                     .foregroundColor(.yellow)
-                Text(badge.title)
+                Image(systemName: event.track.icon)
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundColor(.yellow)
+                Text("\(event.track.title) \(romanNumeral(event.level))")
                     .font(.title3.weight(.semibold))
                     .foregroundColor(.white)
-                Text(badge.unlockDescription)
+                Text("New tier unlocked")
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.92))
                     .multilineTextAlignment(.center)
@@ -2325,8 +2395,18 @@ struct IntroView: View {
     private func stageUnlockMessage(for stage: Int) -> String {
         switch stage {
         case 2: return "You're ready to choose actions under pressure."
-        case 3: return "You're ready to decide before the ball arrives."
+        case 3: return "You're ready to decide before expected arrival."
         default: return "You've unlocked the next challenge."
+        }
+    }
+
+    private func romanNumeral(_ level: Int) -> String {
+        switch level {
+        case 1: return "I"
+        case 2: return "II"
+        case 3: return "III"
+        case 4: return "IV"
+        default: return "I"
         }
     }
 
@@ -2410,7 +2490,7 @@ struct IntroView: View {
                         isStartTrainingPressed = true
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
                             isStartTrainingPressed = false
-                            router.push(.twoMinuteRoleSelection)
+                            router.push(PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest))
                             isNavigatingToTraining = false
                         }
                     } label: {
@@ -3217,7 +3297,7 @@ struct IntroView: View {
                 router.push(.achievements)
             }
             otherActivityRow(title: "Run 2-Minute Test", subtitle: "Re-test baseline and benchmark progress") {
-                router.push(.twoMinuteRoleSelection)
+                router.push(PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest))
             }
             otherActivityRow(title: "Coach Remote", subtitle: "Open partner training remote") {
                 router.push(.coachRemote)
@@ -3320,7 +3400,7 @@ struct IntroView: View {
                     router.push(.coachRemote)
                 }
                 otherActivityRow(title: "2-Minute Test", subtitle: "Benchmark your decision speed") {
-                    router.push(.twoMinuteRoleSelection)
+                    router.push(PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest))
                 }
                 otherActivityRow(title: "Personal Bests", subtitle: "Fastest decision speed, AFP first-decision accuracy, forward intent") {
                     router.push(.progress)
@@ -3441,7 +3521,7 @@ struct IntroView: View {
                 .font(.footnote)
                 .foregroundColor(.white.opacity(0.8))
             Button {
-                router.push(.twoMinuteRoleSelection)
+                router.push(PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest))
             } label: {
                 Text("Run Test")
                     .font(.subheadline.weight(.medium))
@@ -3651,6 +3731,13 @@ enum TwoMinuteTestHelperSelection: Hashable {
 }
 
 struct TwoMinuteRoleSelectionView: View {
+    private enum SavedTwoMinuteRole: String {
+        case display
+        case coachRemote
+    }
+
+    private static let lastRoleKey = "twoMinuteTest.lastSelectedDeviceRole"
+
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
     @EnvironmentObject private var progressStore: ProgressStore
@@ -3658,6 +3745,28 @@ struct TwoMinuteRoleSelectionView: View {
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
     @EnvironmentObject private var router: AppRouter
     @State private var showTrainingModeSelection = false
+    @State private var savedRole: SavedTwoMinuteRole?
+    @State private var showFullRoleSelection = false
+
+    private var continueTitle: String {
+        "Continue"
+    }
+
+    private var roleContextIconName: String {
+        switch savedRole {
+        case .display: return "rectangle.on.rectangle"
+        case .coachRemote: return "hand.tap"
+        case .none: return "info.circle"
+        }
+    }
+
+    private var roleContextText: String {
+        switch savedRole {
+        case .display: return "This device will be the display"
+        case .coachRemote: return "This device will control the session"
+        case .none: return ""
+        }
+    }
 
     var body: some View {
         VStack(spacing: 24) {
@@ -3667,67 +3776,109 @@ struct TwoMinuteRoleSelectionView: View {
                 .foregroundColor(.white)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 20)
-            Text("Use this device as:")
+            Text("Ready to train?")
                 .font(.system(size: 26, weight: .bold, design: .rounded))
                 .foregroundColor(.white)
                 .padding(.horizontal)
 
-            Text("Choose one. The other device should choose the other role.")
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.7))
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 28)
+            if let savedRole, !showFullRoleSelection {
+                Text("Start immediately with your last role.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.7))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 28)
 
-            VStack(spacing: 16) {
                 Button {
-                    showTrainingModeSelection = true
+                    continueWithSavedRole(savedRole)
                 } label: {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Image(systemName: "tv")
-                            Text("Display")
-                                .font(.system(size: 20, weight: .bold, design: .rounded))
-                        }
-                        Text("This device shows the grid and ball. Place it behind the player.")
-                            .font(.footnote)
-                            .foregroundColor(.black.opacity(0.8))
-                            .multilineTextAlignment(.leading)
-                    }
-                    .foregroundColor(.black)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 20)
-                    .padding(.horizontal, 24)
-                    .background(Color.yellow)
-                    .cornerRadius(18)
-                    .contentShape(Rectangle())
+                    Text(continueTitle)
+                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .foregroundColor(.black)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.vertical, 20)
+                        .padding(.horizontal, 24)
+                        .background(Color.yellow)
+                        .cornerRadius(18)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(PlainButtonStyle())
                 .padding(.horizontal, 28)
+                HStack(spacing: 6) {
+                    Image(systemName: roleContextIconName)
+                        .font(.caption.weight(.semibold))
+                    Text(roleContextText)
+                        .font(.subheadline)
+                }
+                .foregroundColor(.white.opacity(0.74))
 
                 Button {
-                    router.push(.coachRemote)
+                    showFullRoleSelection = true
                 } label: {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Image(systemName: "hand.raised")
-                            Text("Coach remote")
-                                .font(.system(size: 20, weight: .bold, design: .rounded))
-                        }
-                        Text("Choose which activity the player is on, then tap it. Tap Connect to Display first.")
-                            .font(.footnote)
-                            .foregroundColor(.white.opacity(0.9))
-                            .multilineTextAlignment(.leading)
-                    }
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 20)
-                    .padding(.horizontal, 24)
-                    .background(Color.white.opacity(0.12))
-                    .cornerRadius(18)
-                    .contentShape(Rectangle())
+                    Text("Switch device role")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white.opacity(0.86))
                 }
                 .buttonStyle(PlainButtonStyle())
-                .padding(.horizontal, 28)
+            } else {
+                Text("Choose one. The other device should choose the other role.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.7))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 28)
+
+                VStack(spacing: 16) {
+                    Button {
+                        saveLastRole(.display)
+                        showTrainingModeSelection = true
+                    } label: {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Image(systemName: "tv")
+                                Text("Display")
+                                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                            }
+                            Text("This device shows the grid and ball. Place it behind the player.")
+                                .font(.footnote)
+                                .foregroundColor(.black.opacity(0.8))
+                                .multilineTextAlignment(.leading)
+                        }
+                        .foregroundColor(.black)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 20)
+                        .padding(.horizontal, 24)
+                        .background(Color.yellow)
+                        .cornerRadius(18)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .padding(.horizontal, 28)
+
+                    Button {
+                        saveLastRole(.coachRemote)
+                        router.push(.coachRemote)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Image(systemName: "hand.raised")
+                                Text("Coach remote")
+                                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                            }
+                            Text("Choose which activity the player is on, then tap it. Tap Connect to Display first.")
+                                .font(.footnote)
+                                .foregroundColor(.white.opacity(0.9))
+                                .multilineTextAlignment(.leading)
+                        }
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 20)
+                        .padding(.horizontal, 24)
+                        .background(Color.white.opacity(0.12))
+                        .cornerRadius(18)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .padding(.horizontal, 28)
+                }
             }
 
             Spacer()
@@ -3747,6 +3898,14 @@ struct TwoMinuteRoleSelectionView: View {
         .preferredColorScheme(.dark)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            if let raw = UserDefaults.standard.string(forKey: Self.lastRoleKey) {
+                savedRole = SavedTwoMinuteRole(rawValue: raw)
+            } else {
+                savedRole = nil
+            }
+            showFullRoleSelection = false
+        }
         .navigationDestination(isPresented: $showTrainingModeSelection) {
             TrainingModeSelectionView(activityTitle: "2-Minute Test") { mode in
                 TwoMinuteTestSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
@@ -3760,6 +3919,22 @@ struct TwoMinuteRoleSelectionView: View {
             .environmentObject(popToRootTrigger)
             .environmentObject(router)
         }
+    }
+
+    private func continueWithSavedRole(_ role: SavedTwoMinuteRole) {
+        switch role {
+        case .display:
+            saveLastRole(.display)
+            showTrainingModeSelection = true
+        case .coachRemote:
+            saveLastRole(.coachRemote)
+            router.push(.coachRemote)
+        }
+    }
+
+    private func saveLastRole(_ role: SavedTwoMinuteRole) {
+        UserDefaults.standard.set(role.rawValue, forKey: Self.lastRoleKey)
+        savedRole = role
     }
 }
 
@@ -3791,7 +3966,7 @@ struct TwoMinuteTestSetupView: View {
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.9))
                 if mode == .partner {
-                    Text("• Coach stands about 10 yards in front with the ball.")
+                    Text("• Coach stands about 12 yards in front with the ball.")
                         .font(.subheadline)
                         .foregroundColor(.white.opacity(0.9))
                 }
@@ -4105,6 +4280,9 @@ struct MainView: View {
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
     let showModeSelection: Bool
+    @AppStorage("dashboardAudienceRoleV1") private var dashboardAudienceRoleRaw: String = ""
+    @AppStorage("whatsNewControlsSeenV1") private var whatsNewControlsSeen = false
+    @State private var showWhatsNewControls = false
     
     @State private var selectedColors: [Color] = []
     @State private var selectedNumbers: Set<Int> = []
@@ -4375,6 +4553,77 @@ struct MainView: View {
                                 NotificationCenter.default.post(name: .coachingTrainingNudgesShouldRefresh, object: nil)
                             }
                         }
+
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Usage Mode")
+                                .font(.headline)
+                                .foregroundColor(.white)
+
+                            Picker(
+                                "Usage Mode",
+                                selection: Binding(
+                                    get: { dashboardAudienceRoleRaw.isEmpty ? "parent_player" : dashboardAudienceRoleRaw },
+                                    set: { dashboardAudienceRoleRaw = $0 }
+                                )
+                            ) {
+                                Text("Train").tag("parent_player")
+                                Text("Coach").tag("coach")
+                            }
+                            .pickerStyle(.segmented)
+
+                            Text("You can change this anytime.")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.65))
+
+                            Button {
+                                showWhatsNewControls = true
+                            } label: {
+                                Text("View What's New")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundColor(.white)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.top, 2)
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                        }
+                        .padding()
+                        .background {
+                            RoundedRectangle(cornerRadius: 15)
+                                .fill(.ultraThinMaterial)
+                                .opacity(0.7)
+                        }
+                        .padding(.horizontal)
+
+#if DEBUG
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Developer")
+                                .font(.headline)
+                                .foregroundColor(.white)
+
+                            Button {
+                                whatsNewControlsSeen = false
+                                showWhatsNewControls = true
+                            } label: {
+                                Text("Show What's New Screen")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundColor(.white)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.vertical, 2)
+                            }
+                            .buttonStyle(PlainButtonStyle())
+
+                            Text("Resets the seen state and opens the screen now.")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.65))
+                        }
+                        .padding()
+                        .background {
+                            RoundedRectangle(cornerRadius: 15)
+                                .fill(.ultraThinMaterial)
+                                .opacity(0.7)
+                        }
+                        .padding(.horizontal)
+#endif
                         
                         // Mode selection is shown only in the full warmup browser.
                         if showModeSelection {
@@ -5723,6 +5972,12 @@ struct MainView: View {
                             )
                         }
                     )
+                }
+                .sheet(isPresented: $showWhatsNewControls) {
+                    WhatsNewControlsView {
+                        whatsNewControlsSeen = true
+                        showWhatsNewControls = false
+                    }
                 }
                 
             }

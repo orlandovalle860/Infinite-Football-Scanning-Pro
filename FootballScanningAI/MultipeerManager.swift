@@ -20,6 +20,7 @@ extension Notification.Name {
 }
 
 let hasCompletedInitialTestKey = "hasCompletedInitialTest"
+let hasSeenIntroKey = "hasSeenIntro"
 /// True after the user finishes the 3-step pocket onboarding (tap-through); persisted so steps are not repeated.
 let hasCompletedPocketOnboardingStepsKey = "hasCompletedPocketOnboardingSteps"
 

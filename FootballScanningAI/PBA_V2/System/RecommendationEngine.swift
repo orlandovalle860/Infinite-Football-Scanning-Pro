@@ -43,7 +43,7 @@ enum RecommendationEngine {
         if last2.count >= 2, last2.allSatisfy({ $0.speedBucket == .slow }) {
             return Recommendation(
                 headline: "Correct decisions. Now make them earlier.",
-                rationale: "Train escaping pressure so you decide before the ball arrives.",
+                rationale: "Train escaping pressure so you decide before expected arrival.",
                 nextActivity: .awayFromPressure
             )
         }
@@ -73,7 +73,7 @@ enum RecommendationEngine {
         if !progressStore.isReady(activity: .dribbleOrPass, playerId: playerId) {
             return Recommendation(headline: "Choose action under pressure.", rationale: "Green = pass, Clear = dribble.", nextActivity: .dribbleOrPass)
         }
-        return Recommendation(headline: "Decide before the ball arrives.", rationale: "Pass to any green.", nextActivity: .oneTouchPassing)
+        return Recommendation(headline: "Decide before expected arrival.", rationale: "Pass to any green.", nextActivity: .oneTouchPassing)
     }
 
     /// Activity display name for UI.
@@ -102,7 +102,7 @@ enum RecommendationEngine {
         case .twoMinuteTest: return "See your baseline decision speed."
         case .awayFromPressure: return "Decide opposite the red on your first action."
         case .dribbleOrPass: return "Choose the correct action."
-        case .oneTouchPassing: return "Decide before the ball arrives."
+        case .oneTouchPassing: return "Decide before expected arrival."
         }
     }
 }

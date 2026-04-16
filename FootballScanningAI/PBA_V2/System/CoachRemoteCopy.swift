@@ -24,19 +24,16 @@ enum CoachRemoteCopy {
     static let coachFirstDecisionLoggingLine = ActivityInstructionData.coachFirstDecisionLoggingLineShort
 
     /// Direction step — coach records outcome; app scores correctness.
-    static let playerDecisionQuestion = "What was the player’s first decision?"
+    static let playerDecisionQuestion = "What direction did the player swipe first?"
 
     /// Away From Pressure — coach logs first decision; correct = opposite the red pressure (single direction per rep).
-    static let awayFromPressurePlayerDecisionPrompt = "Log their first decision away from pressure (opposite the red is correct)."
-
-    /// Subtle note: volume still triggers PASS (hardware path unchanged).
-    static let volumePassHint = "Volume keys also send PASS"
+    static let awayFromPressurePlayerDecisionPrompt = "Log their swipe away from pressure (opposite the red is correct)."
 
     /// Multipeer setup — one short line.
     static let multipeerSetupHint = "Same Wi‑Fi · allow Local Network · Display on session screen"
 
     /// Legacy combined prompt (avoid for new layouts; prefer `playerDecisionQuestion` + `CoachRemoteIncorrectPadButton`).
-    static let logPlayerDecisionPrompt = "Tap the direction of their first decision, or ✕ if wrong."
+    static let logPlayerDecisionPrompt = "Swipe the direction of their first decision, or mark Late decision / Missed scan."
 }
 
 // MARK: - Subtle connection status (not the primary focus)
@@ -82,6 +79,6 @@ struct CoachRemoteIncorrectPadButton: View {
                         .stroke(Color.white.opacity(0.12), lineWidth: 1)
                 )
         }
-        .accessibilityLabel("Other outcome")
+        .accessibilityLabel("Too late or missed scan")
     }
 }

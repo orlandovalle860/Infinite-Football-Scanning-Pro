@@ -30,7 +30,10 @@ struct PlayerProgressView: View {
     @State private var navigateToPlayerReport = false
     @State private var navigateToReportCard = false
     @State private var navigateToDevelopmentSnapshot = false
+    @State private var showWeeklyReport = false
     @State private var metricInfoToShow: (title: String, message: String)?
+    @State private var showLevelUp = false
+    @State private var levelUpReachedName: String = ""
 
     private var activeProfile: UserProfile? { profileManager.currentProfile }
     private var playerId: UUID? { activeProfile?.id }
@@ -41,7 +44,7 @@ struct PlayerProgressView: View {
     private var currentPlayerTypeLabel: String { playerTypeLabel(status: status) }
     private var recentSessions: [SessionResult] { profileManager.recentTrainSessions(limit: 5) }
     private var speedCounts: (fast: Int, medium: Int, slow: Int) { UserProfileManager.speedCounts(from: recentSessions) }
-    private var streakDays: Int { profileManager.trainingStreakDays() }
+    private var sessionStreak: Int { activeProfile?.sessionStreakCount ?? 0 }
     private var coachInsightText: String { profileManager.coachInsightForProgress(sessions: recentSessions) }
     @AppStorage(hasCompletedInitialTestKey) private var hasCompletedInitialTest = false
     private var lastAFPSessionResult: SessionResult? {
@@ -55,9 +58,35 @@ struct PlayerProgressView: View {
         TrainingRecommendation.recommend(progressStore: progressStore, playerId: playerId, last5: last5, hasCompletedInitialTest: hasCompletedInitialTest, lastAFPSessionResult: lastAFPSessionResult, decisionConsistency: decisionConsistencyForRecommendation)
     }
 
+    private var adaptiveTrainingState: AdaptiveTrainingState? {
+        activeProfile?.adaptiveTrainingState
+    }
+
+    private var activityAdaptiveSnapshot: ActivityAdaptiveSnapshot {
+        makeActivityAdaptiveSnapshot(from: profileManager.recentTrainSessions(limit: 3))
+    }
+
     /// Sessions sorted by date (oldest first) for improvement charts.
     private var chartSessions: [SessionResult] {
         profileManager.sessionResultsForCharts()
+    }
+
+    private var allSessionPerformances: [SessionPerformance] {
+        activeProfile?.sessionResults.map(\.sessionPerformance) ?? []
+    }
+
+    private var progressionForWeekly: PlayerProgression {
+        generateProgression(sessions: allSessionPerformances)
+    }
+
+    private var weeklyReportModel: WeeklyReport {
+        return generateWeeklyReport(
+            sessions: activeProfile?.sessionResults ?? [],
+            playerName: activeProfile?.name ?? "Player",
+            adaptiveState: activeProfile?.adaptiveTrainingState,
+            unlockedBadges: activeProfile?.unlockedBadges ?? [],
+            latestUnlockedBadge: activeProfile?.lastUnlockedBadge
+        )
     }
 
     /// Decision score per session: 0–100 (from correct % or normalized decisionTotalScore for DOP).
@@ -179,6 +208,52 @@ struct PlayerProgressView: View {
         return Int(round(Double(choice) / Double(opp) * 100.0))
     }
 
+    private var trendSessions: [SessionResult] {
+        Array(chartSessions.suffix(10))
+    }
+
+    private var scoreTrendValues: [Double] {
+        trendSessions.map { s in
+            if let score = s.decisionTotalScore, s.totalReps > 0 {
+                return (score / 60.0) * 100.0
+            }
+            guard s.totalReps > 0 else { return 0 }
+            return Double(s.correctCount) / Double(s.totalReps) * 100.0
+        }
+    }
+
+    private var earlyDecisionPercentTrendValues: [Double] {
+        trendSessions.map { s in
+            let total = s.speedCounts.fast + s.speedCounts.medium + s.speedCounts.slow
+            guard total > 0 else { return 0 }
+            return (Double(s.speedCounts.fast) / Double(total)) * 100.0
+        }
+    }
+
+    private var averageTimingTrendValues: [Double] {
+        trendSessions.map { $0.avgDecisionWindowSeconds ?? 0 }
+    }
+
+    private var lateCountTrendValues: [Double] {
+        trendSessions.map { Double($0.speedCounts.slow) }
+    }
+
+    private var progressTrendInsight: String {
+        guard let earlyFirst = earlyDecisionPercentTrendValues.first,
+              let earlyLast = earlyDecisionPercentTrendValues.last,
+              let lateFirst = lateCountTrendValues.first,
+              let lateLast = lateCountTrendValues.last else {
+            return "Complete more sessions to unlock trend insights."
+        }
+        if (earlyLast - earlyFirst) >= 3 {
+            return "You’re deciding earlier each session"
+        }
+        if (lateFirst - lateLast) >= 1 {
+            return "Your consistency is improving"
+        }
+        return "You’re plateauing — push for earlier decisions"
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -189,7 +264,9 @@ struct PlayerProgressView: View {
                 trainingStreakCard
                 coachInsightCard
                 improvementOverTimeSection
+                progressOverTimeSection
                 derivedAnalyticsSection
+                adaptiveRecommendationCard
                 recommendedNextCard
                 buttonsSection
             }
@@ -211,6 +288,7 @@ struct PlayerProgressView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
+            detectAdaptiveLevelUpIfNeeded()
         }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
@@ -235,6 +313,11 @@ struct PlayerProgressView: View {
                 Text(msg)
             }
         }
+        .alert("Level Up!", isPresented: $showLevelUp) {
+            Button("Nice", role: .cancel) {}
+        } message: {
+            Text("You reached \(levelUpReachedName)\n\(activityAdaptiveSnapshot.plan.focusCue)")
+        }
         .navigationDestination(isPresented: $navigateToPlayerReport) {
             PlayerReportView(content: PlayerReportGenerator.report(
                 progressStore: progressStore,
@@ -257,6 +340,9 @@ struct PlayerProgressView: View {
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
+        }
+        .sheet(isPresented: $showWeeklyReport) {
+            WeeklyReportView(report: weeklyReportModel)
         }
     }
 
@@ -343,11 +429,11 @@ struct PlayerProgressView: View {
     private var trainingStreakCard: some View {
         sectionCard(title: "Training Streak") {
             VStack(alignment: .leading, spacing: 8) {
-                Text("\(streakDays) days")
+                Text("🔥 \(sessionStreak) Session Streak")
                     .font(.title2.weight(.bold))
                     .foregroundColor(.white)
-                if streakDays == 0 {
-                    Text("Train today to start a streak.")
+                if sessionStreak == 0 {
+                    Text("Complete a session to start your streak.")
                         .font(.caption)
                         .foregroundColor(.white.opacity(0.7))
                 }
@@ -390,6 +476,77 @@ struct PlayerProgressView: View {
             RoundedRectangle(cornerRadius: 18)
                 .stroke(Color.white.opacity(0.08), lineWidth: 1)
         )
+    }
+
+    private var progressOverTimeSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Progress Over Time")
+                .font(.headline)
+                .foregroundColor(.white)
+            if trendSessions.count < 2 {
+                Text("Complete at least 2 sessions to see trends.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.7))
+            } else {
+                trendStrip(
+                    title: "Score Trend (\(trendSessions.count) sessions)",
+                    values: scoreTrendValues
+                ) { "\(Int($0.rounded()))" }
+                trendStrip(
+                    title: "Early Decision % Trend",
+                    values: earlyDecisionPercentTrendValues
+                ) { "\(Int($0.rounded()))%" }
+                trendStrip(
+                    title: "Average Timing Trend",
+                    values: averageTimingTrendValues
+                ) { String(format: "%.2fs", $0) }
+                trendStrip(
+                    title: "Late Count Trend",
+                    values: lateCountTrendValues
+                ) { "\(Int($0.rounded()))" }
+
+                Text(progressTrendInsight)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.92))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(18)
+        .overlay(
+            RoundedRectangle(cornerRadius: 18)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    private func trendStrip(title: String, values: [Double], formatter: @escaping (Double) -> String) -> some View {
+        let minValue = values.min() ?? 0
+        let maxValue = values.max() ?? 1
+        let span = max(0.0001, maxValue - minValue)
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.white)
+            HStack(alignment: .bottom, spacing: 6) {
+                ForEach(Array(values.enumerated()), id: \.offset) { _, value in
+                    let normalized = (value - minValue) / span
+                    VStack(spacing: 4) {
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(Color.cyan.opacity(0.9))
+                            .frame(width: 12, height: 10 + (normalized * 22))
+                        Text(formatter(value))
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.72))
+                    }
+                    .frame(maxHeight: 42, alignment: .bottom)
+                }
+            }
+        }
+        .padding(12)
+        .background(Color.white.opacity(0.03))
+        .cornerRadius(12)
     }
 
     private var derivedAnalyticsSection: some View {
@@ -485,6 +642,56 @@ struct PlayerProgressView: View {
         }
     }
 
+    private var adaptiveRecommendationCard: some View {
+        sectionCard(title: "Adaptive Recommendation") {
+            let snapshot = activityAdaptiveSnapshot
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Level: \(snapshot.plan.level.rawValue)")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                Text("Badge: \(snapshot.plan.level.mappedBadgeName)")
+                    .font(.caption)
+                    .foregroundColor(.yellow.opacity(0.95))
+                Text("Focus: \(snapshot.plan.focusCue)")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.9))
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let next = snapshot.nextLevel {
+                    let progressPct = Int((snapshot.progressToNextLevel * 100).rounded())
+                    Text("Progress to \(next.rawValue)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.white.opacity(0.85))
+                    ProgressView(value: snapshot.progressToNextLevel)
+                        .tint(.yellow)
+                    Text("\(progressPct)%")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.78))
+                    if snapshot.isNearNextLevel {
+                        Text("You’re close to \(next.rawValue)")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.yellow.opacity(0.95))
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func detectAdaptiveLevelUpIfNeeded() {
+        guard let playerId = activeProfile?.id else { return }
+        let currentLevel = activityAdaptiveSnapshot.plan.level
+        let key = "adaptiveVisibleLevelV1.\(playerId.uuidString)"
+        let previousRaw = UserDefaults.standard.string(forKey: key)
+        if let previousRaw,
+           let previousLevel = ActivityAdaptiveLevel(rawValue: previousRaw),
+           currentLevel.rank > previousLevel.rank {
+            levelUpReachedName = currentLevel.rawValue
+            showLevelUp = true
+        }
+        UserDefaults.standard.set(currentLevel.rawValue, forKey: key)
+    }
+
     private var buttonsSection: some View {
         VStack(spacing: 12) {
             Button {
@@ -504,6 +711,15 @@ struct PlayerProgressView: View {
                 navigateToPlayerReport = true
             } label: {
                 Text("Player Report")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.9))
+            }
+            .buttonStyle(PlainButtonStyle())
+
+            Button {
+                showWeeklyReport = true
+            } label: {
+                Text("Weekly report")
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.9))
             }

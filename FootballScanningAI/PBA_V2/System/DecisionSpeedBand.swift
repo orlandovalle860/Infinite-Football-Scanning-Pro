@@ -40,8 +40,8 @@ enum DecisionSpeedBand {
         case .elite: return "Consistently deciding well before expected arrival."
         case .advanced: return "Usually deciding before expected arrival."
         case .competent: return "Decision lands around ball arrival."
-        case .late: return "Decision is often just after arrival."
-        case .reactive: return "Decision usually comes too late after arrival."
+        case .late: return "Decision is often just after expected arrival."
+        case .reactive: return "Decision usually comes too late after expected arrival."
         }
     }
 

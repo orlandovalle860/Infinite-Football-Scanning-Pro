@@ -31,7 +31,7 @@ struct PBACurriculumView: View {
 
     private static let activities: [(title: String, subtitle: String, activity: ActivityKind)] = [
         ("Playing Away From Pressure", "Recognize pressure and decide away from it early.", .awayFromPressure),
-        ("Dribble or Pass", "Decide pass or dribble before the ball arrives.", .dribbleOrPass),
+        ("Dribble or Pass", "Decide pass or dribble before expected arrival.", .dribbleOrPass),
         ("One-Touch Passing", "Pre-decide your target, then execute one-touch.", .oneTouchPassing)
     ]
 
@@ -92,9 +92,9 @@ struct PBACurriculumView: View {
                     }
                     .padding(.leading, timelineIndicatorWidth + 20)
 
-                    curriculumRow(index: 0, title: "Playing Away From Pressure", subtitle: Self.activities[0].subtitle, route: .awayFromPressureRoleSelection)
-                    curriculumRow(index: 1, title: "Dribble or Pass", subtitle: Self.activities[1].subtitle, route: .dribbleOrPassRoleSelection)
-                    curriculumRow(index: 2, title: "One-Touch Passing", subtitle: Self.activities[2].subtitle, route: .oneTouchPassingRoleSelection)
+                    curriculumRow(index: 0, title: "Playing Away From Pressure", subtitle: Self.activities[0].subtitle, route: PBASessionFlowPolicy.routeForActivityLaunch(.awayFromPressure))
+                    curriculumRow(index: 1, title: "Dribble or Pass", subtitle: Self.activities[1].subtitle, route: PBASessionFlowPolicy.routeForActivityLaunch(.dribbleOrPass))
+                    curriculumRow(index: 2, title: "One-Touch Passing", subtitle: Self.activities[2].subtitle, route: PBASessionFlowPolicy.routeForActivityLaunch(.oneTouchPassing))
                 }
                 .frame(maxWidth: 860, alignment: .leading)
                 .padding(.horizontal, 20)

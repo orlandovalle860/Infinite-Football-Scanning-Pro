@@ -7,12 +7,90 @@ struct ActivityBest: Codable {
     var bestTotal: Int
 }
 
+enum PlayerProgressStage: String, Codable, CaseIterable {
+    case awayFromPressure
+    case dribbleOrPass
+    case oneTouchPassing
+
+    var activity: ActivityKind {
+        switch self {
+        case .awayFromPressure: return .awayFromPressure
+        case .dribbleOrPass: return .dribbleOrPass
+        case .oneTouchPassing: return .oneTouchPassing
+        }
+    }
+
+    var next: PlayerProgressStage? {
+        switch self {
+        case .awayFromPressure: return .dribbleOrPass
+        case .dribbleOrPass: return .oneTouchPassing
+        case .oneTouchPassing: return nil
+        }
+    }
+}
+
+struct PlayerStageSessionResult: Codable, Hashable {
+    let score: Double
+    let accuracy: Double
+    let activityType: ActivityKind
+    let timestamp: Date
+}
+
+struct AdaptiveTrainingState: Codable, Equatable {
+    var currentTempo: PassTempo
+    var currentLevel: SessionPerformanceLevel
+    var recentScores: [Int]
+    var recommendation: String
+    var focus: String
+}
+
+enum BadgeTrack: String, Codable, CaseIterable, Hashable {
+    case earlyThinker
+    case levelUp
+    case lockedIn
+    case onFire
+    case aheadOfPlay
+
+    var title: String {
+        switch self {
+        case .earlyThinker: return "Early Thinker"
+        case .levelUp: return "Level Up"
+        case .lockedIn: return "Locked In"
+        case .onFire: return "On Fire"
+        case .aheadOfPlay: return "Ahead of Play"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .earlyThinker: return "brain.head.profile"
+        case .levelUp: return "arrow.up.circle.fill"
+        case .lockedIn: return "lock.shield.fill"
+        case .onFire: return "flame.fill"
+        case .aheadOfPlay: return "hare.fill"
+        }
+    }
+}
+
+struct BadgeTierUnlockEvent: Codable, Equatable, Hashable {
+    let track: BadgeTrack
+    let level: Int
+}
+
 enum PlayerBadge: String, Codable, CaseIterable, Hashable {
-    // Core behavior-driven badges
+    // Engagement / performance badges
+    case earlyThinker = "Early Thinker"
+    case levelUp = "Level Up"
+    case lockedIn = "Locked In"
+    case onFire3 = "On Fire I"
+    case onFire5 = "On Fire II"
+    case onFire10 = "On Fire III"
+    case onFire20 = "On Fire IV"
+    case aheadOfPlay = "Ahead of Play"
+    // Legacy badges kept for backward compatibility with persisted data.
     case earlyDecider = "Early Decider"
     case forwardThinker = "Forward Thinker"
     case consistent = "Consistent"
-    // Legacy badges kept for backward compatibility with persisted data.
     case firstSession = "First Session"
     case fastThinker = "Fast Thinker"
     case accuratePlayer = "Accurate Player"
@@ -22,6 +100,22 @@ enum PlayerBadge: String, Codable, CaseIterable, Hashable {
 
     var unlockDescription: String {
         switch self {
+        case .earlyThinker:
+            return "At least half of your decisions were early in one session."
+        case .levelUp:
+            return "Your score jumped by 10 or more from the previous session."
+        case .lockedIn:
+            return "You kept late decisions very low in a session."
+        case .onFire3:
+            return "You reached a 3-session streak."
+        case .onFire5:
+            return "You reached a 5-session streak."
+        case .onFire10:
+            return "You reached a 10-session streak."
+        case .onFire20:
+            return "You reached a 20-session streak."
+        case .aheadOfPlay:
+            return "You scored 90+ in a session."
         case .earlyDecider:
             return "You're making decisions before pressure arrives."
         case .forwardThinker:
@@ -36,6 +130,20 @@ enum PlayerBadge: String, Codable, CaseIterable, Hashable {
             return "Reached at least 80% decision accuracy in a session."
         case .forwardPlayer:
             return "Chose the forward option at least 50% of the time when available."
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .earlyThinker: return "brain.head.profile"
+        case .levelUp: return "arrow.up.circle.fill"
+        case .lockedIn: return "lock.shield.fill"
+        case .onFire3, .onFire5, .onFire10, .onFire20: return "flame.fill"
+        case .aheadOfPlay: return "hare.fill"
+        case .earlyDecider: return "bolt.fill"
+        case .forwardThinker: return "arrow.up.right.circle.fill"
+        case .consistent: return "checkmark.seal.fill"
+        case .firstSession, .fastThinker, .accuratePlayer, .forwardPlayer: return "star.fill"
         }
     }
 }
@@ -115,8 +223,25 @@ struct UserProfile: Codable, Identifiable {
     var totalXP: Int
     /// Unlocked badges for this player.
     var unlockedBadges: [PlayerBadge]
+    /// Latest badge unlocked in the most recent completed session (if any).
+    var lastUnlockedBadge: PlayerBadge?
+    /// Tier level (0...4) for each badge track.
+    var badgeTierLevels: [BadgeTrack: Int]
+    /// Latest tier level up event for badges.
+    var lastBadgeTierUnlocked: BadgeTierUnlockEvent?
+    /// Session streak counter (increments per completed session; V1 does not hard-reset on short pauses).
+    var sessionStreakCount: Int
+    var longestSessionStreak: Int
     /// Premium entitlement flag (StoreKit to be integrated later).
     var isPremium: Bool
+    /// Player progression stage (AFP -> DOP -> OTP).
+    var currentStage: PlayerProgressStage
+    /// Session results tracked per stage for progression evaluation.
+    var stageHistory: [PlayerProgressStage: [PlayerStageSessionResult]]
+    /// Latest next-session prescription after a scored block (tied to that session via `tiedSessionId`).
+    var lastStageRecommendation: StageSessionRecommendation?
+    /// Adaptive progression state based on recent scored sessions.
+    var adaptiveTrainingState: AdaptiveTrainingState
 
     /// Create a profile with a specific id (e.g. to match a Supabase players row after account creation).
     init(id: UUID, name: String, email: String? = nil, age: String? = nil, team: String? = nil, position: String? = nil) {
@@ -175,7 +300,22 @@ struct UserProfile: Codable, Identifiable {
         self.bestForwardIntentPercent = nil
         self.totalXP = 0
         self.unlockedBadges = []
+        self.lastUnlockedBadge = nil
+        self.badgeTierLevels = [:]
+        self.lastBadgeTierUnlocked = nil
+        self.sessionStreakCount = 0
+        self.longestSessionStreak = 0
         self.isPremium = false
+        self.currentStage = .awayFromPressure
+        self.stageHistory = [:]
+        self.lastStageRecommendation = nil
+        self.adaptiveTrainingState = AdaptiveTrainingState(
+            currentTempo: .controlled,
+            currentLevel: .reactive,
+            recentScores: [],
+            recommendation: "Stay here and push for earlier decisions",
+            focus: "commit earlier"
+        )
     }
 
     init(name: String, email: String? = nil, age: String? = nil, team: String? = nil, position: String? = nil, decisionScore: Int? = nil, status: String? = nil, consistency: String? = nil) {
@@ -244,7 +384,22 @@ struct UserProfile: Codable, Identifiable {
         self.bestForwardIntentPercent = nil
         self.totalXP = 0
         self.unlockedBadges = []
+        self.lastUnlockedBadge = nil
+        self.badgeTierLevels = [:]
+        self.lastBadgeTierUnlocked = nil
+        self.sessionStreakCount = 0
+        self.longestSessionStreak = 0
         self.isPremium = false
+        self.currentStage = .awayFromPressure
+        self.stageHistory = [:]
+        self.lastStageRecommendation = nil
+        self.adaptiveTrainingState = AdaptiveTrainingState(
+            currentTempo: .controlled,
+            currentLevel: .reactive,
+            recentScores: [],
+            recommendation: "Stay here and push for earlier decisions",
+            focus: "commit earlier"
+        )
     }
 
     enum CodingKeys: String, CodingKey {
@@ -260,7 +415,16 @@ struct UserProfile: Codable, Identifiable {
         case fastestDecisionSpeedSeconds, bestPressureEscapePercent, bestForwardIntentPercent
         case totalXP
         case unlockedBadges
+        case lastUnlockedBadge
+        case badgeTierLevels
+        case lastBadgeTierUnlocked
+        case sessionStreakCount
+        case longestSessionStreak
         case isPremium
+        case currentStage
+        case stageHistory
+        case lastStageRecommendation
+        case adaptiveTrainingState
     }
 
     init(from decoder: Decoder) throws {
@@ -311,7 +475,23 @@ struct UserProfile: Codable, Identifiable {
         bestForwardIntentPercent = try c.decodeIfPresent(Double.self, forKey: .bestForwardIntentPercent)
         totalXP = try c.decodeIfPresent(Int.self, forKey: .totalXP) ?? 0
         unlockedBadges = try c.decodeIfPresent([PlayerBadge].self, forKey: .unlockedBadges) ?? []
+        lastUnlockedBadge = try c.decodeIfPresent(PlayerBadge.self, forKey: .lastUnlockedBadge)
+        badgeTierLevels = try c.decodeIfPresent([BadgeTrack: Int].self, forKey: .badgeTierLevels) ?? [:]
+        lastBadgeTierUnlocked = try c.decodeIfPresent(BadgeTierUnlockEvent.self, forKey: .lastBadgeTierUnlocked)
+        sessionStreakCount = try c.decodeIfPresent(Int.self, forKey: .sessionStreakCount) ?? 0
+        longestSessionStreak = try c.decodeIfPresent(Int.self, forKey: .longestSessionStreak) ?? 0
         isPremium = try c.decodeIfPresent(Bool.self, forKey: .isPremium) ?? false
+        currentStage = try c.decodeIfPresent(PlayerProgressStage.self, forKey: .currentStage) ?? .awayFromPressure
+        stageHistory = try c.decodeIfPresent([PlayerProgressStage: [PlayerStageSessionResult]].self, forKey: .stageHistory) ?? [:]
+        lastStageRecommendation = try c.decodeIfPresent(StageSessionRecommendation.self, forKey: .lastStageRecommendation)
+        adaptiveTrainingState = try c.decodeIfPresent(AdaptiveTrainingState.self, forKey: .adaptiveTrainingState)
+            ?? AdaptiveTrainingState(
+                currentTempo: .controlled,
+                currentLevel: .reactive,
+                recentScores: [],
+                recommendation: "Stay here and push for earlier decisions",
+                focus: "commit earlier"
+            )
     }
 
     func encode(to encoder: Encoder) throws {
@@ -362,7 +542,16 @@ struct UserProfile: Codable, Identifiable {
         try c.encodeIfPresent(bestForwardIntentPercent, forKey: .bestForwardIntentPercent)
         try c.encode(totalXP, forKey: .totalXP)
         try c.encode(unlockedBadges, forKey: .unlockedBadges)
+        try c.encodeIfPresent(lastUnlockedBadge, forKey: .lastUnlockedBadge)
+        try c.encode(badgeTierLevels, forKey: .badgeTierLevels)
+        try c.encodeIfPresent(lastBadgeTierUnlocked, forKey: .lastBadgeTierUnlocked)
+        try c.encode(sessionStreakCount, forKey: .sessionStreakCount)
+        try c.encode(longestSessionStreak, forKey: .longestSessionStreak)
         try c.encode(isPremium, forKey: .isPremium)
+        try c.encode(currentStage, forKey: .currentStage)
+        try c.encode(stageHistory, forKey: .stageHistory)
+        try c.encodeIfPresent(lastStageRecommendation, forKey: .lastStageRecommendation)
+        try c.encode(adaptiveTrainingState, forKey: .adaptiveTrainingState)
     }
 
     /// Update personal best for an activity when a session beats the previous best.

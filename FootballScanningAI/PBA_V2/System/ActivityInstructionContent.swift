@@ -22,17 +22,24 @@ struct ActivityInstructionData {
     static let instructionSetupLines: [String] = [
         "Player moves freely inside a 5×5 grid, scanning and checking their shoulder.",
         "The iPad is set up behind the player.",
-        "Coach stands about 10 yards away from the center of the grid."
+        "Coach stands about 12 yards away from the center of the grid."
     ]
 
     /// Section 2 — AT THE BEEP
+    static let standardGestureTemplateLines: [String] = [
+        "Scan early",
+        "Know your decision",
+        "Swipe as the ball arrives"
+    ]
+
     static let instructionAtTheBeepLines: [String] = [
-        "When you hear the beep, check toward the center of the grid.",
-        "At the same moment, the coach plays a pass and taps PASS (or the volume button)."
+        "Scan early.",
+        "Know your decision.",
+        "Swipe as the ball arrives."
     ]
 
     /// When the coach logs on the remote (single source of truth; also Section 4 line 2).
-    static let coachFirstDecisionLoggingLine = "Log the direction as soon as the player makes their first movement or touch — not after they continue."
+    static let coachFirstDecisionLoggingLine = "Log the swipe direction as soon as the player makes their first movement or touch — not after they continue."
 
     /// Section 4 — COACH
     static let instructionCoachLines: [String] = [
@@ -41,15 +48,15 @@ struct ActivityInstructionData {
     ]
 
     /// Reinforces early commitment (shown after YOUR DECISION bullets).
-    static let timingLine = "Decide before the ball arrives."
+    static let timingLine = "Scan → decide → swipe."
 
     // MARK: — In-session / coach remote (same phrases as instructions where noted)
 
     /// Partner mode — one line at top when applicable (legacy hub copy; optional).
     static let partnerRoleLine = "Coach controls the rep. Player reacts and decides."
 
-    static let partnerCoachSetupLine = "Coach stands about 10 yards away from the center of the grid."
-    static let partnerCoachBallLine = "Coach plays the ball from about 10 yards away each rep."
+    static let partnerCoachSetupLine = "Coach stands about 12 yards away from the center of the grid."
+    static let partnerCoachBallLine = "Coach plays the ball from about 12 yards away each rep."
 
     /// PASS timing — aligned with instruction Section 4.
     static let partnerCoachPassTimingLine = "Tap PASS as you play the ball."
@@ -61,9 +68,9 @@ struct ActivityInstructionData {
 
 /// Solo Display tap overlays — the app scores the first decision, not a completed run through a slot.
 enum ActivityDisplaySessionCopy {
-    static let tapTwoMinuteOrDOP = "Tap the direction of your first decision."
-    static let tapOneTouchPassing = "Tap the direction you chose — pass to green."
-    static let tapAwayFromPressure = "Tap your first decision — opposite the red (away from pressure)."
+    static let tapTwoMinuteOrDOP = "Swipe your decision."
+    static let tapOneTouchPassing = "Swipe the direction you chose — pass to green."
+    static let tapAwayFromPressure = "Swipe your first decision — opposite the red (away from pressure)."
 }
 
 enum ActivityInstructionContent {
@@ -73,7 +80,9 @@ enum ActivityInstructionContent {
             return ActivityInstructionData(
                 title: "2-Minute Test",
                 yourDecisionLines: [
-                    "Match your first decision to the cue / ball direction."
+                    "Check surroundings early.",
+                    "Recognize the open gate.",
+                    "Swipe your decision as soon as the ball arrives."
                 ],
                 scoringShort: "Correct = your first decision matches the ball direction. Baseline uses accuracy, timing, and consistency.",
                 scoringDetails: nil
@@ -82,8 +91,9 @@ enum ActivityInstructionContent {
             return ActivityInstructionData(
                 title: "Playing Away From Pressure",
                 yourDecisionLines: [
-                    "Go opposite the red pressure (into space).",
-                    "First commitment counts — don’t wait for a full turn or exit."
+                    "Scan for pressure.",
+                    "Identify the safest space.",
+                    "Swipe away from pressure as the ball arrives."
                 ],
                 scoringShort: "Correct = your first decision is opposite the red. Block score uses correct reps and decision timing.",
                 scoringDetails: nil
@@ -92,8 +102,10 @@ enum ActivityInstructionContent {
             return ActivityInstructionData(
                 title: "Dribble or Pass",
                 yourDecisionLines: [
-                    "Pass forward if you can; otherwise dribble into space.",
-                    "Avoid red; favor green or open space."
+                    "Scan before expected arrival.",
+                    "If forward space is open → dribble.",
+                    "If not → pass.",
+                    "Swipe your decision as the ball arrives."
                 ],
                 scoringShort: """
                 Forward pass = best choice when you decide it early.
@@ -108,8 +120,9 @@ enum ActivityInstructionContent {
             return ActivityInstructionData(
                 title: "One-Touch Passing",
                 yourDecisionLines: [
-                    "Choose your target before the ball arrives.",
-                    "Play one-touch to the green you already picked."
+                    "Scan multiple options early.",
+                    "Decide before expected arrival.",
+                    "Swipe immediately on contact."
                 ],
                 scoringShort: "Correct = your first decision targets a green teammate. Score uses correct reps, timing, and field balance.",
                 scoringDetails: nil

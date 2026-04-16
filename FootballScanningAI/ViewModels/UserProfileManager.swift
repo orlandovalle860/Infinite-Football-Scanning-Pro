@@ -45,12 +45,16 @@ class UserProfileManager: ObservableObject {
     
     // Temporary storage for current session settings
     private var currentSessionSettings: TrainingSessionSettings?
+
+    /// Applied when starting the next block from Session Summary → “Start Recommended” (cleared after use in setup).
+    @Published var pendingLevelDifficulty: DifficultySettings?
     
     private let userDefaults = UserDefaults.standard
     private let profilesKey = "userProfiles"
     private let currentProfileIdKey = "currentProfileId"
     private let isProfileCreatedKey = "isProfileCreated"
     private let pendingBadgeUnlocksKeyPrefix = "pending_badge_unlocks"
+    private let pendingBadgeTierUnlocksKeyPrefix = "pending_badge_tier_unlocks"
     
     init() {
         loadProfiles()
@@ -184,12 +188,29 @@ class UserProfileManager: ObservableObject {
             }
         }
 
+        let stageBeforeProgression = profile.currentStage
         profile.sessionResults.insert(result, at: 0)
+        applyAdaptiveTrainingState(for: result, profile: &profile)
+        let didAdvance = evaluateProgressionAfterSession(result: result, profile: &profile)
+        if result.activityType == stageBeforeProgression.activity {
+            profile.lastStageRecommendation = StageSessionRecommendationEngine.make(
+                didAdvance: didAdvance,
+                stageAfterProgression: profile.currentStage,
+                result: result
+            )
+        }
+        PlayerFeedbackEngine.logFeedbackDebug(for: result)
         // Keep guided curriculum stage current immediately after each scored session save.
         let progressAfter = GuidedCurriculumEngine.evaluateAndAdvance(playerId: result.playerID, sessions: profile.sessionResults)
+        profile.sessionStreakCount += 1
+        profile.longestSessionStreak = max(profile.longestSessionStreak, profile.sessionStreakCount)
         profile.updatePersonalBest(session: result)
-        let newlyUnlockedBadges = unlockBadges(for: result, profile: &profile)
-        enqueuePendingBadgeUnlocks(playerId: result.playerID, badges: newlyUnlockedBadges)
+        let badgeTierLevelUps = evaluateBadgeTierLevelUps(for: result, profile: &profile)
+        profile.lastBadgeTierUnlocked = badgeTierLevelUps.first
+        profile.lastUnlockedBadge = badgeTierLevelUps.first.map(playerBadgeForTrackLevel)
+        let newlyUnlockedBadges = badgeTierLevelUps.map(playerBadgeForTrackLevel)
+        profile.unlockedBadges = mergeUnlockedBadges(existing: profile.unlockedBadges, newBadges: newlyUnlockedBadges)
+        enqueuePendingBadgeTierUnlocks(playerId: result.playerID, events: badgeTierLevelUps)
         let xpEarned = xpEarnedForSession(
             result: result,
             hasNewPersonalBest: !newBests.isEmpty,
@@ -214,6 +235,150 @@ class UserProfileManager: ObservableObject {
         )
     }
 
+    @discardableResult
+    private func evaluateProgressionAfterSession(result: SessionResult, profile: inout UserProfile) -> Bool {
+        let stage = profile.currentStage
+        let stageActivity = stage.activity
+        guard result.activityType == stageActivity else { return false }
+
+        let accuracy = result.totalReps > 0 ? Double(result.correctCount) / Double(result.totalReps) : 0
+        let score = result.decisionTotalScore ?? Double(result.estimatedDecisionSpeedScore ?? Int((accuracy * 100).rounded()))
+
+        var history = profile.stageHistory[stage] ?? []
+        history.append(
+            PlayerStageSessionResult(
+                score: score,
+                accuracy: accuracy,
+                activityType: result.activityType,
+                timestamp: result.date
+            )
+        )
+        profile.stageHistory[stage] = history
+
+        let lastThree = Array(history.suffix(3))
+        let last3Scores = lastThree.map(\.score)
+        let last3Accuracy = lastThree.map(\.accuracy)
+        let avgScore = last3Scores.isEmpty ? 0 : (last3Scores.reduce(0, +) / Double(last3Scores.count))
+        let avgAccuracy = last3Accuracy.isEmpty ? 0 : (last3Accuracy.reduce(0, +) / Double(last3Accuracy.count))
+
+        let shouldAdvance = lastThree.count == 3 && avgScore >= 75 && avgAccuracy >= 0.70
+        let decision = shouldAdvance ? "advance" : "stay"
+
+        print("[ProgressionDebug] playerId=\(result.playerID.uuidString) currentStage=\(stage.rawValue) last3Scores=\(last3Scores) last3Accuracy=\(last3Accuracy) decision=\(decision)")
+
+        guard shouldAdvance, let next = stage.next else { return false }
+        profile.currentStage = next
+        profile.stageHistory[next] = []
+        return true
+    }
+
+    private struct AdaptiveSessionSnapshot {
+        let score: Int
+        let earlyPercentage: Double
+        let latePercentage: Double
+        let averageDecisionOffset: Double
+    }
+
+    private func applyAdaptiveTrainingState(for latestResult: SessionResult, profile: inout UserProfile) {
+        let snapshots = profile.sessionResults
+            .sorted(by: { $0.date > $1.date })
+            .prefix(5)
+            .map(makeAdaptiveSnapshot)
+
+        guard !snapshots.isEmpty else { return }
+
+        let recentScores = snapshots.map(\.score)
+        let latest = snapshots[0]
+        let currentTempo = profile.adaptiveTrainingState.currentTempo
+        let currentLevel = adaptiveLevelFromScore(latest.score)
+
+        let latestTwo = Array(snapshots.prefix(2))
+        let hasTwoStrongSessions = latestTwo.count == 2 && latestTwo.allSatisfy {
+            $0.score >= 85 && $0.earlyPercentage >= 0.4
+        }
+        let hasTwoLowSessions = latestTwo.count == 2 && latestTwo.allSatisfy { $0.score < 70 }
+
+        let nextTempo: PassTempo
+        let recommendation: String
+        let focus: String
+
+        if hasTwoStrongSessions {
+            nextTempo = raiseTempo(from: currentTempo)
+            recommendation = "You’re ready for Game Speed"
+            focus = "increase challenge"
+        } else if (70...84).contains(latest.score) {
+            nextTempo = currentTempo
+            recommendation = "Stay here and push for earlier decisions"
+            focus = "commit earlier"
+        } else if latest.score < 70 && hasTwoLowSessions {
+            nextTempo = lowerTempo(from: currentTempo)
+            recommendation = "Slow it down and focus on early decisions"
+            focus = "decide earlier"
+        } else if latest.score < 70 {
+            nextTempo = currentTempo
+            recommendation = "Stay here and push for earlier decisions"
+            focus = "decide earlier"
+        } else {
+            nextTempo = currentTempo
+            recommendation = "Stay here and push for earlier decisions"
+            focus = "commit earlier"
+        }
+
+        profile.adaptiveTrainingState = AdaptiveTrainingState(
+            currentTempo: nextTempo,
+            currentLevel: currentLevel,
+            recentScores: recentScores,
+            recommendation: recommendation,
+            focus: focus
+        )
+    }
+
+    private func makeAdaptiveSnapshot(from session: SessionResult) -> AdaptiveSessionSnapshot {
+        let score: Int
+        if let totalScore = session.decisionTotalScore {
+            score = max(0, min(100, Int(totalScore.rounded())))
+        } else {
+            score = session.estimatedDecisionSpeedScore ?? 0
+        }
+
+        let totalTiming = session.speedCounts.fast + session.speedCounts.medium + session.speedCounts.slow
+        let earlyPct = totalTiming > 0 ? Double(session.speedCounts.fast) / Double(totalTiming) : 0
+        let latePct = totalTiming > 0 ? Double(session.speedCounts.slow) / Double(totalTiming) : 0
+        let avgOffset = session.avgDecisionWindowSeconds ?? 0
+
+        return AdaptiveSessionSnapshot(
+            score: score,
+            earlyPercentage: earlyPct,
+            latePercentage: latePct,
+            averageDecisionOffset: avgOffset
+        )
+    }
+
+    private func raiseTempo(from tempo: PassTempo) -> PassTempo {
+        switch tempo {
+        case .controlled: return .gameSpeed
+        case .gameSpeed: return .elite
+        case .elite: return .elite
+        }
+    }
+
+    private func lowerTempo(from tempo: PassTempo) -> PassTempo {
+        switch tempo {
+        case .controlled: return .controlled
+        case .gameSpeed: return .controlled
+        case .elite: return .gameSpeed
+        }
+    }
+
+    private func adaptiveLevelFromScore(_ score: Int) -> SessionPerformanceLevel {
+        switch score {
+        case ..<60: return .reactive
+        case ..<75: return .developing
+        case ..<90: return .advancing
+        default: return .elite
+        }
+    }
+
     /// Merges session rows loaded from Supabase after login (no XP, badges, or curriculum side effects).
     @discardableResult
     func mergeHydratedSessionResults(_ newResults: [SessionResult], forPlayerId playerId: UUID) -> Int {
@@ -233,77 +398,140 @@ class UserProfileManager: ObservableObject {
         return toAdd.count
     }
 
-    private func unlockBadges(for result: SessionResult, profile: inout UserProfile) -> [PlayerBadge] {
-        var unlockedNow: [PlayerBadge] = []
-        var unlockedSet = Set(profile.unlockedBadges)
+    private func evaluateBadgeTierLevelUps(for result: SessionResult, profile: inout UserProfile) -> [BadgeTierUnlockEvent] {
+        let total = result.speedCounts.fast + result.speedCounts.medium + result.speedCounts.slow
+        let earlyPct = total > 0 ? Double(result.speedCounts.fast) / Double(total) : 0
+        let currentScore = sessionScore(result)
+        let previousSession = profile.sessionResults
+            .filter { $0.id != result.id }
+            .sorted(by: { $0.date > $1.date })
+            .first
+        let scoreJump = previousSession.map { currentScore - sessionScore($0) } ?? 0
 
-        func unlock(_ badge: PlayerBadge) {
-            if !unlockedSet.contains(badge) {
-                unlockedSet.insert(badge)
-                unlockedNow.append(badge)
+        let currentMetrics: [BadgeTrack: Double] = [
+            .earlyThinker: earlyPct,
+            .levelUp: Double(scoreJump),
+            .lockedIn: Double(result.speedCounts.slow),
+            .onFire: Double(profile.sessionStreakCount),
+            .aheadOfPlay: Double(currentScore)
+        ]
+
+        var levelUps: [BadgeTierUnlockEvent] = []
+        for track in BadgeTrack.allCases {
+            let oldLevel = profile.badgeTierLevels[track] ?? 0
+            let newLevel = tierLevel(for: track, metricValue: currentMetrics[track] ?? 0)
+            if newLevel > oldLevel {
+                profile.badgeTierLevels[track] = newLevel
+                levelUps.append(BadgeTierUnlockEvent(track: track, level: newLevel))
             }
         }
-
-        // 1) Early Decider: Avg Decision Time < 0.90s in a session.
-        if let avg = result.avgDecisionTime, avg < 0.90 {
-            unlock(.earlyDecider)
-        }
-        // 2) Forward Thinker: Forward Thinking >= 60% when opportunities exist.
-        if let opp = result.forwardOpportunityCount, opp > 0, let choice = result.forwardChoiceCount,
-           Double(choice) / Double(opp) >= 0.60 {
-            unlock(.forwardThinker)
-        }
-        // 3) Consistent: 3 sessions in a row with accuracy >= 80% and decision speed not Too Late.
-        let training = profile.sessionResults.filter {
-            [.awayFromPressure, .dribbleOrPass, .oneTouchPassing].contains($0.activityType)
-        }
-        if training.count >= 3 {
-            let lastThree = Array(training.prefix(3))
-            let allStrong = lastThree.allSatisfy { session in
-                guard session.totalReps > 0 else { return false }
-                let accuracy = Double(session.correctCount) / Double(session.totalReps)
-                let notTooLate = (session.avgDecisionTime ?? .greatestFiniteMagnitude) <= 1.20
-                return accuracy >= 0.80 && notTooLate
-            }
-            if allStrong {
-                unlock(.consistent)
-            }
-        }
-
-        profile.unlockedBadges = Array(unlockedSet)
-        return unlockedNow
+        return levelUps
     }
 
-    func dequeuePendingBadgeUnlock(playerId: UUID?) -> PlayerBadge? {
-        var pending = loadPendingBadgeUnlocks(playerId: playerId)
+    private func tierLevel(for track: BadgeTrack, metricValue: Double) -> Int {
+        let thresholds: [Double]
+        switch track {
+        case .earlyThinker:
+            thresholds = [0.30, 0.40, 0.50, 0.60]
+        case .levelUp:
+            thresholds = [10, 15, 20, 25]
+        case .lockedIn:
+            // Lower late count is better (<=4, <=3, <=2, <=1).
+            if metricValue <= 1 { return 4 }
+            if metricValue <= 2 { return 3 }
+            if metricValue <= 3 { return 2 }
+            if metricValue <= 4 { return 1 }
+            return 0
+        case .onFire:
+            thresholds = [3, 5, 10, 20]
+        case .aheadOfPlay:
+            thresholds = [90, 92, 95, 98]
+        }
+        var level = 0
+        for (index, threshold) in thresholds.enumerated() where metricValue >= threshold {
+            level = index + 1
+        }
+        return level
+    }
+
+    private func playerBadgeForTrackLevel(_ event: BadgeTierUnlockEvent) -> PlayerBadge {
+        switch event.track {
+        case .earlyThinker:
+            return .earlyThinker
+        case .levelUp:
+            return .levelUp
+        case .lockedIn:
+            return .lockedIn
+        case .onFire:
+            switch event.level {
+            case 4: return .onFire20
+            case 3: return .onFire10
+            case 2: return .onFire5
+            default: return .onFire3
+            }
+        case .aheadOfPlay:
+            return .aheadOfPlay
+        }
+    }
+
+    private func mergeUnlockedBadges(existing: [PlayerBadge], newBadges: [PlayerBadge]) -> [PlayerBadge] {
+        var merged = existing
+        var seen = Set(existing)
+        for badge in newBadges where !seen.contains(badge) {
+            merged.append(badge)
+            seen.insert(badge)
+        }
+        return merged
+    }
+
+    private func sessionScore(_ session: SessionResult) -> Int {
+        if let s = session.decisionTotalScore {
+            return max(0, min(100, Int(s.rounded())))
+        }
+        if session.totalReps > 0 {
+            return Int(round(Double(session.correctCount) / Double(session.totalReps) * 100.0))
+        }
+        return session.estimatedDecisionSpeedScore ?? 0
+    }
+
+    func dequeuePendingBadgeTierUnlock(playerId: UUID?) -> BadgeTierUnlockEvent? {
+        var pending = loadPendingBadgeTierUnlocks(playerId: playerId)
         guard !pending.isEmpty else { return nil }
         let next = pending.removeFirst()
-        savePendingBadgeUnlocks(pending, playerId: playerId)
+        savePendingBadgeTierUnlocks(pending, playerId: playerId)
         return next
     }
 
-    private func enqueuePendingBadgeUnlocks(playerId: UUID, badges: [PlayerBadge]) {
-        guard !badges.isEmpty else { return }
-        let displayPriority: [PlayerBadge] = [.consistent, .earlyDecider, .forwardThinker]
-        let prioritized = badges.sorted { a, b in
-            let ai = displayPriority.firstIndex(of: a) ?? Int.max
-            let bi = displayPriority.firstIndex(of: b) ?? Int.max
+    private func enqueuePendingBadgeTierUnlocks(playerId: UUID, events: [BadgeTierUnlockEvent]) {
+        guard !events.isEmpty else { return }
+        let displayPriority: [BadgeTrack] = [.aheadOfPlay, .onFire, .levelUp, .earlyThinker, .lockedIn]
+        let prioritized = events.sorted { a, b in
+            let ai = displayPriority.firstIndex(of: a.track) ?? Int.max
+            let bi = displayPriority.firstIndex(of: b.track) ?? Int.max
+            if ai == bi {
+                return a.level > b.level
+            }
             return ai < bi
         }
         // Avoid overwhelming users: show only one new badge modal per session.
-        let badgesToQueue = Array(prioritized.prefix(1))
-        let existing = loadPendingBadgeUnlocks(playerId: playerId)
+        let eventsToQueue = Array(prioritized.prefix(1))
+        let existing = loadPendingBadgeTierUnlocks(playerId: playerId)
         var merged = existing
         let existingSet = Set(existing)
-        for badge in badgesToQueue where !existingSet.contains(badge) {
-            merged.append(badge)
+        for event in eventsToQueue where !existingSet.contains(event) {
+            merged.append(event)
         }
-        savePendingBadgeUnlocks(merged, playerId: playerId)
+        savePendingBadgeTierUnlocks(merged, playerId: playerId)
     }
 
     private func pendingBadgeUnlocksKey(playerId: UUID?) -> String {
         let pid = playerId?.uuidString ?? "global"
         return "\(pendingBadgeUnlocksKeyPrefix)_\(pid)"
+    }
+
+    private func pendingBadgeTierUnlocksKey(playerId: UUID?) -> String {
+        let pid = playerId?.uuidString ?? "global"
+        return "\(pendingBadgeTierUnlocksKeyPrefix)_\(pid)"
     }
 
     private func loadPendingBadgeUnlocks(playerId: UUID?) -> [PlayerBadge] {
@@ -322,6 +550,26 @@ class UserProfileManager: ObservableObject {
             return
         }
         if let data = try? JSONEncoder().encode(badges) {
+            userDefaults.set(data, forKey: key)
+        }
+    }
+
+    private func loadPendingBadgeTierUnlocks(playerId: UUID?) -> [BadgeTierUnlockEvent] {
+        let key = pendingBadgeTierUnlocksKey(playerId: playerId)
+        guard let data = userDefaults.data(forKey: key),
+              let events = try? JSONDecoder().decode([BadgeTierUnlockEvent].self, from: data) else {
+            return []
+        }
+        return events
+    }
+
+    private func savePendingBadgeTierUnlocks(_ events: [BadgeTierUnlockEvent], playerId: UUID?) {
+        let key = pendingBadgeTierUnlocksKey(playerId: playerId)
+        if events.isEmpty {
+            userDefaults.removeObject(forKey: key)
+            return
+        }
+        if let data = try? JSONEncoder().encode(events) {
             userDefaults.set(data, forKey: key)
         }
     }
@@ -542,7 +790,7 @@ class UserProfileManager: ObservableObject {
         var sentences: [String] = []
 
         if accuracyImproving && slowPct >= 0.4 {
-            sentences.append("Your decisions are correct more often, but sometimes late. Focus on scanning earlier before the ball arrives.")
+            sentences.append("Your decisions are correct more often, but sometimes late. Focus on scanning earlier before expected arrival.")
         } else if total > 0 && fast > slow && recent.count >= 2 {
             sentences.append("You're deciding earlier. Keep building that habit on the critical scan before receiving.")
         }

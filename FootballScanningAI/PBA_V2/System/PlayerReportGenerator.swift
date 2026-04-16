@@ -118,7 +118,7 @@ enum PlayerReportGenerator {
         case .anticipator:
             return "Your decisions can arrive slightly late sometimes—commit sooner."
         case .scanner:
-            return "Your decisions arrive slightly late—decide earlier before the ball arrives."
+            return "Your decisions arrive slightly late—decide earlier before expected arrival."
         case .reactor:
             return "Your decisions arrive late—scan earlier and commit before receiving."
         }
@@ -177,7 +177,7 @@ enum PlayerReportGenerator {
             if (lastAFPSessionResult?.firstTouchHesitantCount ?? 0) >= 3 {
                 return "You're hesitating between options—commit to your decision."
             }
-            return "Your first action is often late or off—decide earlier before the ball arrives."
+            return "Your first action is often late or off—decide earlier before expected arrival."
         }
         if speed == .slow {
             return "Your decisions arrive slightly late."

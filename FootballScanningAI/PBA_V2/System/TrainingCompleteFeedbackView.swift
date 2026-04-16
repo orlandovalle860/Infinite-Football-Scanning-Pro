@@ -145,51 +145,16 @@ struct TrainingCompleteFeedbackView: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(.white.opacity(0.65))
 
-                PBAPostSessionNarrativeStack(narrative: narrative)
-
-                Text("Your numbers")
+                Text("Session summary")
                     .font(.title3.weight(.bold))
                     .foregroundColor(.white.opacity(0.95))
-                Text("Reference only — your coach debrief is above.")
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.55))
-
-                VStack(alignment: .leading, spacing: 14) {
-                    if let s = sessionResultForDebrief {
-                        trainingCompleteDecisionSpeedBlock(session: s)
-                    }
-                    row(primaryMetricLabel, primaryMetricValue)
-                    if let avg = avgDecisionTimeSeconds {
-                        let window = DecisionTimingModel.decisionWindow(rawRepInterval: avg, activity: activityKind)
-                        if activityKind != .oneTouchPassing {
-                            row("Decision window", DecisionTimingModel.summaryText(windowSeconds: window))
-                        }
-                    }
-                    if activityKind != .awayFromPressure && activityKind != .dribbleOrPass {
-                        row("Correct decisions", "\(correct) / \(total)")
-                    }
-                    if let score = decisionSpeedScore {
-                        row("Decision Speed Score", "\(score)")
-                        if score == 0, let hint = decisionSpeedScoreZeroHint {
-                            Text(hint)
-                                .font(.caption2)
-                                .foregroundColor(.white.opacity(0.75))
-                        }
-                        if isNewPersonalBest {
-                            Text("New personal best score")
-                                .font(.caption.weight(.semibold))
-                                .foregroundColor(.yellow)
-                        }
-                        if let best = personalBest {
-                            row("Your best score (this activity)", "\(best)")
-                        }
-                    }
-                    if let ft = firstTouchAccuracy {
-                        row("Decision–action match", ft)
-                    }
-                    row("Tempo vs last block", decisionSpeedLabel)
+                row("Total reps", "\(total)")
+                if let s = sessionResultForDebrief {
+                    row("Forward", "\(s.directionCounts[.up, default: 0])")
+                    row("Back", "\(s.directionCounts[.down, default: 0])")
+                    row("Left", "\(s.directionCounts[.left, default: 0])")
+                    row("Right", "\(s.directionCounts[.right, default: 0])")
                 }
-                .padding(.vertical, 8)
 
                 Button(action: onContinue) {
                     Text("Continue")
@@ -222,22 +187,6 @@ struct TrainingCompleteFeedbackView: View {
             Text(value)
                 .font(.subheadline.weight(.medium))
                 .foregroundColor(.white)
-        }
-    }
-
-    private func trainingCompleteDecisionSpeedBlock(session: SessionResult) -> some View {
-        let c = session.speedCounts
-        let bucket = UniversalBlockSummaryHeadline.resolve(fast: c.fast, medium: c.medium, slow: c.slow).bucket
-        return VStack(alignment: .leading, spacing: 4) {
-            Text("Decision speed: \(bucket.rawValue.capitalized)")
-                .font(.subheadline.weight(.semibold))
-                .foregroundColor(.white.opacity(0.92))
-            BlockSummarySpeedCountsSubline(
-                fast: c.fast,
-                medium: c.medium,
-                slow: c.slow,
-                debugActivity: session.activityType
-            )
         }
     }
 

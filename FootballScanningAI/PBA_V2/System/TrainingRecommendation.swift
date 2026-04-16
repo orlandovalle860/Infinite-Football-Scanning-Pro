@@ -7,9 +7,9 @@
 
 import Foundation
 
-// MARK: - Player level (for default recommendation)
+// MARK: - Curriculum / path level (for default recommendation; distinct from session-based `PlayerLevel` in SessionProgression)
 
-enum PlayerLevel: String {
+enum CurriculumPlayerLevel: String {
     case starter = "Starter"
     case safePlayer = "Safe Player"
     case forwardThinker = "Forward Thinker"
@@ -56,7 +56,7 @@ struct TrainingRecommendationResult {
 
 enum TrainingRecommendation {
     /// Derive player level from progress and last 5 blocks.
-    static func playerLevel(progressStore: ProgressStore, playerId: UUID?, last5: [SessionRecord], decisionScore: Int, consistency: ConsistencyLabel) -> PlayerLevel {
+    static func playerLevel(progressStore: ProgressStore, playerId: UUID?, last5: [SessionRecord], decisionScore: Int, consistency: ConsistencyLabel) -> CurriculumPlayerLevel {
         let hasCompletedTest = progressStore.last(.twoMinuteTest, playerId: playerId) != nil
         guard hasCompletedTest else { return .starter }
 
@@ -97,7 +97,7 @@ enum TrainingRecommendation {
     }
 
     /// Default activity for level (before overrides).
-    static func defaultActivity(for level: PlayerLevel) -> ActivityKind {
+    static func defaultActivity(for level: CurriculumPlayerLevel) -> ActivityKind {
         switch level {
         case .starter: return .awayFromPressure
         case .safePlayer, .forwardThinker: return .dribbleOrPass
@@ -108,7 +108,7 @@ enum TrainingRecommendation {
 
     /// Recommended activity with overrides: 1) default by level, 2) slow override, 3) bias override, 4) consistency override.
     static func recommendedActivity(
-        level: PlayerLevel,
+        level: CurriculumPlayerLevel,
         decisionSpeed: GlobalDecisionSpeed,
         bias: BiasType?,
         consistency: ConsistencyLabel
@@ -212,7 +212,7 @@ enum TrainingRecommendation {
             return ("Win your pocket moment early — then pass or dribble.", "You're hesitating between options.")
         case .oneTouchPassing:
             if speed == .slow { return ("Win your pocket moment earlier.", "Your decisions are arriving late.") }
-            return ("Win your pocket moment early — one-touch execution.", "Train deciding before the ball arrives.")
+            return ("Win your pocket moment early — one-touch execution.", "Train deciding before expected arrival.")
         }
     }
 

@@ -18,7 +18,7 @@ struct DribbleOrPassBlockSummaryView: View {
     @EnvironmentObject private var router: AppRouter
     @Environment(\.dismiss) private var dismiss
     @State private var didSave = false
-    @State private var showSessionFeedback = true
+    @State private var showSessionFeedback = false
     @State private var showDetails = false
     @State private var navigateToNewBlock = false
     @State private var navigateToCurriculum = false
@@ -36,12 +36,19 @@ struct DribbleOrPassBlockSummaryView: View {
         DribbleOrPassBlockResult.from(repResults: results)
     }
 
-    /// Decision Speed Score (0–100) from correctness and reaction times; nil when no reps.
-    /// DOP curve uses a wider window for coach-tapped workflow: (1800ms - rt)/1000.
     private var decisionSpeedScoreValue: Int? {
-        let ms = results.map { Int($0.decisionTime * 1000) }
-        let correct = results.map(\.correct)
-        return DecisionSpeedScore.dribbleOrPassSessionScore(reactionTimesMs: ms, correct: correct)
+        guard !results.isEmpty else { return nil }
+        let accuracy = Double(blockResult.correctCount) / Double(results.count)
+        return DecisionTimingModel.decisionScore(accuracy: accuracy, windows: decisionWindowSeconds, activity: .dribbleOrPass)
+    }
+
+    private var travelTimeSeconds: Double {
+        CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds
+            ?? config.difficulty.passTempo.expectedBallTravelTime(distanceMeters: 11.0)
+    }
+
+    private var decisionWindowSeconds: [Double] {
+        results.map { travelTimeSeconds - $0.decisionTime }
     }
 
     /// Decision-hierarchy tiers (score 0–60): Elite → Playmaker → Forward Thinker → Positive Player → Safe Player.
@@ -58,12 +65,12 @@ struct DribbleOrPassBlockSummaryView: View {
         results.filter { $0.chosenGate == .down }.count
     }
 
-    /// Forward Intent: only count reps where up was the correct/valid option (expectedGate == .up). Do not penalize when up is not available.
+    /// Forward Intent: reps where forward lane was actually open (environment), not a single expected gate.
     private var forwardOpportunities: Int {
-        results.filter { $0.expectedGate == .up }.count
+        results.filter(\.forwardLaneOpen).count
     }
     private var forwardChoices: Int {
-        results.filter { $0.expectedGate == .up && $0.chosenGate == .up }.count
+        results.filter { $0.forwardLaneOpen && $0.chosenGate == .up }.count
     }
 
     private var lateralChoices: Int {
@@ -79,7 +86,7 @@ struct DribbleOrPassBlockSummaryView: View {
             return "You're recognizing forward options early."
         }
         if lateralChoices >= 6 && forwardChoices <= 3 {
-            return "You're finding safe options, but not progressing enough."
+            return "Safe decision — look forward sooner"
         }
         return "Good mix. Keep building forward habits."
     }
@@ -130,24 +137,43 @@ struct DribbleOrPassBlockSummaryView: View {
 
     private var sessionResult: SessionResult? {
         guard let playerId = profileManager.currentProfile?.id ?? playerStore.selectedPlayerId else { return nil }
+        let speedCounts = decisionWindowSpeedCounts
+        let avgWindow = decisionWindowSeconds.isEmpty ? 0 : decisionWindowSeconds.reduce(0, +) / Double(decisionWindowSeconds.count)
+        let optimal = results.filter { $0.decisionQuality == .correct }.count
+        let acceptableOnly = results.filter { $0.decisionQuality == .acceptable }.count
         return SessionResult(
             playerID: playerId,
             activityType: .dribbleOrPass,
             correctCount: blockResult.correctCount,
             totalReps: 12,
-            speedCounts: SessionSpeedCounts(fast: blockResult.fastCount, medium: blockResult.mediumCount, slow: blockResult.slowCount),
-            avgDecisionTime: blockResult.averageDecisionTime,
+            speedCounts: speedCounts,
+            avgDecisionTime: avgWindow,
             biasDirection: biasString == "Left" ? .left : (biasString == "Right" ? .right : nil),
             directionCounts: [.up: 0, .down: downChoices, .left: 0, .right: 0],
             firstTouchCounts: firstTouchCountsFromResults,
             firstTouchMatchCount: firstTouchMatchCountFromResults,
             difficulty: config.difficulty,
-            decisionTotalScore: blockResult.totalScore,
+            decisionTotalScore: Double(decisionSpeedScoreValue ?? 0),
             forwardChoiceCount: forwardOpportunities > 0 ? forwardChoices : nil,
             forwardOpportunityCount: forwardOpportunities > 0 ? forwardOpportunities : nil,
             preReceiveDecisionCount: preReceiveDecisionCountFromResults,
-            decisionTimeStdDev: blockResult.decisionTimeStdDev
+            decisionTimeStdDev: blockResult.decisionTimeStdDev,
+            decisionOptimalCount: optimal,
+            decisionAcceptableOnlyCount: acceptableOnly
         )
+    }
+
+    private var decisionWindowSpeedCounts: SessionSpeedCounts {
+        var fast = 0, medium = 0, slow = 0
+        let adaptiveScore = decisionSpeedScoreValue ?? 70
+        for window in decisionWindowSeconds {
+            switch DecisionTimingModel.speedBucket(forDecisionWindow: window, activity: .dribbleOrPass, score: adaptiveScore) {
+            case .fast: fast += 1
+            case .medium: medium += 1
+            case .slow: slow += 1
+            }
+        }
+        return SessionSpeedCounts(fast: fast, medium: medium, slow: slow)
     }
 
     private var previousBlockSpeedBucket: SpeedBucket? {
@@ -163,29 +189,8 @@ struct DribbleOrPassBlockSummaryView: View {
 
     var body: some View {
         Group {
-            if showSessionFeedback {
-                TrainingCompleteFeedbackView(
-                    activityName: "Dribble or Pass",
-                    activityKind: .dribbleOrPass,
-                    correct: blockResult.correctCount,
-                    total: 12,
-                    firstTouchAccuracy: firstTouchMatchCountFromResults != nil ? "\(firstTouchMatchCountFromResults!)/12" : nil,
-                    decisionSpeedLabel: decisionSpeedComparisonLabel(current: speedBucket, previous: previousBlockSpeedBucket),
-                    avgDecisionTimeSeconds: blockResult.averageDecisionTime,
-                    decisionSpeedScore: decisionSpeedScoreValue,
-                    previousDecisionSpeedScore: previousSessionForComparison?.decisionSpeedScore,
-                    previousAvgReactionTimeSeconds: previousSessionForComparison?.avgLatency,
-                    previousCorrect: previousSessionForComparison?.correct,
-                    previousTotal: previousSessionForComparison?.decisionsCompleted,
-                    personalBest: personalBestScore,
-                    isNewPersonalBest: isNewPersonalBestForDecisionSpeed,
-                    coachFeedback: sessionFeedbackCoachSentence,
-                    sessionResultForDebrief: sessionResult,
-                    previousSessionRecordForDebrief: previousSessionForComparison,
-                    onContinue: { showSessionFeedback = false }
-                )
-            } else if let s = sessionResultForSummary {
-                SessionSummaryView(
+            if let s = sessionResultForSummary {
+                SessionSummaryScreenView(
                     session: s,
                     playerName: profileManager.currentProfile?.name ?? "Player",
                     isNewPersonalBest: isNewPersonalBestForSummary,
@@ -198,11 +203,11 @@ struct DribbleOrPassBlockSummaryView: View {
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
-            } else {
-                blockSummaryContent
             }
+            else { blockSummaryContent }
         }
         .onAppear {
+            PBASessionFlowPolicy.handleResultsPresented()
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
             AnalyticsManager.shared.track(.trainingSessionCompleted, playerId: playerStore.selectedPlayerId)
             guard !didSave else { return }
@@ -292,8 +297,10 @@ struct DribbleOrPassBlockSummaryView: View {
             }
             let playerId = record.playerId ?? playerStore.selectedPlayerId
             let activityName = record.activity.rawValue
+            let travelTimeSeconds = CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds
+                ?? config.difficulty.passTempo.expectedBallTravelTime(distanceMeters: 11.0)
             for r in results {
-                let reactionTimeMs = Int(r.decisionTime * 1000)
+                let reactionTimeMs = Int((travelTimeSeconds - r.decisionTime) * 1000)
                 if reactionTimeMs > SupabaseDecisionService.maxReactionTimeMs { continue }
                 let decision = Decision(
                     sessionId: sessionId,

@@ -24,6 +24,7 @@ final class DribbleOrPassEngine: ObservableObject {
     @Published var instructionTitle: String = ""
     @Published var instructionSubtitle: String = ""
     @Published private(set) var revealedGates: Set<Gate> = []
+    @Published private(set) var repDecisions: [RepDecision] = []
 
     private let config: DribbleOrPassConfig
     private let trainingMode: TrainingMode
@@ -35,6 +36,12 @@ final class DribbleOrPassEngine: ObservableObject {
     private var scanTimer: Timer?
     private var revealTimers: [Timer] = []
     private var cueHideTimer: Timer?
+    /// [CueTiming-Debug] anchor when `cueVisible` phase starts (full greens + timer).
+    private var cueTimingDebugVisibleAt: Date?
+    private var passTriggeredByRep: [Int: Date] = [:]
+    private var directionLoggedByRep: [Int: Date] = [:]
+    private var adaptiveState = AdaptiveState()
+    private var sessionAdaptiveDifficulty = DifficultySettings(cueDuration: 1.0, travelTime: 1.0, thresholdAdjustment: 0.0)
 
     init(config: DribbleOrPassConfig, trainingMode: TrainingMode = .solo, plan: [DribbleOrPassRepPlan] = DribbleOrPassScenarioGenerator.generatePlan()) {
         self.config = config
@@ -57,7 +64,7 @@ final class DribbleOrPassEngine: ObservableObject {
             if trainingMode == .partner {
                 instructionSubtitle = "\(ActivityInstructionData.partnerPlayerBeepLine)\n\(ActivityInstructionData.timingLine)"
             } else {
-                instructionSubtitle = "Beep is coming."
+                instructionSubtitle = "Scan before expected arrival."
             }
         case .beepedAwaitingPass:
             instructionTitle = "Ball is coming"
@@ -66,13 +73,13 @@ final class DribbleOrPassEngine: ObservableObject {
                 : "Coach: press PASS at the strike."
         case .cueRevealing:
             instructionTitle = "Decide now"
-            instructionSubtitle = "Green = pass, Clear = dribble."
+            instructionSubtitle = "If forward space is open → dribble.\nIf not → pass."
         case .cueVisible:
-            instructionTitle = "Decide now"
-            instructionSubtitle = "Green = pass, Clear = dribble."
+            instructionTitle = "Swipe now"
+            instructionSubtitle = "Swipe your decision as the ball arrives."
         case .awaitingExitLog:
-            instructionTitle = "Play the rep"
-            instructionSubtitle = "Waiting for coach log…"
+            instructionTitle = "Great anticipation"
+            instructionSubtitle = "Waiting for coach swipe log…"
         case .blockComplete:
             instructionTitle = "Block complete."
             instructionSubtitle = ""
@@ -92,6 +99,8 @@ final class DribbleOrPassEngine: ObservableObject {
         guard repIndex >= currentRepIndex else { return }
         currentRepIndex = repIndex
         passTriggeredAt = nil
+        passTriggeredByRep[repIndex] = nil
+        directionLoggedByRep[repIndex] = nil
         revealedGates = []
         cancelTimers()
 
@@ -127,6 +136,7 @@ final class DribbleOrPassEngine: ObservableObject {
         guard repIndex == currentRepIndex else { return }
         guard case .beepedAwaitingPass(let r) = phase, r == repIndex else { return }
         passTriggeredAt = timestamp
+        passTriggeredByRep[repIndex] = timestamp
         #if DEBUG
         DecisionSpeedDebugLog.logEngineRepLive(activity: .dribbleOrPass, repIndex: repIndex, passEmbeddedStored: timestamp)
         #endif
@@ -158,7 +168,7 @@ final class DribbleOrPassEngine: ObservableObject {
             RunLoop.main.add(t, forMode: .common)
             revealTimers.append(t)
         case .sequential:
-            let spacing = config.revealSpacingSeconds
+            let spacing = config.revealSpacingSeconds * sessionAdaptiveDifficulty.cueDuration
             let order = gates.shuffled()
             revealedGates = []
             phase = .cueRevealing(repIndex: repIndex, revealedGates: [])
@@ -185,8 +195,25 @@ final class DribbleOrPassEngine: ObservableObject {
     private func transitionToCueVisible(repIndex: Int) {
         cancelRevealTimers()
         revealedGates = [.up, .down, .left, .right]
-        let duration = config.cueVisibleSeconds
+        let duration = config.cueVisibleSeconds * sessionAdaptiveDifficulty.cueDuration
         let endsAt = Date().addingTimeInterval(duration)
+        cueTimingDebugVisibleAt = Date()
+        let revealNote: String
+        switch config.revealStyle {
+        case .simultaneous:
+            revealNote = "reveal=simultaneous"
+        case .twoStage:
+            revealNote = "reveal=twoStage +0.25s stagger before cueVisible"
+        case .sequential:
+            let spacing = config.revealSpacingSeconds * sessionAdaptiveDifficulty.cueDuration
+            revealNote = "reveal=sequential spacing=\(String(format: "%.3f", spacing))s"
+        }
+        CueTimingDebugLog.logVisible(
+            activity: "dribbleOrPass",
+            repIndex: repIndex,
+            configuredWindowSeconds: duration,
+            note: "\(revealNote); phase=cueVisible (greens fixed window)"
+        )
         phase = .cueVisible(repIndex: repIndex, endsAt: endsAt)
         updateInstructions()
 
@@ -197,6 +224,17 @@ final class DribbleOrPassEngine: ObservableObject {
     }
 
     private func onCueHide(repIndex: Int) {
+        if let v = cueTimingDebugVisibleAt {
+            let hiddenAt = Date()
+            CueTimingDebugLog.logHidden(
+                activity: "dribbleOrPass",
+                repIndex: repIndex,
+                visibleAt: v,
+                hiddenAt: hiddenAt,
+                reason: "cue_hide_timer"
+            )
+            cueTimingDebugVisibleAt = nil
+        }
         cueHideTimer?.invalidate()
         cueHideTimer = nil
         revealedGates = []
@@ -231,7 +269,18 @@ final class DribbleOrPassEngine: ObservableObject {
         var rIdx: Int?
         switch phase {
         case .awaitingExitLog(let ri): rIdx = ri
-        case .cueVisible(let ri, _): rIdx = ri
+        case .cueVisible(let ri, _):
+            rIdx = ri
+            if ri == repIndex, let v = cueTimingDebugVisibleAt {
+                CueTimingDebugLog.logHidden(
+                    activity: "dribbleOrPass",
+                    repIndex: repIndex,
+                    visibleAt: v,
+                    hiddenAt: Date(),
+                    reason: "exit_logged"
+                )
+                cueTimingDebugVisibleAt = nil
+            }
         case .cueRevealing(let ri, _): rIdx = ri
         default: return nil
         }
@@ -248,10 +297,27 @@ final class DribbleOrPassEngine: ObservableObject {
         }
 
         let p = plan[repIndex]
-        let correct = (gate == p.expectedCorrectGate)
+        let decisionQuality = DribbleOrPassDecisionRules.quality(plan: p, chosen: gate)
+        let correct = DribbleOrPassDecisionRules.countsAsCorrect(decisionQuality)
+        let forwardLaneOpen = p.up == .open || p.up == .teammate
         let pending = pendingFirstTouchByRep[repIndex]
         pendingFirstTouchByRep[repIndex] = nil
-        let speed = TimingThresholds.dribblePassDecisionSpeed(for: reactionTimeSeconds)
+        let expectedArrivalTime = triggerTime.addingTimeInterval(travelTimeSeconds)
+        let decisionWindowSeconds = expectedArrivalTime.timeIntervalSince(timestamp)
+        let score = adaptiveSessionScore(including: decisionWindowSeconds, isCorrect: correct)
+        let speed = classifyDecisionSpeed(windowSeconds: decisionWindowSeconds, score: score)
+        directionLoggedByRep[repIndex] = timestamp
+        repDecisions.append(
+            RepDecision(
+                repIndex: repIndex,
+                direction: gate,
+                isCorrect: correct,
+                decisionWindowSeconds: decisionWindowSeconds,
+                bucket: DecisionTimingModel.speedBucket(forDecisionWindow: decisionWindowSeconds, activity: .dribbleOrPass, score: score)
+            )
+        )
+        applyAdaptiveAfterRep(wasCorrect: correct, decisionWindow: decisionWindowSeconds)
+        print("[DecisionWindowDebug] repIndex=\(repIndex) passTS=\(triggerTime.timeIntervalSince1970) expectedArrivalTS=\(expectedArrivalTime.timeIntervalSince1970) decisionTS=\(timestamp.timeIntervalSince1970) decisionWindowSeconds=\(decisionWindowSeconds)")
         #if DEBUG
         let engineWallEntry = Date()
         DecisionSpeedDebugLog.logScoredRep(
@@ -269,6 +335,8 @@ final class DribbleOrPassEngine: ObservableObject {
         let result = DribbleOrPassRepResult(
             repIndex: repIndex,
             correct: correct,
+            decisionQuality: decisionQuality,
+            forwardLaneOpen: forwardLaneOpen,
             decisionTime: reactionTimeSeconds,
             decisionSpeed: speed,
             expectedGate: p.expectedCorrectGate,
@@ -295,7 +363,18 @@ final class DribbleOrPassEngine: ObservableObject {
         var rIdx: Int?
         switch phase {
         case .awaitingExitLog(let ri): rIdx = ri
-        case .cueVisible(let ri, _): rIdx = ri
+        case .cueVisible(let ri, _):
+            rIdx = ri
+            if ri == repIndex, let v = cueTimingDebugVisibleAt {
+                CueTimingDebugLog.logHidden(
+                    activity: "dribbleOrPass",
+                    repIndex: repIndex,
+                    visibleAt: v,
+                    hiddenAt: Date(),
+                    reason: "incorrect_before_timer"
+                )
+                cueTimingDebugVisibleAt = nil
+            }
         case .cueRevealing(let ri, _): rIdx = ri
         default: return nil
         }
@@ -313,7 +392,12 @@ final class DribbleOrPassEngine: ObservableObject {
 
         let p = plan[repIndex]
         pendingFirstTouchByRep[repIndex] = nil
-        let speed = TimingThresholds.dribblePassDecisionSpeed(for: reactionTimeSeconds)
+        let expectedArrivalTime = triggerTime.addingTimeInterval(travelTimeSeconds)
+        let decisionWindowSeconds = expectedArrivalTime.timeIntervalSince(timestamp)
+        applyAdaptiveAfterRep(wasCorrect: false, decisionWindow: decisionWindowSeconds)
+        let score = adaptiveSessionScore(including: decisionWindowSeconds, isCorrect: false)
+        let speed = classifyDecisionSpeed(windowSeconds: decisionWindowSeconds, score: score)
+        print("[DecisionWindowDebug] repIndex=\(repIndex) passTS=\(triggerTime.timeIntervalSince1970) expectedArrivalTS=\(expectedArrivalTime.timeIntervalSince1970) decisionTS=\(timestamp.timeIntervalSince1970) decisionWindowSeconds=\(decisionWindowSeconds)")
         #if DEBUG
         let engineWallEntryIncorrect = Date()
         DecisionSpeedDebugLog.logScoredRep(
@@ -326,9 +410,12 @@ final class DribbleOrPassEngine: ObservableObject {
             engineEntryWallTime: engineWallEntryIncorrect
         )
         #endif
+        let forwardLaneOpen = p.up == .open || p.up == .teammate
         let result = DribbleOrPassRepResult(
             repIndex: repIndex,
             correct: false,
+            decisionQuality: .incorrect,
+            forwardLaneOpen: forwardLaneOpen,
             decisionTime: reactionTimeSeconds,
             decisionSpeed: speed,
             expectedGate: p.expectedCorrectGate,
@@ -361,6 +448,27 @@ final class DribbleOrPassEngine: ObservableObject {
     }
 
     deinit { cancelTimers() }
+
+    private var travelTimeSeconds: Double {
+        CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds
+            ?? config.difficulty.passTempo.expectedBallTravelTime(distanceMeters: 11.0)
+    }
+
+    private func applyAdaptiveAfterRep(wasCorrect: Bool, decisionWindow: Double) {
+        updateAdaptiveState(state: &adaptiveState, wasCorrect: wasCorrect, decisionWindow: decisionWindow)
+        sessionAdaptiveDifficulty = adjustDifficulty(state: &adaptiveState, current: sessionAdaptiveDifficulty)
+    }
+
+    private func adaptiveSessionScore(including newWindow: Double, isCorrect: Bool) -> Int {
+        let existingWindows = repDecisions.map(\.decisionWindowSeconds)
+        let windows = existingWindows + [newWindow]
+        let existingCorrect = repDecisions.filter(\.isCorrect).count
+        let correct = existingCorrect + (isCorrect ? 1 : 0)
+        let total = windows.count
+        guard total > 0 else { return 70 }
+        let accuracy = Double(correct) / Double(total)
+        return DecisionTimingModel.decisionScore(accuracy: accuracy, windows: windows, activity: .dribbleOrPass)
+    }
 }
 
 // MARK: - Partner relay reconnect checkpoint (no scoring impact)

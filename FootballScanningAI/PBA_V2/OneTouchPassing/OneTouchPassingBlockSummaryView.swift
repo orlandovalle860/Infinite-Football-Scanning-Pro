@@ -19,7 +19,7 @@ struct OneTouchPassingBlockSummaryView: View {
     @EnvironmentObject private var router: AppRouter
     @Environment(\.dismiss) private var dismiss
     @State private var didSave = false
-    @State private var showSessionFeedback = true
+    @State private var showSessionFeedback = false
     @State private var showDetails = false
     @State private var navigateToNewBlock = false
     @State private var navigateToCurriculum = false
@@ -37,12 +37,52 @@ struct OneTouchPassingBlockSummaryView: View {
         OneTouchBlockResult.from(repResults: results)
     }
 
-    /// Decision Speed Score (0–100) from correctness and reaction times.
-    /// One-Touch uses a wider timing curve: (1600ms - rt)/1200, clamped to 0...1.
     private var decisionSpeedScoreValue: Int? {
-        let ms = results.map { Int($0.decisionTime * 1000) }
-        let correct = results.map(\.correct)
-        return DecisionSpeedScore.oneTouchSessionScore(reactionTimesMs: ms, correct: correct)
+        guard !results.isEmpty else { return nil }
+        let accuracy = Double(blockResult.correctCount) / Double(results.count)
+        return DecisionTimingModel.decisionScore(accuracy: accuracy, windows: decisionWindowSeconds, activity: .oneTouchPassing)
+    }
+
+    private var integratedDecisionScore: Double {
+        guard !results.isEmpty else { return 0 }
+        let accuracy = Double(blockResult.correctCount) / Double(results.count)
+        let speedValues = decisionWindowSeconds.map { window -> Double in
+            if window > 0.25 { return 1.0 }
+            if window > 0 { return 0.85 }
+            return 0.4
+        }
+        let avgSpeed = speedValues.reduce(0, +) / Double(speedValues.count)
+        return ((accuracy * 0.70) + (avgSpeed * 0.30)) * 100.0
+    }
+
+    private var travelTimeSeconds: Double {
+        CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds
+            ?? config.difficulty.passTempo.expectedBallTravelTime(distanceMeters: 11.0)
+    }
+
+    private var decisionWindowSeconds: [Double] {
+        results.map { travelTimeSeconds - $0.decisionTime }
+    }
+
+    private var decisionWindowSpeedCounts: SessionSpeedCounts {
+        var fast = 0
+        var medium = 0
+        var slow = 0
+        for window in decisionWindowSeconds {
+            if window > 0.25 {
+                fast += 1
+            } else if window > 0 {
+                medium += 1
+            } else {
+                slow += 1
+            }
+        }
+        return SessionSpeedCounts(fast: fast, medium: medium, slow: slow)
+    }
+
+    private var avgDecisionWindow: Double {
+        guard !decisionWindowSeconds.isEmpty else { return 0 }
+        return decisionWindowSeconds.reduce(0, +) / Double(decisionWindowSeconds.count)
     }
 
     private var performanceLabel: String {
@@ -106,7 +146,7 @@ struct OneTouchPassingBlockSummaryView: View {
             if biasDirection == nil {
                 return "Good. You're using the whole field."
             }
-            return "Good. You're playing before the ball arrives."
+            return "Good. You're playing before expected arrival."
         }
         if c >= 8 {
             return "You're finding options. Stay consistent."
@@ -136,11 +176,12 @@ struct OneTouchPassingBlockSummaryView: View {
             activityType: .oneTouchPassing,
             correctCount: blockResult.correctCount,
             totalReps: 12,
-            speedCounts: SessionSpeedCounts(fast: blockResult.fastCount, medium: blockResult.mediumCount, slow: blockResult.slowCount),
-            avgDecisionTime: blockResult.averageDecisionTime,
+            speedCounts: decisionWindowSpeedCounts,
+            avgDecisionTime: avgDecisionWindow,
             biasDirection: biasDirection,
             directionCounts: blockResult.directionCounts,
             difficulty: config.difficulty,
+            decisionTotalScore: integratedDecisionScore,
             forwardChoiceCount: forwardChoiceCount,
             forwardOpportunityCount: forwardOpportunityCount,
             decisionTimeStdDev: blockResult.decisionTimeStdDev
@@ -160,29 +201,8 @@ struct OneTouchPassingBlockSummaryView: View {
 
     var body: some View {
         Group {
-            if showSessionFeedback {
-                TrainingCompleteFeedbackView(
-                    activityName: "One-Touch Passing",
-                    activityKind: .oneTouchPassing,
-                    correct: blockResult.correctCount,
-                    total: 12,
-                    firstTouchAccuracy: nil,
-                    decisionSpeedLabel: decisionSpeedComparisonLabel(current: speedBucket, previous: previousBlockSpeedBucket),
-                    avgDecisionTimeSeconds: blockResult.averageDecisionTime,
-                    decisionSpeedScore: decisionSpeedScoreValue,
-                    previousDecisionSpeedScore: previousSessionForComparison?.decisionSpeedScore,
-                    previousAvgReactionTimeSeconds: previousSessionForComparison?.avgLatency,
-                    previousCorrect: previousSessionForComparison?.correct,
-                    previousTotal: previousSessionForComparison?.decisionsCompleted,
-                    personalBest: personalBestScore,
-                    isNewPersonalBest: isNewPersonalBestForDecisionSpeed,
-                    coachFeedback: sessionFeedbackCoachSentence,
-                    sessionResultForDebrief: sessionResult,
-                    previousSessionRecordForDebrief: previousSessionForComparison,
-                    onContinue: { showSessionFeedback = false }
-                )
-            } else if let s = sessionResultForSummary {
-                SessionSummaryView(
+            if let s = sessionResultForSummary {
+                SessionSummaryScreenView(
                     session: s,
                     playerName: profileManager.currentProfile?.name ?? "Player",
                     isNewPersonalBest: isNewPersonalBestForSummary,
@@ -195,11 +215,11 @@ struct OneTouchPassingBlockSummaryView: View {
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
-            } else {
-                blockSummaryContent
             }
+            else { blockSummaryContent }
         }
         .onAppear {
+            PBASessionFlowPolicy.handleResultsPresented()
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
             AnalyticsManager.shared.track(.trainingSessionCompleted, playerId: playerStore.selectedPlayerId)
             guard !didSave else { return }
@@ -283,8 +303,10 @@ struct OneTouchPassingBlockSummaryView: View {
             }
             let playerId = record.playerId ?? playerStore.selectedPlayerId
             let activityName = record.activity.rawValue
+            let travelTimeSeconds = CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds
+                ?? config.difficulty.passTempo.expectedBallTravelTime(distanceMeters: 11.0)
             for r in results {
-                let reactionTimeMs = Int(r.decisionTime * 1000)
+                let reactionTimeMs = Int((travelTimeSeconds - r.decisionTime) * 1000)
                 if reactionTimeMs > SupabaseDecisionService.maxReactionTimeMs { continue }
                 let decision = Decision(
                     sessionId: sessionId,

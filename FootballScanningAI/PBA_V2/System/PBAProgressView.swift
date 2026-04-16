@@ -111,7 +111,7 @@ struct PBAProgressView: View {
             playerSwitcherSheet
         }
         .navigationDestination(item: $selectedSessionResult) { session in
-            SessionSummaryView(session: session, playerName: profileManager.currentProfile?.name ?? "Player", profileManager: profileManager, settingsViewModel: settingsViewModel)
+            SessionSummaryScreenView(session: session, playerName: profileManager.currentProfile?.name ?? "Player", profileManager: profileManager, settingsViewModel: settingsViewModel)
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)

@@ -57,7 +57,7 @@ enum TrainingRecommendationModel {
             return TrainingRecommendationContent(
                 logKey: "reactive",
                 primaryTitle: "Train winning your pocket moment earlier.",
-                primaryBody: "See the picture before the ball arrives.",
+                primaryBody: "See the picture before expected arrival.",
                 activities: [
                     (title: "Playing Away From Pressure", detail: "Play away from pressure with a clear first action."),
                     (title: "2-Minute Test", detail: "Repeat and aim for earlier decisions.")

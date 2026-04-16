@@ -253,7 +253,7 @@ struct PlayerReportCardView: View {
             forwardThinkingPercent: 56,
             forwardThinkingTier: "Strong",
             forwardThinkingMessage: "Good forward intent — keep scanning for forward options.",
-            coachingInsight: "Your development is on track. Focus on deciding before the ball arrives. Recommended next: Playing Away From Pressure—build consistent early decisions."
+            coachingInsight: "Your development is on track. Focus on deciding before expected arrival. Recommended next: Playing Away From Pressure—build consistent early decisions."
         ))
     }
 }

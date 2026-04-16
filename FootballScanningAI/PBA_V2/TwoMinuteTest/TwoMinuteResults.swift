@@ -26,7 +26,7 @@ enum PlayerType: String, Codable {
 
     var tagline: String {
         switch self {
-        case .reactor: return "Decides after the ball arrives."
+        case .reactor: return "Decides after expected arrival."
         case .scanner: return "Sees pressure, commits late."
         case .anticipator: return "Reads pressure early."
         case .playmaker: return "Decides early and plays fast."
@@ -89,17 +89,21 @@ struct TwoMinuteTestResult: Identifiable, Hashable {
         var timeCount = 0
         let forwardOpportunityCount = logs.filter { $0.ballGate == .up }.count
         let forwardChoiceCount = logs.filter { $0.ballGate == .up && $0.correct }.count
+        let windows = logs.compactMap { $0.decisionWindowSeconds(activity: .twoMinuteTest, difficulty: difficulty) }
+        let accuracy = totalReps > 0 ? Double(correctCount) / Double(totalReps) : 0
+        let adaptiveScore = DecisionTimingModel.decisionScore(accuracy: accuracy, windows: windows, activity: .twoMinuteTest)
 
         for log in logs {
-            let t = log.exitLoggedAt.timeIntervalSince(log.passTriggeredAt ?? log.infoShownAt)
-            switch TimingThresholds.speedBucket(for: t, activity: .twoMinuteTest) {
-            case .fast: fast += 1
-            case .medium: medium += 1
-            case .slow: slow += 1
+            if let window = log.decisionWindowSeconds(activity: .twoMinuteTest, difficulty: difficulty) {
+                switch DecisionTimingModel.speedBucket(forDecisionWindow: window, activity: .twoMinuteTest, score: adaptiveScore) {
+                case .fast: fast += 1
+                case .medium: medium += 1
+                case .slow: slow += 1
+                }
             }
             directionCounts[log.exitedGate, default: 0] += 1
-            if log.passTriggeredAt != nil {
-                totalTime += log.exitLoggedAt.timeIntervalSince(log.passTriggeredAt!)
+            if let window = log.decisionWindowSeconds(activity: .twoMinuteTest, difficulty: difficulty) {
+                totalTime += window
                 timeCount += 1
             }
         }
@@ -174,13 +178,13 @@ enum TwoMinuteCoachInsight {
         var base: String
         switch type {
         case .playmaker:
-            base = "Elite timing. You're deciding early and playing fast—keep scanning on the critical check before the pass arrives."
+            base = "You're deciding early and playing fast. Keep it simple and repeat the same quality reps."
         case .anticipator:
             base = "Strong awareness. You're reading pressure early—keep committing sooner so your first action matches your plan."
         case .scanner:
-            base = "Good scanning. Next step is deciding earlier before the ball arrives so your execution matches what you intended."
+            base = "Good scanning. Next step is deciding earlier before expected arrival so your execution matches what you intended."
         case .reactor:
-            base = "You're reacting after the ball arrives. Slow your feet, scan both shoulders earlier, and commit to a first decision before receiving."
+            base = "You're reacting after expected arrival. Slow your feet, scan both shoulders earlier, and commit to a first decision before receiving."
         }
 
         if let bias = bias {
@@ -196,7 +200,7 @@ enum TwoMinuteCoachInsight {
 enum TwoMinuteRecommendedNext {
     static func recommendedNext(for type: PlayerType, slow: Int, correct: Int, total: Int, bias: Gate?) -> (activity: ActivityKind, focus: String) {
         var activity: ActivityKind = .awayFromPressure
-        var focus = "decide earlier before the ball arrives"
+        var focus = "decide earlier before expected arrival"
 
         if type == .playmaker || type == .anticipator {
             activity = .dribbleOrPass

@@ -109,7 +109,7 @@ struct ProgressLineChartView: View {
                 .frame(width: paddingLeft - 4, height: chartH)
                 .padding(.top, paddingTop)
 
-                // Horizontal line at 0 s when the axis crosses zero (before vs after arrival).
+                // Horizontal line at 0 s when the axis crosses zero (before vs after expected arrival).
                 if valueLabel == "s", range.min < 0, range.max > 0 {
                     let scaleY = range.max > range.min ? chartH / CGFloat(range.max - range.min) : 1
                     let yZero = paddingTop + CGFloat(range.max) * scaleY

@@ -288,7 +288,7 @@ enum CoachInsightGenerator {
                 return [
                     "Scan for pressure as the pass is released, then choose the opposite lane before your first touch.",
                     "Find the pressure shoulder early when the cue appears, then turn out away from it immediately.",
-                    "Identify the safe direction before arrival, then play away from pressure on first contact."
+                    "Identify the safe direction before expected arrival, then play away from pressure on first contact."
                 ]
             case (.awayFromPressure, .sharp):
                 return [
@@ -304,7 +304,7 @@ enum CoachInsightGenerator {
                 ]
             case (.dribbleOrPass, .lateCorrect):
                 return [
-                    "Spot the defender and support line before the ball arrives, then choose dribble or pass on first contact.",
+                    "Spot the defender and support line before expected arrival, then choose dribble or pass on first contact.",
                     "Read the pressure picture during ball travel, then commit to the clear option without extra touches.",
                     "Identify the best option early when the cue appears, then execute it immediately on reception."
                 ]
@@ -322,7 +322,7 @@ enum CoachInsightGenerator {
                 ]
             case (.dribbleOrPass, .sharp):
                 return [
-                    "Keep reading the situation before arrival, then execute the right option instantly under pressure.",
+                    "Keep reading the situation before expected arrival, then execute the right option instantly under pressure.",
                     "Maintain your early cue recognition every rep, then commit to the correct action with one touch.",
                     "Repeat your pre-receive scan pattern, then pick the right dribble-or-pass choice at match tempo."
                 ]
@@ -334,13 +334,13 @@ enum CoachInsightGenerator {
                 ]
             case (.oneTouchPassing, .lateCorrect):
                 return [
-                    "Picture your next pass before the ball arrives, then play one-touch to the chosen target immediately.",
+                    "Picture your next pass before expected arrival, then play one-touch to the chosen target immediately.",
                     "Set your body and target during ball travel, then release one-touch without a decision delay.",
                     "Read the next action early before contact, then let your first touch be the pass."
                 ]
             case (.oneTouchPassing, .fastIncorrect):
                 return [
-                    "Choose the target before arrival, then keep one-touch tempo only on the correct option.",
+                    "Choose the target before expected arrival, then keep one-touch tempo only on the correct option.",
                     "Confirm the right one-touch lane during your scan, then pass first-time with quality.",
                     "Set your passing picture before contact, then play one-touch only to the best target."
                 ]
@@ -348,7 +348,7 @@ enum CoachInsightGenerator {
                 return [
                     "Decide your one-touch target as the pass travels, then release before a second thought appears.",
                     "Pre-shape to the right lane before reception, then play the first-time pass on touch one.",
-                    "Take your final scan before the ball arrives, then execute one-touch to the planned target."
+                    "Take your final scan before expected arrival, then execute one-touch to the planned target."
                 ]
             case (.oneTouchPassing, .sharp):
                 return [
@@ -376,20 +376,20 @@ enum CoachInsightGenerator {
                 ]
             case (.twoMinuteTest, .lateIncorrect):
                 return [
-                    "Set your decision while the ball is traveling each rep, then execute before arrival.",
+                    "Set your decision while the ball is traveling each rep, then execute before expected arrival.",
                     "Scan earlier when each trigger starts, then commit before pressure closes your window.",
                     "Lock the action in your last pre-arrival look, then execute immediately on contact."
                 ]
             case (.twoMinuteTest, .sharp):
                 return [
-                    "Keep your early scan routine on every rep, then execute before arrival with the same quality.",
+                    "Keep your early scan routine on every rep, then execute before expected arrival with the same quality.",
                     "Repeat your pre-arrival decision habit each trigger, then maintain clean execution at speed.",
                     "Hold your balanced process each rep, then finish with early, correct decisions."
                 ]
             case (.twoMinuteTest, .inconsistent):
                 return [
                     "Use the same pre-arrival scan checklist every rep, then commit to one clear decision.",
-                    "Stabilize your decision routine when each trigger appears, then execute before arrival.",
+                    "Stabilize your decision routine when each trigger appears, then execute before expected arrival.",
                     "Keep one repeatable early-read process each rep, then finish with a single committed action."
                 ]
             }
@@ -400,7 +400,7 @@ enum CoachInsightGenerator {
         if shouldUseNextStepAnchor(session: session, state: state, modifiers: modifiers) {
             let anchors = [
                 "Speed of play is speed of thought.",
-                "The window closes before the ball arrives.",
+                "The window closes before expected arrival.",
                 "Your last look should confirm, not decide."
             ]
             let aidx = variationIndex(session: session, salt: 1459 + stateSalt(state), count: anchors.count)
@@ -506,7 +506,7 @@ enum CoachInsightGenerator {
         switch theme {
         case .afpEscapeEarly:
             return ThemeLines(
-                anchor: "The window of opportunity closes before the ball arrives.",
+                anchor: "The window of opportunity closes before expected arrival.",
                 supporting: [
                     "In AFP, read pressure early and decide opposite before the lane closes.",
                     "Turn away from pressure sooner so your first action creates space.",
@@ -516,7 +516,7 @@ enum CoachInsightGenerator {
             )
         case .afpCommitOpposite:
             return ThemeLines(
-                anchor: "Decide before the ball arrives.",
+                anchor: "Decide before expected arrival.",
                 supporting: [
                     "Your first look should confirm, not decide.",
                     "Commit to the opposite direction on first action, not after contact.",
@@ -565,7 +565,7 @@ enum CoachInsightGenerator {
             )
         case .otpPreDecide:
             return ThemeLines(
-                anchor: "Decide before the ball arrives.",
+                anchor: "Decide before expected arrival.",
                 supporting: [
                     "In one-touch, pre-decide the next action before contact.",
                     "One-touch speed comes from earlier pictures, not faster feet.",
@@ -575,7 +575,7 @@ enum CoachInsightGenerator {
             )
         case .otpTempoAndQuality:
             return ThemeLines(
-                anchor: "One-touch only works if your decision is made before the ball arrives.",
+                anchor: "One-touch only works if your decision is made before expected arrival.",
                 supporting: [
                     "Excellent one-touch rhythm - keep the same speed with clean choices.",
                     "Your tempo is good; keep confirming early so execution stays sharp.",
@@ -605,7 +605,7 @@ enum CoachInsightGenerator {
             )
         case .testComposure:
             return ThemeLines(
-                anchor: "The window of opportunity closes before the ball arrives.",
+                anchor: "The window of opportunity closes before expected arrival.",
                 supporting: [
                     "Your timing swings between reps - settle rhythm and keep your scans early.",
                     "Calm feet and clear eyes will make your test results more reliable.",
@@ -615,7 +615,7 @@ enum CoachInsightGenerator {
             )
         case .genericConsistency:
             return ThemeLines(
-                anchor: "Decide before the ball arrives.",
+                anchor: "Decide before expected arrival.",
                 supporting: [
                     "Keep your process stable rep to rep: early scan, clear cue, committed action.",
                     "Good moments are there - now make them repeatable.",
@@ -665,8 +665,8 @@ enum CoachInsightGenerator {
             let delta = currWindow - prevWindow
             if abs(delta) >= 0.02 {
                 detail += delta > 0
-                    ? ", \(String(format: "+%.2fs", delta)) more time before arrival vs prior same-activity session"
-                    : ", \(String(format: "%.2fs", delta)) less time before arrival vs prior same-activity session"
+                    ? ", \(String(format: "+%.2fs", delta)) more time before expected arrival vs prior same-activity session"
+                    : ", \(String(format: "%.2fs", delta)) less time before expected arrival vs prior same-activity session"
             }
         }
         return detail

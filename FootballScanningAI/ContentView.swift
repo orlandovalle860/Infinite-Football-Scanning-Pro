@@ -3731,6 +3731,7 @@ enum TwoMinuteTestHelperSelection: Hashable {
 }
 
 struct TwoMinuteRoleSelectionView: View {
+    private static let globalLastRoleKey = "pba.lastSelectedDeviceRole"
     private enum SavedTwoMinuteRole: String {
         case display
         case coachRemote
@@ -3744,6 +3745,7 @@ struct TwoMinuteRoleSelectionView: View {
     @EnvironmentObject private var playerStore: PlayerStore
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
     @EnvironmentObject private var router: AppRouter
+    @AppStorage("userMode") private var userMode: String = "coach"
     @State private var showTrainingModeSelection = false
     @State private var savedRole: SavedTwoMinuteRole?
     @State private var showFullRoleSelection = false
@@ -3829,6 +3831,7 @@ struct TwoMinuteRoleSelectionView: View {
                 VStack(spacing: 16) {
                     Button {
                         saveLastRole(.display)
+                        userMode = "solo"
                         showTrainingModeSelection = true
                     } label: {
                         VStack(alignment: .leading, spacing: 6) {
@@ -3837,7 +3840,7 @@ struct TwoMinuteRoleSelectionView: View {
                                 Text("Display")
                                     .font(.system(size: 20, weight: .bold, design: .rounded))
                             }
-                            Text("This device shows the grid and ball. Place it behind the player.")
+                            Text("This device shows the ball cues. Place it behind the player.")
                                 .font(.footnote)
                                 .foregroundColor(.black.opacity(0.8))
                                 .multilineTextAlignment(.leading)
@@ -3855,6 +3858,7 @@ struct TwoMinuteRoleSelectionView: View {
 
                     Button {
                         saveLastRole(.coachRemote)
+                        userMode = "coach"
                         router.push(.coachRemote)
                     } label: {
                         VStack(alignment: .leading, spacing: 6) {
@@ -3899,7 +3903,9 @@ struct TwoMinuteRoleSelectionView: View {
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            if let raw = UserDefaults.standard.string(forKey: Self.lastRoleKey) {
+            if let raw = UserDefaults.standard.string(forKey: Self.globalLastRoleKey) {
+                savedRole = SavedTwoMinuteRole(rawValue: raw)
+            } else if let raw = UserDefaults.standard.string(forKey: Self.lastRoleKey) {
                 savedRole = SavedTwoMinuteRole(rawValue: raw)
             } else {
                 savedRole = nil
@@ -3925,14 +3931,17 @@ struct TwoMinuteRoleSelectionView: View {
         switch role {
         case .display:
             saveLastRole(.display)
+            userMode = "solo"
             showTrainingModeSelection = true
         case .coachRemote:
             saveLastRole(.coachRemote)
+            userMode = "coach"
             router.push(.coachRemote)
         }
     }
 
     private func saveLastRole(_ role: SavedTwoMinuteRole) {
+        UserDefaults.standard.set(role.rawValue, forKey: Self.globalLastRoleKey)
         UserDefaults.standard.set(role.rawValue, forKey: Self.lastRoleKey)
         savedRole = role
     }

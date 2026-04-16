@@ -55,21 +55,21 @@ final class AwayFromPressureEngine: ObservableObject {
         case .waitingForNextRep:
             instructionTitle = "Waiting for coach…"
             if trainingMode == .partner {
-                instructionSubtitle = "\(ActivityInstructionData.partnerCoachSetupLine)\n\(ActivityInstructionData.partnerCoachBallLine)"
+                instructionSubtitle = ""
             } else {
                 instructionSubtitle = "Keep moving. Check both shoulders."
             }
         case .armedScanning:
             instructionTitle = "Scan"
             if trainingMode == .partner {
-                instructionSubtitle = "\(ActivityInstructionData.partnerPlayerBeepLine)\n\(ActivityInstructionData.timingLine)"
+                instructionSubtitle = ""
             } else {
                 instructionSubtitle = "Scan for pressure.\nIdentify the safest space."
             }
         case .beepedAwaitingPass:
             instructionTitle = "Ball is coming"
             instructionSubtitle = trainingMode == .partner
-                ? ActivityInstructionData.partnerCoachPassTimingLine
+                ? ""
                 : "Coach: press PASS at the strike."
         case .markerVisible:
             instructionTitle = "Swipe now"

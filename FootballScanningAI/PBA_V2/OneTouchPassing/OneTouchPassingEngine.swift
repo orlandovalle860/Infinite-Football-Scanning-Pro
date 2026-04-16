@@ -70,24 +70,24 @@ final class OneTouchPassingEngine: ObservableObject {
         case .waitingForNextRep:
             instructionTitle = "Waiting for coach…"
             if trainingMode == .partner {
-                instructionSubtitle = "\(ActivityInstructionData.partnerCoachSetupLine)\n\(ActivityInstructionData.partnerCoachBallLine)"
+                instructionSubtitle = ""
             } else {
                 instructionSubtitle = "Scan the field."
             }
         case .armedScanning:
             instructionTitle = "Scan freely"
             if trainingMode == .partner {
-                instructionSubtitle = "\(ActivityInstructionData.partnerPlayerBeepLine)\n\(ActivityInstructionData.timingLine)\nCHECK is coming."
+                instructionSubtitle = ""
             } else {
                 instructionSubtitle = "Scan multiple options early.\nCHECK is coming."
             }
         case .showingCheck:
             instructionTitle = "CHECK"
-            instructionSubtitle = trainingMode == .partner ? ActivityInstructionData.timingLine : "Ball is coming…"
+            instructionSubtitle = trainingMode == .partner ? "" : "Ball is coming…"
         case .awaitingPassTrigger:
             instructionTitle = "Ball is coming…"
             instructionSubtitle = trainingMode == .partner
-                ? ActivityInstructionData.partnerCoachPassTimingLine
+                ? ""
                 : "Coach: press PASS at the strike."
         case .cueRevealing:
             instructionTitle = "Decide now"

@@ -23,8 +23,6 @@ enum MetricExplanations {
             return "Measures how often you both decide early and follow through in the direction you chose."
         case "Status":
             return "Shows whether your overall efficiency is improving, stable, or declining over recent sessions."
-        case "Decision Score":
-            return "Reflects how well your recent decisions match the right option and timing."
         case "Away-from-pressure accuracy", "Pressure Escape Rate":
             return "Your accuracy choosing the correct direction away from pressure on the first decision (Playing Away From Pressure)."
         default:

@@ -34,8 +34,6 @@ struct DribbleOrPassDisplaySessionView: View {
     @State private var partnerCalibration = PartnerPassTempoCalibrationTracker()
     @State private var showConnectedConfirmation = false
     @State private var hasStartedConnectedToCalibrationTransition = false
-    @State private var milestoneNudgeText: String?
-    @State private var lastNudgeRepCount: Int = -1
     /// True while ``SessionCountdownModifier`` shows 3–2–1–Go; coach drill messages must not advance the engine until the drill is visible.
     @State private var blockCoachDrillDuringSessionCountdown = false
     @State private var pendingCoachNextRepWhileCountdown: Int?
@@ -63,15 +61,6 @@ struct DribbleOrPassDisplaySessionView: View {
             statusOverlay
                 .opacity(statusOverlayOpacity)
             repCountOverlay
-            if let milestoneNudgeText {
-                VStack {
-                    SessionMilestoneNudgeBanner(text: milestoneNudgeText)
-                        .padding(.top, 86)
-                    Spacer()
-                }
-                .transition(.opacity)
-                .zIndex(3)
-            }
             if showExitLogButtons, let repIndex = repIndexForExit {
                 exitLogOverlay(repIndex: repIndex)
                     .zIndex(2)
@@ -106,9 +95,6 @@ struct DribbleOrPassDisplaySessionView: View {
                 preloadBeepAssetsForInstantReveal()
             }
             if case .beepedAwaitingPass = newPhase { playBeep() }
-            if case .waitingForNextRep = newPhase {
-                showMilestoneNudgeIfNeeded()
-            }
         }
         .onAppear {
             let coordinator = TrainingPartnerConnectionCoordinator.shared
@@ -577,36 +563,6 @@ struct DribbleOrPassDisplaySessionView: View {
                     Spacer()
                 }
                 .allowsHitTesting(false)
-            }
-        }
-    }
-
-    private func showMilestoneNudgeIfNeeded() {
-        let completed = engine.repResults.count
-        guard completed > 0, completed != lastNudgeRepCount else { return }
-
-        let earlyCount = engine.repResults.filter { $0.decisionSpeed == .fast }.count
-        let score = Int(round((Double(engine.repResults.filter(\.correct).count) / Double(max(1, completed))) * 100.0))
-        let streak = profileManager.currentProfile?.sessionStreakCount ?? 0
-        let targetReps = 12
-
-        guard let text = SessionMilestoneNudgeEvaluator.nextNudge(
-            score: score,
-            earlyCount: earlyCount,
-            completedReps: completed,
-            targetReps: targetReps,
-            sessionStreakCount: streak
-        ) else { return }
-
-        lastNudgeRepCount = completed
-        withAnimation(.easeInOut(duration: 0.2)) {
-            milestoneNudgeText = text
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            withAnimation(.easeInOut(duration: 0.25)) {
-                if milestoneNudgeText == text {
-                    milestoneNudgeText = nil
-                }
             }
         }
     }

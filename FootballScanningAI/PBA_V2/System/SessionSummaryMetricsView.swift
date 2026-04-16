@@ -51,104 +51,41 @@ struct SessionSummaryView: View {
 
     var body: some View {
         VStack(spacing: 24) {
-            VStack(spacing: 12) {
-                HStack(spacing: 10) {
-                    Image(systemName: visual.icon)
-                        .font(.title2.weight(.semibold))
-                    Text(visual.title)
-                        .font(.title2)
-                        .bold()
-                }
-                .padding()
-                .frame(maxWidth: .infinity)
-                .background(visual.color.opacity(0.15))
-                .foregroundColor(visual.color)
-                .cornerRadius(18)
-
+            VStack(spacing: 8) {
                 Text("Score: \(score)")
                     .font(.largeTitle)
                     .bold()
                     .foregroundColor(.white)
-            }
-
-            HStack(spacing: 8) {
-                ForEach(tags) { tag in
-                    HStack(spacing: 6) {
-                        Image(systemName: tag.icon)
-                            .font(.caption.weight(.semibold))
-                        Text(tag.label)
-                    }
-                    .font(.caption)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(tag.color.opacity(0.15))
-                    .foregroundColor(tag.color)
-                    .cornerRadius(12)
-                }
-            }
-            .frame(maxWidth: .infinity)
-
-            summaryDivider
-
-            VStack(spacing: 12) {
-                MetricRow(label: "Accuracy", value: "\(Int(accuracy * 100))%")
-                MetricRow(label: "Avg Decision Time", value: String(format: "%.2fs", avgDecisionTime))
-                MetricRow(label: "Decision Window", value: String(format: "%.2fs", decisionWindow))
-                Text(DecisionTimingModel.timingContextLabel)
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.6))
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-            }
-
-            summaryDivider
-
-            VStack(alignment: .leading, spacing: 8) {
-                MetricRow(label: "Timing Score", value: "\(timingBreakdown.scorePercent) (\(timingBreakdown.scoreBand))")
-                MetricRow(label: "Early", value: "\(timingBreakdown.earlyCount)")
-                MetricRow(label: "On Time", value: "\(timingBreakdown.onTimeCount)")
-                MetricRow(label: "Late", value: "\(timingBreakdown.lateCount)")
-                Text(timingBreakdown.averageTimingLabel)
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.78))
-                Text(timingBreakdown.feedback)
-                    .font(.subheadline.weight(.semibold))
+                Text("Level: \(level)")
+                    .font(.title3.weight(.semibold))
                     .foregroundColor(.white.opacity(0.92))
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(timingBreakdown.progressionHint)
-                    .font(.caption)
-                    .foregroundColor(.cyan.opacity(0.9))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            summaryDivider
-
-            VStack(alignment: .leading, spacing: 8) {
-                MetricRow(label: "Level", value: level)
-                Text(shortFeedback)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.white.opacity(0.92))
-                    .fixedSize(horizontal: false, vertical: true)
-                Text("Tempo guidance: \(tempoGuidance)")
-                    .font(.caption)
-                    .foregroundColor(.cyan.opacity(0.9))
-                    .fixedSize(horizontal: false, vertical: true)
-                if let suggestion = progressionSuggestion {
-                    Text(suggestion)
-                        .font(.caption)
-                        .foregroundColor(.yellow.opacity(0.95))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
             }
 
             summaryDivider
 
             Text(message)
-                .font(.body)
+                .font(.body.weight(.semibold))
                 .foregroundColor(.white.opacity(0.92))
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
 
             summaryDivider
+
+            VStack(spacing: 10) {
+                MetricRow(label: "Accuracy", value: "\(Int(accuracy * 100))%")
+                MetricRow(label: "Avg Time", value: String(format: "%.1fs", avgDecisionTime))
+            }
+
+            summaryDivider
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Timing")
+                    .font(.headline)
+                    .foregroundColor(.white.opacity(0.95))
+                MetricRow(label: "Early", value: "\(timingBreakdown.earlyCount)")
+                MetricRow(label: "On Time", value: "\(timingBreakdown.onTimeCount)")
+                MetricRow(label: "Late", value: "\(timingBreakdown.lateCount)")
+            }
 
             VStack(spacing: 8) {
                 Text("Next Focus")

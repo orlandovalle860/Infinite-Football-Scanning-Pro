@@ -65,9 +65,9 @@ enum StageSessionRecommendationEngine {
             return StageSessionRecommendation(
                 tiedSessionId: tiedSessionId,
                 stage: .awayFromPressure,
-                activity: "3v1 in wide space",
+                activity: "Clear first reads",
                 focusTag: .clarity,
-                message: "Start with Playing Away From Pressure — 3v1 in wide space so the first read is obvious."
+                message: "Start with Playing Away From Pressure — keep the first read obvious and early."
             )
         case .dribbleOrPass:
             return StageSessionRecommendation(
@@ -96,9 +96,9 @@ enum StageSessionRecommendationEngine {
             return StageSessionRecommendation(
                 tiedSessionId: tiedSessionId,
                 stage: .awayFromPressure,
-                activity: "3v1 in wide space",
+                activity: "Clear first reads",
                 focusTag: .clarity,
-                message: "Stay in Playing Away From Pressure — simplify the picture (3v1, wide space) until reads stay clean."
+                message: "Stay in Playing Away From Pressure — simplify the picture until first reads stay clean."
             )
         case (.awayFromPressure, .speed):
             return StageSessionRecommendation(
@@ -112,9 +112,9 @@ enum StageSessionRecommendationEngine {
             return StageSessionRecommendation(
                 tiedSessionId: tiedSessionId,
                 stage: .awayFromPressure,
-                activity: "2v2 tight grid",
+                activity: "Constraint progression",
                 focusTag: .constraint,
-                message: "Stay in Playing Away From Pressure — use a 2v2 tight grid to sharpen decisions in tight space."
+                message: "Stay in Playing Away From Pressure — add constraints to sharpen first decisions under pressure."
             )
 
         case (.dribbleOrPass, .clarity):

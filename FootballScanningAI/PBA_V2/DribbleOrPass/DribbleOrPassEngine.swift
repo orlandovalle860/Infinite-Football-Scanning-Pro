@@ -55,21 +55,21 @@ final class DribbleOrPassEngine: ObservableObject {
         case .waitingForNextRep:
             instructionTitle = "Waiting for coach…"
             if trainingMode == .partner {
-                instructionSubtitle = "\(ActivityInstructionData.partnerCoachSetupLine)\n\(ActivityInstructionData.partnerCoachBallLine)"
+                instructionSubtitle = ""
             } else {
                 instructionSubtitle = "Keep moving. Check both shoulders."
             }
         case .armedScanning:
             instructionTitle = "Scan freely"
             if trainingMode == .partner {
-                instructionSubtitle = "\(ActivityInstructionData.partnerPlayerBeepLine)\n\(ActivityInstructionData.timingLine)"
+                instructionSubtitle = ""
             } else {
                 instructionSubtitle = "Scan before expected arrival."
             }
         case .beepedAwaitingPass:
             instructionTitle = "Ball is coming"
             instructionSubtitle = trainingMode == .partner
-                ? ActivityInstructionData.partnerCoachPassTimingLine
+                ? ""
                 : "Coach: press PASS at the strike."
         case .cueRevealing:
             instructionTitle = "Decide now"
@@ -87,7 +87,7 @@ final class DribbleOrPassEngine: ObservableObject {
     }
 
     func onNextRep(repIndex: Int) {
-        guard phase != .blockComplete else { return }
+        guard phase == .waitingForNextRep else { return }
         guard repIndex >= 0, repIndex < plan.count else {
             if repIndex >= plan.count {
                 phase = .blockComplete
@@ -95,8 +95,6 @@ final class DribbleOrPassEngine: ObservableObject {
             }
             return
         }
-        // Ignore stale rep indices, but allow same/newer indices to resync if coach and display drift.
-        guard repIndex >= currentRepIndex else { return }
         currentRepIndex = repIndex
         passTriggeredAt = nil
         passTriggeredByRep[repIndex] = nil

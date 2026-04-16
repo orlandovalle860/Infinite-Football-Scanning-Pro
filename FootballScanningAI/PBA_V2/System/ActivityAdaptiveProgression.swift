@@ -103,8 +103,8 @@ func makeActivityAdaptiveSnapshot(from allRecentSessions: [SessionResult]) -> Ac
     } else if avgLatePercentage < 0.25, avgScore > 75 {
         plan = ActivityAdaptivePlan(
             level: .strong,
-            focusCue: "Handle immediate pressure in tighter space.",
-            constraintsSummary: "Immediate pressure, tighter space, one-touch only",
+            focusCue: "Handle immediate pressure with less time.",
+            constraintsSummary: "Immediate pressure, less time, one-touch only",
             recommendedDifficulty: .advanced,
             modifiers: DifficultySettings(cueDuration: 0.90, travelTime: 0.92, thresholdAdjustment: -0.05)
         )

@@ -36,3 +36,39 @@ func onAppearPopToRootIfRequested(trigger: PopToRootTrigger, dismiss: DismissAct
         dismiss()
     }
 }
+
+extension View {
+    @MainActor
+    func asImage() -> UIImage {
+        if #available(iOS 16.0, *) {
+            let renderer = ImageRenderer(content: self)
+            renderer.scale = UIScreen.main.scale
+            if let image = renderer.uiImage {
+                return image
+            }
+        }
+
+        // Fallback path: render through a hosting controller so first-tap shares
+        // still produce an image even when ImageRenderer is cold.
+        let controller = UIHostingController(rootView: self)
+        let view = controller.view
+        view?.backgroundColor = .clear
+
+        let targetWidth = UIScreen.main.bounds.width * 0.8
+        let fittingSize = CGSize(width: targetWidth, height: UIView.layoutFittingCompressedSize.height)
+        let targetSize = controller.sizeThatFits(in: fittingSize)
+        let safeSize = CGSize(
+            width: max(1, targetSize.width),
+            height: max(1, targetSize.height)
+        )
+
+        view?.bounds = CGRect(origin: .zero, size: safeSize)
+        view?.layoutIfNeeded()
+
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = UIScreen.main.scale
+        return UIGraphicsImageRenderer(size: safeSize, format: format).image { _ in
+            view?.drawHierarchy(in: CGRect(origin: .zero, size: safeSize), afterScreenUpdates: true)
+        }
+    }
+}

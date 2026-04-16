@@ -346,7 +346,7 @@ struct TwoMinuteCoachRemoteView: View {
                         Text("Searching for Display…")
                             .font(.subheadline)
                             .foregroundColor(.white.opacity(0.8))
-                        Text("Make sure the other device chose \"Display\" and is on the grid screen.")
+                        Text("Make sure the other device chose \"Display\" and is on the activity screen.")
                             .font(.caption)
                             .foregroundColor(.white.opacity(0.6))
                     } else {

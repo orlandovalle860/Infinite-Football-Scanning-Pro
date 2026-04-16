@@ -1186,7 +1186,7 @@ struct TwoMinuteCriticalScanSessionView: View {
                 if mode.requiresPhoneDisplayRelay {
                     phaseVStack(
                         title: "Waiting for coach…",
-                        subtitle: "\(ActivityInstructionData.partnerCoachSetupLine)\n\(ActivityInstructionData.partnerCoachBallLine)"
+                        subtitle: ""
                     )
                 } else {
                     phaseVStack(title: "Waiting for coach…", subtitle: "Keep moving. Check both shoulders.")
@@ -1202,7 +1202,7 @@ struct TwoMinuteCriticalScanSessionView: View {
                 }
             case .beepedAwaitingPass:
                 if mode.requiresPhoneDisplayRelay {
-                    phaseVStack(title: "Ball is coming", subtitle: ActivityInstructionData.partnerCoachPassTimingLine)
+                    phaseVStack(title: "Ball is coming", subtitle: "")
                 } else {
                     phaseVStack(title: "Ball is coming", subtitle: "Swipe your decision as soon as the ball arrives.")
                 }
@@ -1225,10 +1225,12 @@ struct TwoMinuteCriticalScanSessionView: View {
             Text(title)
                 .font(.title2.weight(.semibold))
                 .foregroundColor(.white.opacity(0.9))
-            Text(subtitle)
-                .font(.headline)
-                .foregroundColor(.white.opacity(0.78))
-                .multilineTextAlignment(.center)
+            if !subtitle.isEmpty {
+                Text(subtitle)
+                    .font(.headline)
+                    .foregroundColor(.white.opacity(0.78))
+                    .multilineTextAlignment(.center)
+            }
         }
         .padding(.horizontal, 20)
     }

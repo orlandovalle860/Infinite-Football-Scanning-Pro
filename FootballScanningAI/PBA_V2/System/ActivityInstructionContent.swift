@@ -20,9 +20,9 @@ struct ActivityInstructionData {
 
     /// Section 1 — SETUP
     static let instructionSetupLines: [String] = [
-        "Player moves freely inside a 5×5 grid, scanning and checking their shoulder.",
+        "Player moves freely while scanning and checking their shoulder.",
         "The iPad is set up behind the player.",
-        "Coach stands about 12 yards away from the center of the grid."
+        "Coach stands about 12 yards away from the player."
     ]
 
     /// Section 2 — AT THE BEEP
@@ -55,13 +55,13 @@ struct ActivityInstructionData {
     /// Partner mode — one line at top when applicable (legacy hub copy; optional).
     static let partnerRoleLine = "Coach controls the rep. Player reacts and decides."
 
-    static let partnerCoachSetupLine = "Coach stands about 12 yards away from the center of the grid."
+    static let partnerCoachSetupLine = "Coach stands about 12 yards away from the player."
     static let partnerCoachBallLine = "Coach plays the ball from about 12 yards away each rep."
 
     /// PASS timing — aligned with instruction Section 4.
     static let partnerCoachPassTimingLine = "Tap PASS as you play the ball."
 
-    static let partnerPlayerBeepLine = "When you hear the beep, check toward the center of the grid."
+    static let partnerPlayerBeepLine = "When you hear the beep, check toward the center."
 
     static let coachFirstDecisionLoggingLineShort = "Log the first decision immediately (first movement, not outcome)"
 }

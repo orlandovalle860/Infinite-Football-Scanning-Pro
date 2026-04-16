@@ -304,8 +304,8 @@ enum PBAPostSessionNarrativeBuilder {
         switch playerType {
         case .reactor: return "You're reacting in the moment — next step is earlier pictures"
         case .scanner: return "You're scanning — now commit faster under pressure"
-        case .anticipator: return "You're reading patterns — tighten execution on the first action"
-        case .playmaker: return "High standard — keep testing yourself in tighter scenarios"
+        case .anticipator: return "You're reading patterns — sharpen execution on the first action"
+        case .playmaker: return "High standard — keep testing yourself in more complex scenarios"
         }
     }
 

@@ -13,9 +13,14 @@ struct CoachRemoteHubView: View {
     @ObservedObject var profileManager: UserProfileManager
     @EnvironmentObject private var router: AppRouter
     @AppStorage(AppRole.storageKey) private var appRoleRaw: String = AppRole.player.rawValue
+    @AppStorage("userMode") private var userMode: String = "coach"
     @AppStorage("coachRemoteLastUsedActivityV1") private var lastUsedActivityKey: String = ""
     @State private var partnerSessionActive = false
     @State private var showDisconnectCoachConfirm = false
+
+    private var isCoachMode: Bool {
+        userMode == "coach"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -74,17 +79,19 @@ struct CoachRemoteHubView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Team Insights")
-                            .font(.headline.weight(.semibold))
-                            .foregroundColor(.white.opacity(0.95))
-                            .padding(.horizontal, 4)
-                        TeamChallengeCoachDashboardView(
-                            data: makeCoachChallengeDashboardData(profiles: profileManager.profiles)
-                        )
+                    if isCoachMode {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Team Insights")
+                                .font(.headline.weight(.semibold))
+                                .foregroundColor(.white.opacity(0.95))
+                                .padding(.horizontal, 4)
+                            TeamChallengeCoachDashboardView(
+                                data: makeCoachChallengeDashboardData(profiles: profileManager.profiles)
+                            )
+                        }
+                        .padding(.top, 28)
+                        .padding(.horizontal, 20)
                     }
-                    .padding(.top, 28)
-                    .padding(.horizontal, 20)
 
                     if partnerSessionActive {
                         VStack(alignment: .leading, spacing: 8) {

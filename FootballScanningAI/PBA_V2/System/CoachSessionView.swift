@@ -44,7 +44,7 @@ struct CoachSessionView: View {
     @State private var preBeepWorkItem: DispatchWorkItem?
     @State private var beepTime: Date?
     @State private var lastTapTime: TimeInterval = 0
-    private let tapDebounceInterval: TimeInterval = 0.15
+    private let tapDebounceInterval: TimeInterval = 0.25
     @State private var passSentForRep: Set<Int> = []
     @State private var inputLocked = false
 

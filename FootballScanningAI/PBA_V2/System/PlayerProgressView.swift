@@ -89,21 +89,6 @@ struct PlayerProgressView: View {
         )
     }
 
-    /// Decision score per session: 0–100 (from correct % or normalized decisionTotalScore for DOP).
-    private var decisionScorePoints: [ChartDataPoint] {
-        chartSessions.enumerated().map { index, s in
-            let value: Double
-            if let score = s.decisionTotalScore, s.totalReps > 0 {
-                value = (score / 60.0) * 100.0
-            } else if s.totalReps > 0 {
-                value = Double(s.correctCount) / Double(s.totalReps) * 100.0
-            } else {
-                value = 0
-            }
-            return ChartDataPoint(sessionIndex: index + 1, value: value)
-        }
-    }
-
     /// Average decision window (seconds before arrival) per session — only sessions that have timing data.
     private var decisionSpeedPoints: [ChartDataPoint] {
         chartSessions.enumerated().compactMap { index, s in
@@ -465,7 +450,6 @@ struct PlayerProgressView: View {
             } else {
                 ProgressLineChartView(title: primaryTrendTitle, points: primaryTrendPoints, valueLabel: primaryTrendLabel, yAxisRange: primaryTrendAxis)
                 ProgressLineChartView(title: secondaryTrendTitle, points: secondaryTrendPoints, valueLabel: secondaryTrendLabel, yAxisRange: secondaryTrendAxis, emptyStateMessage: "Complete at least 2 sessions to see your trend.")
-                ProgressLineChartView(title: "Decision Score", points: decisionScorePoints, valueLabel: "%", yAxisRange: (0, 100))
             }
         }
         .padding(18)

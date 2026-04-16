@@ -58,7 +58,7 @@ enum CoachingTrainingNotificationCopy {
         case .performanceDeclining:
             return [
                 "Last session dipped versus your previous one — slow down, get one clean read, then build speed.",
-                "Reset with quality over rush: correct first choices, then tighten tempo next block.",
+                "Reset with quality over rush: correct first choices, then increase tempo next block.",
                 "Trend slipped a little — own one cue (body angle + first touch idea) before the ball moves.",
             ]
         case .flowNextFocus:

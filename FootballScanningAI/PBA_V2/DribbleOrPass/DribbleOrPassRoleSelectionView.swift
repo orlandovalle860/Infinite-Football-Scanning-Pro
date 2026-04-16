@@ -8,12 +8,15 @@
 import SwiftUI
 
 struct DribbleOrPassRoleSelectionView: View {
+    private static let globalLastRoleKey = "pba.lastSelectedDeviceRole"
+    private static let lastRoleKey = "dribbleOrPass.lastSelectedDeviceRole"
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
     @EnvironmentObject private var progressStore: ProgressStore
     @EnvironmentObject private var playerStore: PlayerStore
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
     @EnvironmentObject private var router: AppRouter
+    @AppStorage("userMode") private var userMode: String = "coach"
 
     var body: some View {
         VStack(spacing: 24) {
@@ -34,6 +37,9 @@ struct DribbleOrPassRoleSelectionView: View {
 
             VStack(spacing: 16) {
                 Button {
+                    UserDefaults.standard.set("display", forKey: Self.globalLastRoleKey)
+                    UserDefaults.standard.set("display", forKey: Self.lastRoleKey)
+                    userMode = "solo"
                     router.push(.dribbleOrPassTrainingModeSelection)
                 } label: {
                     VStack(alignment: .leading, spacing: 6) {
@@ -42,7 +48,7 @@ struct DribbleOrPassRoleSelectionView: View {
                             Text("Display")
                                 .font(.system(size: 20, weight: .bold, design: .rounded))
                         }
-                        Text("This device shows the grid and direction cues (red/green). Place it behind the player.")
+                        Text("This device shows the direction cues (red/green). Place it behind the player.")
                             .font(.footnote)
                             .foregroundColor(.black.opacity(0.8))
                             .multilineTextAlignment(.leading)
@@ -79,6 +85,11 @@ struct DribbleOrPassRoleSelectionView: View {
                     .cornerRadius(18)
                     .contentShape(Rectangle())
                 }
+                .simultaneousGesture(TapGesture().onEnded {
+                    UserDefaults.standard.set("coachRemote", forKey: Self.globalLastRoleKey)
+                    UserDefaults.standard.set("coachRemote", forKey: Self.lastRoleKey)
+                    userMode = "coach"
+                })
                 .buttonStyle(PlainButtonStyle())
                 .padding(.horizontal, 28)
             }

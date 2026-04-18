@@ -10,6 +10,18 @@ import Foundation
 enum OneTouchPassingScenarioGenerator {
     static let totalReps = 12
 
+    static func generatePlan(forBlockSize repCount: Int) -> [OneTouchRepPlan] {
+        let full = generatePlan()
+        guard repCount > 0 else { return [] }
+        if repCount <= full.count {
+            return Array(full.prefix(repCount)).enumerated().map { OneTouchRepPlan(repIndex: $0.offset, greenDirections: $0.element.greenDirections) }
+        }
+        return (0..<repCount).map { i in
+            let t = full[i % full.count]
+            return OneTouchRepPlan(repIndex: i, greenDirections: t.greenDirections)
+        }
+    }
+
     static func generatePlan() -> [OneTouchRepPlan] {
         let allGates: [Gate] = [.up, .down, .left, .right]
         var plans: [OneTouchRepPlan] = []

@@ -18,13 +18,17 @@ enum CriticalScanPhase: Equatable {
 }
 
 final class TwoMinuteCriticalScanEngine: ObservableObject {
-    @Published private(set) var phase: CriticalScanPhase = .waitingForNextRep
+    @Published private(set) var phase: CriticalScanPhase = .waitingForNextRep {
+        didSet {
+            print("[PHASE] \(oldValue) → \(phase) [repIndex=\(currentRepIndex)]")
+        }
+    }
     @Published private(set) var repLogs: [RepLog] = []
     @Published private(set) var repDecisions: [RepDecision] = []
 
     private let config: TwoMinuteTestConfig
     private let plan: [RepPlan]
-    private var currentRepIndex: Int = 0
+    private(set) var currentRepIndex: Int = 0
     private var passTriggeredAt: Date?
     private var startedAtForCurrentRep: Date?
     private var infoShownAtForCurrentRep: Date?
@@ -41,11 +45,25 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
         self.plan = repPlans
     }
 
+    private func commitPhase(_ newPhase: CriticalScanPhase) {
+        if case .waitingForNextRep = phase {
+            switch newPhase {
+            case .armedScanning, .complete, .waitingForNextRep:
+                break
+            default:
+                print("[INVALID TRANSITION] waitingForNextRep → \(newPhase)")
+                assertionFailure("[INVALID TRANSITION] waitingForNextRep → \(newPhase)")
+                return
+            }
+        }
+        phase = newPhase
+    }
+
     func onNextRep(repIndex: Int) {
         guard phase == .waitingForNextRep else { return }
         currentRepIndex = repIndex
         guard repIndex >= 0, repIndex < plan.count else {
-            if repIndex >= plan.count { phase = .complete }
+            if repIndex >= plan.count { commitPhase(.complete) }
             return
         }
 
@@ -60,7 +78,7 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
 
         let delay = TwoMinuteTestConfig.randomTwoMinuteBeepDelaySeconds(difficulty: config.difficulty)
         let endsAt = Date().addingTimeInterval(delay)
-        phase = .armedScanning(repIndex: repIndex, ballGate: p.ballGate, endsAt: endsAt)
+        commitPhase(.armedScanning(repIndex: repIndex, ballGate: p.ballGate, endsAt: endsAt))
 
         // Single fire path (asyncAfter) to avoid Timer/asyncAfter race; Timer kept as backup.
         scanDelayTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
@@ -76,16 +94,21 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
         guard case .armedScanning(let r, _, _) = phase, r == repIndex else { return }
         scanDelayTimer?.invalidate()
         scanDelayTimer = nil
-        phase = .beepedAwaitingPass(repIndex: repIndex, ballGate: ballGate)
+        commitPhase(.beepedAwaitingPass(repIndex: repIndex, ballGate: ballGate))
     }
 
-    /// Only accept PASS when we're in beepedAwaitingPass (after the beep). Ignore accidental taps during the scan window so the beep always fires.
+    /// Accept PASS after the beep, or early during the scan window when the coach triggers first (partner relay).
     func onPassTrigger(repIndex: Int, timestamp: Date) {
         guard repIndex == currentRepIndex else { return }
         let ballGate: Gate
         switch phase {
         case .beepedAwaitingPass(let rIdx, let g):
             guard rIdx == repIndex else { return }
+            ballGate = g
+        case .armedScanning(let rIdx, let g, _):
+            guard rIdx == repIndex else { return }
+            scanDelayTimer?.invalidate()
+            scanDelayTimer = nil
             ballGate = g
         default:
             return
@@ -107,7 +130,7 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
             configuredWindowSeconds: duration,
             note: "PASS→ballVisible"
         )
-        phase = .ballVisible(repIndex: repIndex, ballGate: ballGate, endsAt: endsAt)
+        commitPhase(.ballVisible(repIndex: repIndex, ballGate: ballGate, endsAt: endsAt))
 
         ballHideTimer = Timer.scheduledTimer(withTimeInterval: duration, repeats: false) { [weak self] _ in
             DispatchQueue.main.async { self?.transitionToAwaitingExitLog(repIndex: repIndex, ballGate: ballGate) }
@@ -122,6 +145,9 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
     /// Returns reaction time in seconds when rep was saved; nil when discarded.
     func onExitLogged(repIndex: Int, gate: Gate, timestamp: Date) -> Double? {
         guard repIndex == currentRepIndex else { return nil }
+        if case .waitingForNextRep = phase {
+            return nil
+        }
         var rIdx: Int?
         switch phase {
         case .awaitingExitLog(let ri, _):
@@ -152,7 +178,8 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
             print("[PBA-Debug] 2MT rep discarded (slow): rep=\(repIndex), reaction=\(String(format: "%.2f", reactionTimeSeconds))s, max=\(Self.maxReactionTimeSeconds)s, hadPassTrigger=\(passTriggeredAt != nil)")
             #endif
             passTriggeredAt = nil
-            if repIndex + 1 >= plan.count { phase = .complete } else { phase = .waitingForNextRep }
+            cancelTimers()
+            if repIndex + 1 >= plan.count { commitPhase(.complete) } else { commitPhase(.waitingForNextRep) }
             return nil
         }
 
@@ -208,10 +235,11 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
         repLogs.append(log)
         passTriggeredAt = nil
 
+        cancelTimers()
         if repIndex + 1 >= plan.count {
-            phase = .complete
+            commitPhase(.complete)
         } else {
-            phase = .waitingForNextRep
+            commitPhase(.waitingForNextRep)
         }
         return reactionTimeSeconds
     }
@@ -219,6 +247,9 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
     /// Coach ✕ — records intentional wrong exit; still required for explicit wrong without misleading direction log.
     func onIncorrectDecision(repIndex: Int, timestamp: Date) -> Double? {
         guard repIndex == currentRepIndex else { return nil }
+        if case .waitingForNextRep = phase {
+            return nil
+        }
         var ballGate: Gate?
         switch phase {
         case .awaitingExitLog(let ri, let g): if ri == repIndex { ballGate = g }
@@ -248,7 +279,8 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
             print("[PBA-Debug] 2MT incorrect rep discarded (slow): rep=\(repIndex), reaction=\(String(format: "%.2f", reactionTimeSeconds))s, max=\(Self.maxReactionTimeSeconds)s, hadPassTrigger=\(passTriggeredAt != nil)")
             #endif
             passTriggeredAt = nil
-            if repIndex + 1 >= plan.count { phase = .complete } else { phase = .waitingForNextRep }
+            cancelTimers()
+            if repIndex + 1 >= plan.count { commitPhase(.complete) } else { commitPhase(.waitingForNextRep) }
             return nil
         }
 
@@ -293,15 +325,21 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
         repLogs.append(log)
         passTriggeredAt = nil
 
+        cancelTimers()
         if repIndex + 1 >= plan.count {
-            phase = .complete
+            commitPhase(.complete)
         } else {
-            phase = .waitingForNextRep
+            commitPhase(.waitingForNextRep)
         }
         return reactionTimeSeconds
     }
 
     private func transitionToAwaitingExitLog(repIndex: Int, ballGate: Gate) {
+        guard case .ballVisible(let r, let g, _) = phase, r == repIndex, g == ballGate else {
+            ballHideTimer?.invalidate()
+            ballHideTimer = nil
+            return
+        }
         CueTimingDebugLog.logHidden(
             activity: "twoMinuteCriticalScan",
             repIndex: repIndex,
@@ -313,7 +351,7 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
         ballHideTimer?.invalidate()
         ballHideTimer = nil
         infoHiddenAtForCurrentRep = Date()
-        phase = .awaitingExitLog(repIndex: repIndex, ballGate: ballGate)
+        commitPhase(.awaitingExitLog(repIndex: repIndex, ballGate: ballGate))
     }
 
     private func cancelTimers() {
@@ -323,9 +361,59 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
         ballHideTimer = nil
     }
 
+    /// Clears the finished test and returns to the first rep’s waiting state (same config). Used when restarting from a summary without re-navigation.
+    func restartBlockFromBeginning() {
+        cancelTimers()
+        cueTimingDebugVisibleAt = nil
+        currentRepIndex = 0
+        passTriggeredAt = nil
+        startedAtForCurrentRep = nil
+        infoShownAtForCurrentRep = nil
+        infoHiddenAtForCurrentRep = nil
+        passTriggeredByRep.removeAll()
+        directionLoggedByRep.removeAll()
+        repLogs.removeAll()
+        repDecisions.removeAll()
+        commitPhase(.waitingForNextRep)
+    }
+
     /// Call when app enters background so timers don't fire late when returning.
     func applicationDidEnterBackground() {
         cancelTimers()
+    }
+
+    /// After foreground: timers were cleared in background — reschedule or fast-forward using embedded `endsAt` deadlines.
+    func synchronizeTimersAfterEnteringForeground() {
+        let now = Date()
+        switch phase {
+        case .armedScanning(let repIndex, let ballGate, let endsAt):
+            if now >= endsAt {
+                onBeepFire(repIndex: repIndex, ballGate: ballGate)
+            } else {
+                let remaining = max(0.01, endsAt.timeIntervalSince(now))
+                scanDelayTimer?.invalidate()
+                scanDelayTimer = Timer.scheduledTimer(withTimeInterval: remaining, repeats: false) { [weak self] _ in
+                    DispatchQueue.main.async { self?.onBeepFire(repIndex: repIndex, ballGate: ballGate) }
+                }
+                if let t = scanDelayTimer { RunLoop.main.add(t, forMode: .common) }
+                DispatchQueue.main.asyncAfter(deadline: .now() + remaining) { [weak self] in
+                    self?.onBeepFire(repIndex: repIndex, ballGate: ballGate)
+                }
+            }
+        case .ballVisible(let repIndex, let ballGate, let endsAt):
+            if now >= endsAt {
+                transitionToAwaitingExitLog(repIndex: repIndex, ballGate: ballGate)
+            } else {
+                let remaining = max(0.01, endsAt.timeIntervalSince(now))
+                ballHideTimer?.invalidate()
+                ballHideTimer = Timer.scheduledTimer(withTimeInterval: remaining, repeats: false) { [weak self] _ in
+                    DispatchQueue.main.async { self?.transitionToAwaitingExitLog(repIndex: repIndex, ballGate: ballGate) }
+                }
+                if let t = ballHideTimer { RunLoop.main.add(t, forMode: .common) }
+            }
+        default:
+            break
+        }
     }
 
     deinit {

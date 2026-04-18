@@ -4,6 +4,7 @@ enum PartnerPassTempoCalibrationStore {
     private static let storedAverageKey = "partnerPassTempoCalibration.averageTravelTimeSeconds"
     private static let storedAtKey = "partnerPassTempoCalibration.savedAt"
     private static let storedModeKey = "partnerPassTempoCalibration.trainingMode"
+    static let defaultAverageTravelTimeSeconds: Double = 0.7
 
     static func save(averageTravelTimeSeconds: Double?, trainingMode: TrainingMode? = nil) {
         guard let averageTravelTimeSeconds else { return }
@@ -17,6 +18,25 @@ enum PartnerPassTempoCalibrationStore {
     static func savedAverageTravelTimeSeconds() -> Double? {
         guard UserDefaults.standard.object(forKey: storedAverageKey) != nil else { return nil }
         return UserDefaults.standard.double(forKey: storedAverageKey)
+    }
+
+    static func seededAverageTravelTimeSeconds() -> Double {
+        savedAverageTravelTimeSeconds() ?? defaultAverageTravelTimeSeconds
+    }
+
+    /// Silent rolling refinement used by partner sessions (no UI/blocking).
+    @discardableResult
+    static func updateRollingAverageTravelTime(
+        observedSeconds: Double,
+        trainingMode: TrainingMode? = .partner,
+        smoothingFactor: Double = 0.25
+    ) -> Double {
+        let clampedObserved = min(1.5, max(0.35, observedSeconds))
+        let previous = seededAverageTravelTimeSeconds()
+        let alpha = min(0.6, max(0.05, smoothingFactor))
+        let updated = previous + (clampedObserved - previous) * alpha
+        save(averageTravelTimeSeconds: updated, trainingMode: trainingMode)
+        return updated
     }
 
     static var hasSavedCalibration: Bool {

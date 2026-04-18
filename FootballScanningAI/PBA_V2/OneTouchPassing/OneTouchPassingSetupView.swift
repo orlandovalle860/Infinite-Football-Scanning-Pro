@@ -75,13 +75,6 @@ struct OneTouchPassingSetupView: View {
                 .padding(.horizontal, 28)
                 .padding(.top, 16)
 
-                Button("View Instructions") {
-                    showInstructions = true
-                }
-                .font(.subheadline.weight(.semibold))
-                .foregroundColor(.white.opacity(0.82))
-                .buttonStyle(.plain)
-
                 Spacer(minLength: 40)
             }
         }
@@ -104,12 +97,6 @@ struct OneTouchPassingSetupView: View {
         .onAppear {
             print("[SetupScreen OTP] onAppear, router path count = \(router.pathCount)")
             profileManager.pendingLevelDifficulty = adaptivePlan.modifiers
-        }
-        .navigationDestination(isPresented: $showInstructions) {
-            ActivityInstructionView(activity: .oneTouchPassing, trainingMode: mode) {
-                showInstructions = false
-                navigateToSession = true
-            }
         }
         .navigationDestination(isPresented: $navigateToSession) {
             OneTouchPassingDisplaySessionView(config: config, mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)

@@ -25,7 +25,6 @@ struct DribbleOrPassDisplaySessionView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @State private var navigateToBlockSummary = false
-    @State private var showLeaveAlert = false
     @State private var nextRepIndex = 0
     @State private var audioInterruptionObserver: NSObjectProtocol?
     @State private var hasSentSessionEnded = false
@@ -36,11 +35,17 @@ struct DribbleOrPassDisplaySessionView: View {
     @State private var hasStartedConnectedToCalibrationTransition = false
     /// True while ``SessionCountdownModifier`` shows 3–2–1–Go; coach drill messages must not advance the engine until the drill is visible.
     @State private var blockCoachDrillDuringSessionCountdown = false
-    @State private var pendingCoachNextRepWhileCountdown: Int?
+    /// Latest coach `nextRep` deferred until countdown ends or engine reaches ``DribbleOrPassPhase/waitingForNextRep``.
+    @State private var pendingNextRepIndex: Int?
+    @State private var partnerCoachRepGate = PartnerCoachRepSequenceGate()
+    @StateObject private var repController = RepStateController()
     /// Red opponent wedge: same adaptive style as Playing Away From Pressure (`WedgeDifficultyEngine`).
     @State private var wedgeStyle: WedgeCueStyle = WedgeCueStyle.style(for: 1)
     /// Display-side relay (join code, WebSocket, coach paired). Shared across partner activities in one training session.
     @ObservedObject private var partnerRelaySession = TrainingPartnerConnectionCoordinator.shared.relayDisplaySession
+    @State private var playerFirstRunGuidanceText: String?
+    @State private var playerFirstRunGuidanceOpacity = 0.0
+    @State private var playerFirstRunGuidanceTask: Task<Void, Never>?
 
     private var sessionTransportMode: SessionTransportMode {
         PartnerTransportPolicy.transportMode(for: .dribbleOrPass, trainingMode: mode)
@@ -51,7 +56,21 @@ struct DribbleOrPassDisplaySessionView: View {
         self.mode = mode
         self.settingsViewModel = settingsViewModel
         self.profileManager = profileManager
-        _engine = StateObject(wrappedValue: DribbleOrPassEngine(config: config, trainingMode: mode))
+        let repCount = TrainingPartnerConnectionCoordinator.shared.partnerBlockTotalReps(
+            activityId: ActivityKind.dribbleOrPass.sessionActivityActivityId,
+            soloFallback: 12,
+            mode: mode
+        )
+        let plan = DribbleOrPassScenarioGenerator.generatePlan(forBlockSize: repCount)
+        _engine = StateObject(wrappedValue: DribbleOrPassEngine(config: config, trainingMode: mode, plan: plan))
+    }
+
+    private var blockTotalReps: Int {
+        TrainingPartnerConnectionCoordinator.shared.partnerBlockTotalReps(
+            activityId: ActivityKind.dribbleOrPass.sessionActivityActivityId,
+            soloFallback: 12,
+            mode: mode
+        )
     }
 
     var body: some View {
@@ -66,35 +85,58 @@ struct DribbleOrPassDisplaySessionView: View {
                     .zIndex(2)
             }
             waitingForCoachRelayOverlay
-            if showConnectedConfirmation {
-                PartnerConnectedConfirmationView()
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
-                    .zIndex(5)
-            }
             if mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket {
                 PartnerRelayLifecycleBannerOverlay()
             }
+            PlayerFirstRunGuidanceToastOverlay(message: playerFirstRunGuidanceText, opacity: playerFirstRunGuidanceOpacity)
+                .zIndex(119)
+            PartnerMidSessionDisconnectRecoveryOverlay()
+                .zIndex(120)
         }
         .contentShape(Rectangle())
         .onTapGesture {
             if mode == .solo { handleWallSoloTrigger() }
         }
         .navigationDestination(isPresented: $navigateToBlockSummary) {
-            DribbleOrPassBlockSummaryView(results: engine.repResults, config: config, settingsViewModel: settingsViewModel, profileManager: profileManager)
+            DribbleOrPassBlockSummaryView(
+                results: engine.repResults,
+                config: config,
+                onRunItBack: runItBackFromSummary,
+                settingsViewModel: settingsViewModel,
+                profileManager: profileManager
+            )
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
         }
         .onReceive(NotificationCenter.default.publisher(for: .twoMinuteMessageReceived).receive(on: RunLoop.main), perform: handleDribbleOrPassCoachRelayMessage)
-        .onChange(of: engine.phase) { _, newPhase in
+        .onChange(of: engine.currentRepIndex) { _, newValue in
+            if newValue >= 2 {
+                PlayerFirstRunGuidanceToastAnimator.cancel(
+                    task: &playerFirstRunGuidanceTask,
+                    message: $playerFirstRunGuidanceText,
+                    opacity: $playerFirstRunGuidanceOpacity
+                )
+            }
+            guard mode.requiresPhoneDisplayRelay else { return }
+            TrainingPartnerConnectionCoordinator.shared.syncDisplaySessionCurrentRepIndex(
+                newValue,
+                activityId: ActivityKind.dribbleOrPass.sessionActivityActivityId
+            )
+        }
+        .onChange(of: engine.phase) { oldPhase, newPhase in
             if case .blockComplete = newPhase {
+                PlayerFirstRunGuidanceStore.markCompletedFirstRun(activityId: ActivityKind.dribbleOrPass.sessionActivityActivityId)
+                pendingNextRepIndex = nil
                 DispatchQueue.main.async { navigateToBlockSummary = true }
             }
+            syncRepController(with: newPhase)
             if case .armedScanning = newPhase {
                 preloadBeepAssetsForInstantReveal()
             }
             if case .beepedAwaitingPass = newPhase { playBeep() }
+            dribbleOrPassPlayerFirstRunGuidanceIfNeeded(oldPhase: oldPhase, newPhase: newPhase)
         }
         .onAppear {
             let coordinator = TrainingPartnerConnectionCoordinator.shared
@@ -157,17 +199,15 @@ struct DribbleOrPassDisplaySessionView: View {
             preloadBeepAssetsForInstantReveal()
             subscribeToAudioInterruption()
             AnalyticsManager.shared.track(.trainingSessionStarted, playerId: playerStore.selectedPlayerId)
-            Task {
-                guard let sessionId = await SupabaseSessionService.shared.createSessionForDrill(activity: .dribbleOrPass, blockSize: 12, playerId: playerStore.selectedPlayerId ?? profileManager.currentProfile?.id) else { return }
-                let activityId = await SupabaseSessionService.shared.createSessionActivity(sessionId: sessionId, activityId: ActivityKind.dribbleOrPass.sessionActivityActivityId, blockNumber: 1)
-                await MainActor.run {
-                    CurrentSessionStore.shared.setSessionIdOnly(sessionId)
-                    if let activityId = activityId { CurrentSessionStore.shared.setCurrentSessionActivityId(activityId) }
-                }
-            }
+            registerSupabaseDribbleOrPassBlockSession()
         }
         .onDisappear {
-            pendingCoachNextRepWhileCountdown = nil
+            pendingNextRepIndex = nil
+            PlayerFirstRunGuidanceToastAnimator.cancel(
+                task: &playerFirstRunGuidanceTask,
+                message: $playerFirstRunGuidanceText,
+                opacity: $playerFirstRunGuidanceOpacity
+            )
             #if DEBUG
             PartnerPersistDebug.log("DribbleOrPassDisplaySessionView onDisappear")
             #endif
@@ -179,6 +219,8 @@ struct DribbleOrPassDisplaySessionView: View {
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .background {
                 engine.applicationDidEnterBackground()
+            } else if newPhase == .active {
+                engine.synchronizeTimersAfterEnteringForeground()
             }
         }
         // `scenePhase == .background` is unreliable for partner teardown (often missed before suspend).
@@ -225,33 +267,11 @@ struct DribbleOrPassDisplaySessionView: View {
         .preferredColorScheme(.dark)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showLeaveAlert = true
-                } label: {
-                    Image(systemName: "house.fill")
-                }
-                .foregroundColor(.white.opacity(0.9))
-            }
-        }
-        .alert("Leave training?", isPresented: $showLeaveAlert) {
-            Button("Stay", role: .cancel) {}
-            Button("Leave", role: .destructive) {
-                if let id = CurrentSessionStore.shared.currentSessionActivityId {
-                    Task {
-                        await SupabaseSessionService.shared.endSessionActivity(sessionActivityId: id)
-                        await MainActor.run { CurrentSessionStore.shared.clear() }
-                    }
-                }
-                router.popToRoot(endingPartnerSession: false)
-            }
-        } message: {
-            Text("Your current block will not be saved.")
-        }
+        .navigationBarBackButtonHidden(true)
         .sessionCountdown(waitForPartnerReady: mode.requiresPhoneDisplayRelay, partnerReady: partnerReadyForCountdown, suppressCoachMessagesDuringCountdown: $blockCoachDrillDuringSessionCountdown)
         .onReceive(NotificationCenter.default.publisher(for: .relayForegroundReconnectCompleted)) { _ in
             guard mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket else { return }
+            engine.synchronizeTimersAfterEnteringForeground()
             PartnerRelayCheckpointDisplaySend.sendIfReady(
                 engine: engine,
                 activityId: ActivityKind.dribbleOrPass.sessionActivityActivityId,
@@ -294,13 +314,14 @@ struct DribbleOrPassDisplaySessionView: View {
         if PartnerCountdownCoachMessagePolicy.shouldDeferWhileCountdown(
             msg: msg,
             isBlockingDrillMessagesFromCoach: shouldBlockCoachDrillMessages,
-            pendingNextRepIndex: &pendingCoachNextRepWhileCountdown
+            pendingNextRepIndex: &pendingNextRepIndex
         ) {
             return
         }
         switch msg {
+        case .repStarted:
+            return
         case .nextRep(let repIndex):
-            pendingCoachNextRepWhileCountdown = nil
             #if DEBUG
             if sessionTransportMode == .relayWebSocket {
                 if !partnerRelaySession.isCoachPaired {
@@ -309,8 +330,12 @@ struct DribbleOrPassDisplaySessionView: View {
                 dopRelayDisplayLog("incoming nextRep repIndex=\(repIndex)")
             }
             #endif
-            engine.onNextRep(repIndex: repIndex)
+            applyPartnerCoachNextRep(repIndex: repIndex)
         case .passTriggered(let repIndex, let timestamp):
+            guard dopAllowsPassTrigger(repIndex: repIndex) else { return }
+            guard repController.state == .preBeep || repController.state == .decisionWindow else { return }
+            guard !repController.hasLoggedTap else { return }
+            repController.registerTap()
             #if DEBUG
             if sessionTransportMode == .relayWebSocket {
                 dopRelayDisplayLog("incoming passTriggered repIndex=\(repIndex)")
@@ -320,6 +345,8 @@ struct DribbleOrPassDisplaySessionView: View {
             #endif
             dopApplyPassTrigger(repIndex: repIndex, passTimestamp: timestamp)
         case .exitLogged(let repIndex, let gate, let timestamp):
+            guard dopAllowsExitLogged(repIndex: repIndex) else { return }
+            guard repController.canAcceptSwipe() else { return }
             #if DEBUG
             if sessionTransportMode == .relayWebSocket {
                 dopRelayDisplayLog("incoming exitLogged repIndex=\(repIndex) gate=\(gate)")
@@ -330,6 +357,8 @@ struct DribbleOrPassDisplaySessionView: View {
             DecisionSpeedDebugLog.logDisplayBeforeEngineExit(activity: .dribbleOrPass, repIndex: repIndex, embeddedDirection: timestamp, displayWallBeforeEngine: wallBeforeEngine, kind: "exitLogged")
             #endif
             if engine.onExitLogged(repIndex: repIndex, gate: gate, timestamp: timestamp) != nil, let result = engine.repResults.last {
+                repController.registerSwipe()
+                syncRepController(with: engine.phase)
                 saveDecisionForRep(result: result)
             }
         case .firstTouchLogged(let repIndex, let gate, let timestamp):
@@ -340,6 +369,8 @@ struct DribbleOrPassDisplaySessionView: View {
             #endif
             engine.onFirstTouchLogged(repIndex: repIndex, gate: gate, timestamp: timestamp)
         case .incorrectDecision(let repIndex, let timestamp):
+            guard dopAllowsIncorrectDecision(repIndex: repIndex) else { return }
+            guard repController.canAcceptSwipe() else { return }
             #if DEBUG
             if sessionTransportMode == .relayWebSocket {
                 dopRelayDisplayLog("incoming incorrectDecision repIndex=\(repIndex)")
@@ -350,6 +381,8 @@ struct DribbleOrPassDisplaySessionView: View {
             DecisionSpeedDebugLog.logDisplayBeforeEngineExit(activity: .dribbleOrPass, repIndex: repIndex, embeddedDirection: timestamp, displayWallBeforeEngine: wallBeforeEngine, kind: "incorrectDecision")
             #endif
             if engine.onIncorrectDecision(repIndex: repIndex, timestamp: timestamp) != nil, let result = engine.repResults.last {
+                repController.registerSwipe()
+                syncRepController(with: engine.phase)
                 saveDecisionForRep(result: result)
             }
         case .coachPaired:
@@ -375,15 +408,156 @@ struct DribbleOrPassDisplaySessionView: View {
             break
         case .partnerSessionCheckpoint:
             break
+        case .sessionStarted:
+            break
+        case .beepArmed:
+            // Display is the sender; ignore any echo that comes back.
+            break
         case .calibrationPassTapped, .calibrationArrivalTapped, .calibrationFinished:
             break
         }
     }
 
     private func flushPendingCoachNextRepAfterCountdown() {
-        guard let idx = pendingCoachNextRepWhileCountdown else { return }
-        pendingCoachNextRepWhileCountdown = nil
-        engine.onNextRep(repIndex: idx)
+        guard let idx = pendingNextRepIndex else { return }
+        pendingNextRepIndex = nil
+        applyPartnerCoachNextRep(repIndex: idx)
+    }
+
+    private func applyPartnerCoachNextRep(repIndex: Int) {
+        #if DEBUG
+        if repIndex > partnerCoachRepGate.expectedNextCoachRepIndex {
+            print("[PartnerCoach][DOP] nextRep coach ahead of displayTrackedNext: coach=\(repIndex) displayNext=\(partnerCoachRepGate.expectedNextCoachRepIndex)")
+        }
+        #endif
+        if case .blockComplete = engine.phase { return }
+        // Between reps: `expectedNext` is the next index to apply; coach may retry the same `nextRep` after a missed `repStarted`.
+        if case .waitingForNextRep = engine.phase, repIndex < partnerCoachRepGate.expectedNextCoachRepIndex {
+            if repIndex + 1 == partnerCoachRepGate.expectedNextCoachRepIndex {
+                sendRepStartedAck(repIndex: repIndex)
+                #if DEBUG
+                print("[PartnerCoach][DOP] duplicate nextRep \(repIndex) (already applied) — re-sent repStarted")
+                #endif
+            } else {
+                #if DEBUG
+                print("[PartnerCoach][DOP] ignoring stale nextRep \(repIndex) (displayTrackedNext=\(partnerCoachRepGate.expectedNextCoachRepIndex))")
+                #endif
+            }
+            return
+        }
+        guard case .waitingForNextRep = engine.phase else {
+            print("[NEXTREP] received repIndex=\(repIndex) while phase=\(engine.phase) currentRepIndex=\(engine.currentRepIndex)")
+            print("[NEXTREP DEFERRED] buffering until phase=waitingForNextRep")
+            pendingNextRepIndex = repIndex
+            return
+        }
+        _ = tryCommitPartnerCoachNextRep(repIndex: repIndex)
+    }
+
+    /// True when the engine has already started this rep (duplicate `nextRep` while `RepStateController` is not idle).
+    private func dopDisplayEngineIsMidRep(repIndex: Int) -> Bool {
+        switch engine.phase {
+        case .armedScanning(let r, _), .beepedAwaitingPass(let r), .cueRevealing(let r, _), .cueVisible(let r, _), .awaitingExitLog(let r):
+            return r == repIndex
+        case .waitingForNextRep, .blockComplete:
+            return false
+        }
+    }
+
+    @discardableResult
+    private func tryCommitPartnerCoachNextRep(repIndex: Int) -> Bool {
+        print("[NEXTREP] received repIndex=\(repIndex) while phase=\(engine.phase) currentRepIndex=\(engine.currentRepIndex)")
+        if repIndex < partnerCoachRepGate.expectedNextCoachRepIndex {
+            if repIndex + 1 == partnerCoachRepGate.expectedNextCoachRepIndex, case .waitingForNextRep = engine.phase {
+                sendRepStartedAck(repIndex: repIndex)
+                pendingNextRepIndex = nil
+                return true
+            }
+            if repIndex + 1 == partnerCoachRepGate.expectedNextCoachRepIndex {
+                print("[NEXTREP BLOCKED] phase=\(engine.phase) expected=waitingForNextRep")
+            }
+            pendingNextRepIndex = nil
+            return false
+        }
+        if repIndex < engine.currentRepIndex {
+            pendingNextRepIndex = nil
+            return false
+        }
+        if repIndex == engine.currentRepIndex {
+            guard case .waitingForNextRep = engine.phase else {
+                print("[NEXTREP BLOCKED] phase=\(engine.phase) expected=waitingForNextRep")
+                return false
+            }
+        }
+        if repIndex > engine.currentRepIndex {
+            guard case .waitingForNextRep = engine.phase else {
+                print("[NEXTREP BLOCKED] phase=\(engine.phase) expected=waitingForNextRep")
+                return false
+            }
+        }
+        repController.completeRepCycleEnd()
+        if !repController.acceptIncomingNextRep() {
+            if dopDisplayEngineIsMidRep(repIndex: repIndex) {
+                sendRepStartedAck(repIndex: repIndex)
+                pendingNextRepIndex = nil
+                return true
+            }
+            return false
+        }
+        let wasWaitingForNextRep: Bool
+        if case .waitingForNextRep = engine.phase {
+            wasWaitingForNextRep = true
+        } else {
+            wasWaitingForNextRep = false
+        }
+        print("[NEXTREP APPLY] attempting repIndex=\(repIndex) from phase=\(engine.phase)")
+        engine.onNextRep(repIndex: repIndex)
+        print("[NEXTREP RESULT] phase now=\(engine.phase)")
+        if wasWaitingForNextRep, case .waitingForNextRep = engine.phase {
+            repController.completeRepCycleEnd()
+            #if DEBUG
+            print("[PartnerCoach][DOP] onNextRep did not arm (phase still waiting) — reverting repController; no ack")
+            #endif
+            return false
+        }
+        var gate = partnerCoachRepGate
+        gate.recordNextRepSuccessfullyApplied(repIndex)
+        partnerCoachRepGate = gate
+        sendRepStartedAck(repIndex: repIndex)
+        pendingNextRepIndex = nil
+        return true
+    }
+
+    private func flushPendingPartnerCoachNextRepIfNeeded() {
+        guard let idx = pendingNextRepIndex else { return }
+        guard case .waitingForNextRep = engine.phase else { return }
+        _ = tryCommitPartnerCoachNextRep(repIndex: idx)
+    }
+
+    private func dopAllowsPassTrigger(repIndex: Int) -> Bool {
+        guard repIndex == engine.currentRepIndex else { return false }
+        switch engine.phase {
+        case .beepedAwaitingPass(let r):
+            return r == repIndex
+        case .armedScanning(let r, _):
+            return r == repIndex
+        default:
+            return false
+        }
+    }
+
+    private func dopAllowsExitLogged(repIndex: Int) -> Bool {
+        guard repIndex == engine.currentRepIndex else { return false }
+        switch engine.phase {
+        case .cueVisible(let r, _), .cueRevealing(let r, _), .awaitingExitLog(let r):
+            return r == repIndex
+        default:
+            return false
+        }
+    }
+
+    private func dopAllowsIncorrectDecision(repIndex: Int) -> Bool {
+        dopAllowsExitLogged(repIndex: repIndex)
     }
 
     private func dopRelayDisplayLog(_ message: String) {
@@ -436,8 +610,13 @@ struct DribbleOrPassDisplaySessionView: View {
     private func handleWallSoloTrigger() {
         switch engine.phase {
         case .waitingForNextRep:
+            repController.completeRepCycleEnd()
+            guard repController.acceptIncomingNextRep() else { return }
             engine.onNextRep(repIndex: nextRepIndex)
         case .beepedAwaitingPass(repIndex: let ri):
+            guard dopAllowsPassTrigger(repIndex: ri) else { return }
+            guard !repController.hasLoggedTap else { return }
+            repController.registerTap()
             #if DEBUG
             let soloPass = Date()
             DecisionSpeedDebugLog.logSoloDisplayPassTrigger(activity: .dribbleOrPass, repIndex: ri, displayWallPassTS: soloPass)
@@ -464,8 +643,6 @@ struct DribbleOrPassDisplaySessionView: View {
         }
     }
 
-    private static let totalReps = 12
-
     /// DEBUG relay: full opacity while waiting; otherwise match gate visibility dimming.
     private var statusOverlayOpacity: CGFloat {
         if shouldShowRelayWaiting { return 1 }
@@ -473,7 +650,10 @@ struct DribbleOrPassDisplaySessionView: View {
     }
 
     private var shouldShowRelayWaiting: Bool {
-        mode.requiresPhoneDisplayRelay && sessionTransportMode == .relayWebSocket && !partnerRelaySession.isCoachPaired
+        mode.requiresPhoneDisplayRelay
+            && sessionTransportMode == .relayWebSocket
+            && !partnerRelaySession.isCoachPaired
+            && !TrainingPartnerConnectionCoordinator.shared.isMidSessionPartnerDisconnect
     }
 
     /// Partner: countdown only after coach is connected (Multipeer) or paired on relay. Solo: always ready.
@@ -529,41 +709,16 @@ struct DribbleOrPassDisplaySessionView: View {
         }
     }
 
-    private var dopPartnerConnectionState: ConnectionState {
-        guard mode.requiresPhoneDisplayRelay else { return connectionManager.connectionState }
-        if sessionTransportMode == .relayWebSocket {
-            return PartnerRelayDisplayUI.statusConnectionState(
-                socketState: partnerRelaySession.socketConnectionState,
-                isCoachPairedWithRelay: partnerRelaySession.isCoachPaired
-            )
-        }
-        return connectionManager.connectionState
-    }
-
     private var repCountOverlay: some View {
-        Group {
-            if !mode.requiresPhoneDisplayRelay || sessionTransportMode != .relayWebSocket || partnerRelaySession.isCoachPaired {
-                VStack {
-                    VStack(spacing: 2) {
-                        HStack {
-                            Text(repCountText)
-                                .font(.subheadline.monospacedDigit())
-                                .foregroundColor(.white.opacity(0.7))
-                            Spacer()
-                        }
-                        HStack {
-                            Text("Tempo: \(config.difficulty.passTempo.displayName)")
-                                .font(.caption)
-                                .foregroundColor(.white.opacity(0.62))
-                            Spacer()
-                        }
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 12)
-                    Spacer()
-                }
-                .allowsHitTesting(false)
-            }
+        let showLink = mode.requiresPhoneDisplayRelay
+        let showRep = !mode.requiresPhoneDisplayRelay || sessionTransportMode != .relayWebSocket || partnerRelaySession.isCoachPaired
+        return Group {
+            PartnerDisplaySessionTopChrome(
+                showCoachConnectionLine: showLink,
+                showRepAndTempo: showRep,
+                repLine: repCountText,
+                tempoLine: "Tempo: \(config.difficulty.passTempo.displayName)"
+            )
         }
     }
 
@@ -571,11 +726,11 @@ struct DribbleOrPassDisplaySessionView: View {
         let rep: String
         switch engine.phase {
         case .waitingForNextRep: rep = "—"
-        case .blockComplete: rep = "\(Self.totalReps)"
+        case .blockComplete: rep = "\(blockTotalReps)"
         case .armedScanning(let r, _), .beepedAwaitingPass(let r), .cueRevealing(let r, _), .cueVisible(let r, _), .awaitingExitLog(let r):
             rep = "\(r + 1)"
         }
-        return "Rep \(rep) of \(Self.totalReps)"
+        return "Rep \(rep) of \(blockTotalReps)"
     }
 
     private func exitLogOverlay(repIndex: Int) -> some View {
@@ -625,22 +780,108 @@ struct DribbleOrPassDisplaySessionView: View {
     }
 
     private func logExit(repIndex: Int, gate: Gate) {
+        guard dopAllowsExitLogged(repIndex: repIndex) else { return }
+        guard !repController.hasLoggedSwipe else { return }
         #if DEBUG
         let soloExit = Date()
         DecisionSpeedDebugLog.logSoloDisplayExitTrigger(activity: .dribbleOrPass, repIndex: repIndex, gate: gate, displayWallExitTS: soloExit)
         if engine.onExitLogged(repIndex: repIndex, gate: gate, timestamp: soloExit) != nil, let result = engine.repResults.last {
+            repController.registerSwipe()
+            syncRepController(with: engine.phase)
             saveDecisionForRep(result: result)
         }
         #else
         if engine.onExitLogged(repIndex: repIndex, gate: gate, timestamp: Date()) != nil, let result = engine.repResults.last {
+            repController.registerSwipe()
+            syncRepController(with: engine.phase)
             saveDecisionForRep(result: result)
         }
         #endif
         nextRepIndex = repIndex + 1
     }
 
+    private func registerSupabaseDribbleOrPassBlockSession() {
+        Task {
+            guard let sessionId = await SupabaseSessionService.shared.createSessionForDrill(activity: .dribbleOrPass, blockSize: blockTotalReps, playerId: playerStore.selectedPlayerId ?? profileManager.currentProfile?.id) else { return }
+            let activityId = await SupabaseSessionService.shared.createSessionActivity(sessionId: sessionId, activityId: ActivityKind.dribbleOrPass.sessionActivityActivityId, blockNumber: 1)
+            await MainActor.run {
+                CurrentSessionStore.shared.setSessionIdOnly(sessionId)
+                if let activityId = activityId { CurrentSessionStore.shared.setCurrentSessionActivityId(activityId) }
+            }
+        }
+    }
+
+    private func runItBackFromSummary() {
+        navigateToBlockSummary = false
+        nextRepIndex = 0
+        hasSentSessionEnded = false
+        repController.reset()
+        pendingNextRepIndex = nil
+        if mode.requiresPhoneDisplayRelay {
+            partnerCoachRepGate.reset()
+        }
+        engine.restartBlockFromBeginning()
+        syncRepController(with: engine.phase)
+        registerSupabaseDribbleOrPassBlockSession()
+    }
+
+    private func dribbleOrPassPlayerFirstRunGuidanceIfNeeded(oldPhase: DribbleOrPassPhase, newPhase: DribbleOrPassPhase) {
+        let activityId = ActivityKind.dribbleOrPass.sessionActivityActivityId
+        guard !PlayerFirstRunGuidanceStore.hasCompletedFirstRun(activityId: activityId) else { return }
+        guard engine.currentRepIndex <= 1 else { return }
+
+        if case .cueVisible(let r, _) = newPhase, r == 0 {
+            if case .cueVisible(let rOld, _) = oldPhase, rOld == 0 { return }
+            guard let msg = PlayerFirstRunGuidanceCopy.message(for: .dribbleOrPass, repIndexZeroBased: 0) else { return }
+            PlayerFirstRunGuidanceToastAnimator.schedule(
+                text: msg,
+                task: &playerFirstRunGuidanceTask,
+                message: $playerFirstRunGuidanceText,
+                opacity: $playerFirstRunGuidanceOpacity
+            )
+        }
+        if case .armedScanning(let r, _) = newPhase, r == 1 {
+            if case .armedScanning(let rOld, _) = oldPhase, rOld == 1 { return }
+            guard let msg = PlayerFirstRunGuidanceCopy.message(for: .dribbleOrPass, repIndexZeroBased: 1) else { return }
+            PlayerFirstRunGuidanceToastAnimator.schedule(
+                text: msg,
+                task: &playerFirstRunGuidanceTask,
+                message: $playerFirstRunGuidanceText,
+                opacity: $playerFirstRunGuidanceOpacity
+            )
+        }
+    }
+
+    private func syncRepController(with phase: DribbleOrPassPhase) {
+        switch phase {
+        case .waitingForNextRep:
+            repController.completeRepCycleEnd()
+        case .armedScanning:
+            repController.startRep()
+        case .beepedAwaitingPass, .cueRevealing, .cueVisible:
+            repController.openDecisionWindow()
+        case .awaitingExitLog:
+            repController.openDecisionWindow()
+        case .blockComplete:
+            repController.completeRepCycleEnd()
+        }
+        if mode.requiresPhoneDisplayRelay, case .waitingForNextRep = phase {
+            flushPendingPartnerCoachNextRepIfNeeded()
+        }
+    }
+
     private func saveDecisionForRep(result: DribbleOrPassRepResult) {
         guard let sessionId = CurrentSessionStore.shared.sessionId else { return }
+        if mode.requiresPhoneDisplayRelay, result.repIndex < 3 {
+            let updated = PartnerPassTempoCalibrationStore.updateRollingAverageTravelTime(
+                observedSeconds: max(0.01, result.decisionTime),
+                trainingMode: .partner
+            )
+            TrainingPartnerConnectionCoordinator.shared.markSessionCalibrationResolved(
+                averageTravelTimeSeconds: updated,
+                trainingMode: .partner
+            )
+        }
         let travelTimeSeconds = CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds
             ?? config.difficulty.passTempo.expectedBallTravelTime(distanceMeters: 11.0)
         let reactionTimeMs = Int((travelTimeSeconds - result.decisionTime) * 1000)
@@ -725,14 +966,13 @@ struct DribbleOrPassDisplaySessionView: View {
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
+            .offset(y: PartnerDisplayLayout.drillFocalCenterYOffset)
         }
     }
 
     private var statusOverlay: some View {
         VStack {
-            if mode.requiresPhoneDisplayRelay {
-                CoachRemoteConnectionStatusView(connectionState: dopPartnerConnectionState)
-            } else {
+            if !mode.requiresPhoneDisplayRelay {
                 Text("Tap screen to trigger")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.7))
@@ -751,7 +991,7 @@ struct DribbleOrPassDisplaySessionView: View {
             .multilineTextAlignment(.center)
             .padding(.bottom, 32)
         }
-        .padding(.top, 16)
+        .padding(.top, 8)
     }
 
     @ViewBuilder
@@ -759,6 +999,7 @@ struct DribbleOrPassDisplaySessionView: View {
         if shouldShowRelayWaiting {
             PartnerRelayDisplayWaitingOverlay(
                 joinCode: partnerRelaySession.joinCode,
+                activityTitle: "Dribble or Pass",
                 onExitSession: {
                     router.popToRoot(endingPartnerSession: false)
                 }
@@ -796,14 +1037,33 @@ struct DribbleOrPassDisplaySessionView: View {
     }
 
     private func playBeep() {
+        repController.openDecisionWindow()
         if case .beepedAwaitingPass(let r) = engine.phase {
             PBAFlowDebugLog.beep(repId: r, timestamp: Date())
         }
+        // Tell the coach the iPad just beeped so its PASS button can arm.
+        // Until this signal arrives the coach stays in `.waitingBeep`, which
+        // prevents the "early pass silently dropped by display hard gate →
+        // rep discarded" failure mode we saw on real devices.
+        sendBeepArmed(repIndex: engine.currentRepIndex)
         DispatchQueue.main.async {
+            self.repController.openDecisionWindow()
             self.activateAudioSession()
             self.preloadBeepAssetsForInstantReveal()
             PBABeepSoundManager.shared.play(soundEnabled: settingsViewModel.soundEnabled)
         }
+    }
+
+    private func sendBeepArmed(repIndex: Int) {
+        let message = TwoMinuteMessage.beepArmed(repIndex: repIndex, timestamp: Date())
+        if mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket {
+            #if DEBUG
+            dopRelayDisplayLog("send beepArmed repIndex=\(repIndex) (relay)")
+            #endif
+            partnerRelaySession.sendTwoMinuteMessage(message)
+            return
+        }
+        connectionManager.sendTwoMinuteMessage(message)
     }
 
     private func sendSessionEndedIfNeeded() {
@@ -815,5 +1075,19 @@ struct DribbleOrPassDisplaySessionView: View {
             return
         }
         connectionManager.sendTwoMinuteMessage(.sessionEnded(timestamp: Date()))
+    }
+
+    private func sendRepStartedAck(repIndex: Int) {
+        let post: (TwoMinuteMessage) -> Void = { msg in
+            if mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket {
+                partnerRelaySession.sendTwoMinuteMessage(msg)
+            } else {
+                connectionManager.sendTwoMinuteMessage(msg)
+            }
+        }
+        post(.repStarted(repIndex: repIndex, timestamp: Date()))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            post(.repStarted(repIndex: repIndex, timestamp: Date()))
+        }
     }
 }

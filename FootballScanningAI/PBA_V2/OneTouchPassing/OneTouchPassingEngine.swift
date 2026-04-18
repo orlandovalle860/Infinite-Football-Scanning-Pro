@@ -34,7 +34,11 @@ enum OneTouchPassingPhase: Equatable {
 }
 
 final class OneTouchPassingEngine: ObservableObject {
-    @Published private(set) var phase: OneTouchPassingPhase = .waitingForNextRep
+    @Published private(set) var phase: OneTouchPassingPhase = .waitingForNextRep {
+        didSet {
+            print("[PHASE] \(oldValue) → \(phase) [repIndex=\(currentRepIndex)]")
+        }
+    }
     @Published private(set) var repResults: [OneTouchRepResult] = []
     @Published var instructionTitle: String = ""
     @Published var instructionSubtitle: String = ""
@@ -45,7 +49,7 @@ final class OneTouchPassingEngine: ObservableObject {
     private let config: OneTouchPassingConfig
     private let trainingMode: TrainingMode
     private let plan: [OneTouchRepPlan]
-    private var currentRepIndex: Int = 0
+    private(set) var currentRepIndex: Int = 0
     private var passTriggeredAt: Date?
     private var scanTimer: Timer?
     private var checkEndTimer: Timer?
@@ -62,6 +66,21 @@ final class OneTouchPassingEngine: ObservableObject {
         self.config = config
         self.trainingMode = trainingMode
         self.plan = plan
+        updateInstructions()
+    }
+
+    private func commitPhase(_ newPhase: OneTouchPassingPhase) {
+        if case .waitingForNextRep = phase {
+            switch newPhase {
+            case .armedScanning, .blockComplete, .waitingForNextRep:
+                break
+            default:
+                print("[INVALID TRANSITION] waitingForNextRep → \(newPhase)")
+                assertionFailure("[INVALID TRANSITION] waitingForNextRep → \(newPhase)")
+                return
+            }
+        }
+        phase = newPhase
         updateInstructions()
     }
 
@@ -109,8 +128,7 @@ final class OneTouchPassingEngine: ObservableObject {
         currentRepIndex = repIndex
         guard repIndex >= 0, repIndex < plan.count else {
             if repIndex >= plan.count {
-                phase = .blockComplete
-                updateInstructions()
+                commitPhase(.blockComplete)
             }
             return
         }
@@ -132,8 +150,7 @@ final class OneTouchPassingEngine: ObservableObject {
         )
         #endif
         let endsAt = Date().addingTimeInterval(delay)
-        phase = .armedScanning(repIndex: repIndex, endsAt: endsAt)
-        updateInstructions()
+        commitPhase(.armedScanning(repIndex: repIndex, endsAt: endsAt))
 
         scanTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
             DispatchQueue.main.async { self?.onCheckFire(repIndex: repIndex) }
@@ -146,15 +163,13 @@ final class OneTouchPassingEngine: ObservableObject {
         scanTimer?.invalidate()
         scanTimer = nil
         showCheckCue = true
-        phase = .showingCheck(repIndex: repIndex)
-        updateInstructions()
+        commitPhase(.showingCheck(repIndex: repIndex))
 
         checkEndTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: false) { [weak self] _ in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.showCheckCue = false
-                self.phase = .awaitingPassTrigger(repIndex: repIndex)
-                self.updateInstructions()
+                self.commitPhase(.awaitingPassTrigger(repIndex: repIndex))
             }
         }
         RunLoop.main.add(checkEndTimer!, forMode: .common)
@@ -162,33 +177,40 @@ final class OneTouchPassingEngine: ObservableObject {
 
     func onPassTrigger(repIndex: Int, timestamp: Date) {
         guard repIndex == currentRepIndex else { return }
-        guard case .awaitingPassTrigger(let r) = phase, r == repIndex else { return }
+        switch phase {
+        case .awaitingPassTrigger(let r) where r == repIndex:
+            break
+        case .armedScanning(let r, _) where r == repIndex:
+            break
+        case .showingCheck(let r) where r == repIndex:
+            break
+        default:
+            return
+        }
+        cancelTimers()
+        showCheckCue = false
         passTriggeredAt = timestamp
         passTriggeredByRep[repIndex] = timestamp
         #if DEBUG
         DecisionSpeedDebugLog.logEngineRepLive(activity: .oneTouchPassing, repIndex: repIndex, passEmbeddedStored: timestamp)
         #endif
-        cancelTimers()
         let gates: [Gate] = [.up, .down, .left, .right]
 
         switch config.revealStyle {
         case .simultaneous:
             revealedGates = Set(gates)
-            phase = .cueRevealing(repIndex: repIndex, revealedGates: revealedGates)
-            updateInstructions()
+            commitPhase(.cueRevealing(repIndex: repIndex, revealedGates: revealedGates))
             transitionToCueVisible(repIndex: repIndex)
         case .twoStage:
             let shuffled = gates.shuffled()
             let firstTwo = Set(shuffled.prefix(2))
             revealedGates = firstTwo
-            phase = .cueRevealing(repIndex: repIndex, revealedGates: revealedGates)
-            updateInstructions()
+            commitPhase(.cueRevealing(repIndex: repIndex, revealedGates: revealedGates))
             let t = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: false) { [weak self] _ in
                 DispatchQueue.main.async {
                     guard let self = self else { return }
                     self.revealedGates = Set(gates)
-                    self.phase = .cueRevealing(repIndex: repIndex, revealedGates: self.revealedGates)
-                    self.updateInstructions()
+                    self.commitPhase(.cueRevealing(repIndex: repIndex, revealedGates: self.revealedGates))
                     self.transitionToCueVisible(repIndex: repIndex)
                 }
             }
@@ -198,16 +220,14 @@ final class OneTouchPassingEngine: ObservableObject {
             let spacing = config.revealSpacingSeconds * sessionAdaptiveDifficulty.cueDuration
             let order = gates.shuffled()
             revealedGates = []
-            phase = .cueRevealing(repIndex: repIndex, revealedGates: [])
-            updateInstructions()
+            commitPhase(.cueRevealing(repIndex: repIndex, revealedGates: []))
             for (i, gateToReveal) in order.enumerated() {
                 let gate = gateToReveal
                 let t = Timer.scheduledTimer(withTimeInterval: Double(i) * spacing, repeats: false) { [weak self] _ in
                     DispatchQueue.main.async {
                         guard let self = self else { return }
                         self.revealedGates.insert(gate)
-                        self.phase = .cueRevealing(repIndex: repIndex, revealedGates: self.revealedGates)
-                        self.updateInstructions()
+                        self.commitPhase(.cueRevealing(repIndex: repIndex, revealedGates: self.revealedGates))
                         if self.revealedGates.count == 4 {
                             self.transitionToCueVisible(repIndex: repIndex)
                         }
@@ -241,8 +261,7 @@ final class OneTouchPassingEngine: ObservableObject {
             configuredWindowSeconds: duration,
             note: "\(revealNote); phase=cueVisible (greens fixed window); CHECK cue 0.6s is separate earlier"
         )
-        phase = .cueVisible(repIndex: repIndex, endsAt: endsAt)
-        updateInstructions()
+        commitPhase(.cueVisible(repIndex: repIndex, endsAt: endsAt))
 
         cueHideTimer = Timer.scheduledTimer(withTimeInterval: duration, repeats: false) { [weak self] _ in
             DispatchQueue.main.async { self?.onCueHide(repIndex: repIndex) }
@@ -251,7 +270,11 @@ final class OneTouchPassingEngine: ObservableObject {
     }
 
     private func onCueHide(repIndex: Int) {
-        guard case .cueVisible(let currentRep, _) = phase, currentRep == repIndex else { return }
+        guard case .cueVisible(let currentRep, _) = phase, currentRep == repIndex else {
+            cueHideTimer?.invalidate()
+            cueHideTimer = nil
+            return
+        }
         if let v = cueTimingDebugVisibleAt {
             let hiddenAt = Date()
             CueTimingDebugLog.logHidden(
@@ -266,8 +289,7 @@ final class OneTouchPassingEngine: ObservableObject {
         cueHideTimer?.invalidate()
         cueHideTimer = nil
         revealedGates = []
-        phase = .awaitingExitLog(repIndex: repIndex)
-        updateInstructions()
+        commitPhase(.awaitingExitLog(repIndex: repIndex))
     }
 
     private func cancelRevealTimers() {
@@ -285,9 +307,64 @@ final class OneTouchPassingEngine: ObservableObject {
         cueHideTimer = nil
     }
 
+    /// Clears the finished block and returns to the first rep’s waiting state (same config/mode). Used by “Run It Back” on the display.
+    func restartBlockFromBeginning() {
+        cancelTimers()
+        cueTimingDebugVisibleAt = nil
+        currentRepIndex = 0
+        passTriggeredAt = nil
+        passTriggeredByRep.removeAll()
+        directionLoggedByRep.removeAll()
+        repResults.removeAll()
+        repDecisions.removeAll()
+        revealedGates = []
+        showCheckCue = false
+        adaptiveState = AdaptiveState()
+        sessionAdaptiveDifficulty = DifficultySettings(cueDuration: 1.0, travelTime: 1.0, thresholdAdjustment: 0.0)
+        commitPhase(.waitingForNextRep)
+    }
+
     /// Call when app enters background so timers don't fire late when returning.
     func applicationDidEnterBackground() {
         cancelTimers()
+    }
+
+    /// After foreground: reschedule scan / CHECK / cue timers; recover reveal staging by opening a fresh cue window.
+    func synchronizeTimersAfterEnteringForeground() {
+        let now = Date()
+        switch phase {
+        case .armedScanning(let repIndex, let endsAt):
+            if now >= endsAt {
+                onCheckFire(repIndex: repIndex)
+            } else {
+                let remaining = max(0.01, endsAt.timeIntervalSince(now))
+                scanTimer?.invalidate()
+                scanTimer = Timer.scheduledTimer(withTimeInterval: remaining, repeats: false) { [weak self] _ in
+                    DispatchQueue.main.async { self?.onCheckFire(repIndex: repIndex) }
+                }
+                if let t = scanTimer { RunLoop.main.add(t, forMode: .common) }
+            }
+        case .showingCheck(let repIndex):
+            showCheckCue = false
+            checkEndTimer?.invalidate()
+            checkEndTimer = nil
+            commitPhase(.awaitingPassTrigger(repIndex: repIndex))
+        case .cueVisible(let repIndex, let endsAt):
+            if now >= endsAt {
+                onCueHide(repIndex: repIndex)
+            } else {
+                let remaining = max(0.01, endsAt.timeIntervalSince(now))
+                cueHideTimer?.invalidate()
+                cueHideTimer = Timer.scheduledTimer(withTimeInterval: remaining, repeats: false) { [weak self] _ in
+                    DispatchQueue.main.async { self?.onCueHide(repIndex: repIndex) }
+                }
+                if let t = cueHideTimer { RunLoop.main.add(t, forMode: .common) }
+            }
+        case .cueRevealing(let repIndex, _):
+            transitionToCueVisible(repIndex: repIndex)
+        default:
+            break
+        }
     }
 
     /// Max reaction time (trigger → confirmation); reps above this are discarded.
@@ -296,6 +373,9 @@ final class OneTouchPassingEngine: ObservableObject {
     /// Returns reaction time in seconds when rep was saved; nil when discarded.
     func onExitLogged(repIndex: Int, gate: Gate, timestamp: Date) -> Double? {
         guard repIndex == currentRepIndex else { return nil }
+        if case .waitingForNextRep = phase {
+            return nil
+        }
         var rIdx: Int?
         switch phase {
         case .awaitingExitLog(let ri): rIdx = ri
@@ -323,6 +403,8 @@ final class OneTouchPassingEngine: ObservableObject {
         if reactionTimeSeconds > Self.maxReactionTimeSeconds {
             print("ERROR: Rep cannot complete without exitLogged")
             passTriggeredAt = nil
+            cancelTimers()
+            if repIndex + 1 >= plan.count { commitPhase(.blockComplete) } else { commitPhase(.waitingForNextRep) }
             return nil
         }
 
@@ -372,18 +454,21 @@ final class OneTouchPassingEngine: ObservableObject {
         repResults.append(result)
         passTriggeredAt = nil
 
+        cancelTimers()
         if repIndex + 1 >= plan.count {
-            phase = .blockComplete
+            commitPhase(.blockComplete)
         } else {
-            phase = .waitingForNextRep
+            commitPhase(.waitingForNextRep)
         }
-        updateInstructions()
         return reactionTimeSeconds
     }
 
     /// Coach ✕ is not allowed to complete One-Touch reps; rep must end via exitLogged direction.
     func onIncorrectDecision(repIndex: Int, timestamp: Date) -> Double? {
         guard repIndex == currentRepIndex else { return nil }
+        if case .waitingForNextRep = phase {
+            return nil
+        }
         var rIdx: Int?
         switch phase {
         case .awaitingExitLog(let ri): rIdx = ri
@@ -411,6 +496,8 @@ final class OneTouchPassingEngine: ObservableObject {
         if reactionTimeSeconds > Self.maxReactionTimeSeconds {
             print("ERROR: Rep cannot complete without exitLogged")
             passTriggeredAt = nil
+            cancelTimers()
+            if repIndex + 1 >= plan.count { commitPhase(.blockComplete) } else { commitPhase(.waitingForNextRep) }
             return nil
         }
 

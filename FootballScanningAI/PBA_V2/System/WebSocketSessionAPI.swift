@@ -106,6 +106,17 @@ enum WebSocketSessionAPIError: Error {
 }
 
 enum WebSocketSessionAPI {
+    /// Shown when HTTP join fails because the relay session or join code is no longer valid (e.g. expired).
+    static let relayJoinCodeExpiredUserMessage = UserFacingErrorMessage.sessionExpiredReconnect
+
+    /// `true` when ``joinSession(joinCode:)`` failed because the join code is invalid or the relay session expired (404 / `INVALID_JOIN_CODE`).
+    static func isInvalidOrExpiredJoinSessionError(_ error: Error) -> Bool {
+        guard let apiError = error as? WebSocketSessionAPIError else { return false }
+        guard case .httpError(let statusCode, let body) = apiError else { return false }
+        if statusCode == 404 { return true }
+        return (body ?? "").lowercased().contains("invalid_join_code")
+    }
+
     /// Creates a relay session and returns display credentials and `wsUrl`.
     static func createSession() async throws -> WebSocketRelayCreateSessionResponse {
         guard let url = URL(string: "/v1/sessions", relativeTo: WebSocketRelayAPIConfiguration.httpBaseURL)?.absoluteURL else {
@@ -154,6 +165,45 @@ enum WebSocketSessionAPI {
             return try JSONDecoder().decode(WebSocketRelayJoinSessionResponse.self, from: data)
         } catch {
             throw WebSocketSessionAPIError.decodingFailed(underlying: error)
+        }
+    }
+
+    /// Safe message for coach relay HTTP join failures (and wrapped URL/network errors). Never includes status codes or response bodies.
+    static func userFacingJoinErrorMessage(_ error: Error) -> String {
+        if isInvalidOrExpiredJoinSessionError(error) {
+            return relayJoinCodeExpiredUserMessage
+        }
+        if let api = error as? WebSocketSessionAPIError {
+            return userFacingMessage(forAPIError: api)
+        }
+        return UserFacingErrorMessage.message(from: error)
+    }
+
+    private static func userFacingMessage(forAPIError error: WebSocketSessionAPIError) -> String {
+        switch error {
+        case .invalidURL, .decodingFailed:
+            return UserFacingErrorMessage.genericRetry
+        case .httpError(let statusCode, let body):
+            if isInvalidOrExpiredJoinSessionError(error) {
+                return relayJoinCodeExpiredUserMessage
+            }
+            let b = (body ?? "").uppercased()
+            if statusCode == 409, b.contains("COACH_SLOT") {
+                return UserFacingErrorMessage.relayJoinCodeMismatch
+            }
+            if statusCode == 408 || statusCode == 504 || statusCode == 429 {
+                return UserFacingErrorMessage.connectionIssueRetry
+            }
+            if statusCode >= 500 {
+                return UserFacingErrorMessage.connectionIssueRetry
+            }
+            if statusCode == 401 || statusCode == 403 {
+                return relayJoinCodeExpiredUserMessage
+            }
+            if statusCode == -1 {
+                return UserFacingErrorMessage.connectionIssueRetry
+            }
+            return UserFacingErrorMessage.genericRetry
         }
     }
 }

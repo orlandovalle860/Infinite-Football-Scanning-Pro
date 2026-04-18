@@ -10,6 +10,8 @@ import Foundation
 extension Notification.Name {
     /// Posted on main after `TrainingPartnerConnectionCoordinator` finishes foreground reconnect attempts.
     static let relayForegroundReconnectCompleted = Notification.Name("relayForegroundReconnectCompleted")
+    /// Coach join failed with an expired/invalid code; player iPad may recycle the display relay (same process only).
+    static let relayDisplayRecycleRelayDueToExpiredJoinCode = Notification.Name("relayDisplayRecycleRelayDueToExpiredJoinCode")
 }
 
 /// User-visible banner for relay lifecycle (reconnect, restored, rejoin).

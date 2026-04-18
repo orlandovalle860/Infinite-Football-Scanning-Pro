@@ -12,7 +12,7 @@ enum PBASessionFlowPolicy {
     }
 
     static func shouldPromptCalibration(for mode: TrainingMode) -> Bool {
-        PartnerPassTempoCalibrationStore.requiresCalibration(for: mode)
+        false
     }
 
     static func shouldShowWaitingForCoach(isAwaitingCoachInput: Bool) -> Bool {
@@ -25,32 +25,15 @@ enum PBASessionFlowPolicy {
     }
 
     static func routeForActivityLaunch(_ activity: ActivityKind) -> AppRoute {
-        let skipRole = shouldSkipConnectionPrompts()
         switch activity {
         case .twoMinuteTest:
-            guard skipRole else { return .twoMinuteRoleSelection }
-            if savedRole(for: activity) == "coachRemote" {
-                return .coachRemote
-            }
-            return .trainingModeSelection(activityTitle: "2-Minute Test")
+            return .twoMinuteGetReady(mode: .partner)
         case .awayFromPressure:
-            guard skipRole else { return .awayFromPressureRoleSelection }
-            if savedRole(for: activity) == "coachRemote" {
-                return .awayFromPressureCoachRemote
-            }
-            return .awayFromPressureTrainingModeSelection
+            return .awayFromPressureSetup(mode: .partner)
         case .dribbleOrPass:
-            guard skipRole else { return .dribbleOrPassRoleSelection }
-            if savedRole(for: activity) == "coachRemote" {
-                return .dribbleOrPassCoachRemote
-            }
-            return .dribbleOrPassTrainingModeSelection
+            return .dribbleOrPassSetup(mode: .partner)
         case .oneTouchPassing:
-            guard skipRole else { return .oneTouchPassingRoleSelection }
-            if savedRole(for: activity) == "coachRemote" {
-                return .oneTouchPassingCoachRemote
-            }
-            return .oneTouchPassingTrainingModeSelection
+            return .oneTouchPassingSetup(mode: .partner)
         }
     }
 

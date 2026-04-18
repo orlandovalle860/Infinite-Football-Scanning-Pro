@@ -7,6 +7,22 @@
 
 import Combine
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
+
+// MARK: - Partner display layout (iPad field screens)
+
+enum PartnerDisplayLayout {
+    /// Pushes the drill focal point (center X / ball) down on iPad so top chrome breathes.
+    static var drillFocalCenterYOffset: CGFloat {
+        #if canImport(UIKit)
+        UIDevice.current.userInterfaceIdiom == .pad ? 52 : 0
+        #else
+        0
+        #endif
+    }
+}
 
 // MARK: - Display relay contract
 
@@ -107,15 +123,7 @@ struct PartnerRelayLifecycleBannerOverlay: View {
                 .foregroundColor(.white)
                 .multilineTextAlignment(.center)
         case .sessionRequiresRejoin:
-            VStack(alignment: .center, spacing: 6) {
-                Text("Session ended — rejoin required")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.white)
-                Text("Enter the join code from the display again, or restart partner training from the hub.")
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.9))
-                    .multilineTextAlignment(.center)
-            }
+            EmptyView()
         case .checkpointMismatch(let hint):
             Text(hint)
                 .font(.caption.weight(.semibold))
@@ -135,6 +143,270 @@ struct PartnerRelayLifecycleBannerOverlay: View {
         case .hidden:
             return .clear
         }
+    }
+}
+
+// MARK: - Passive partner link status (coach + display)
+
+/// Small, non-blocking copy for relay **and** Multipeer. Observes shared singletons so SwiftUI updates on any path.
+struct PartnerLinkPassiveStatusLine: View {
+    enum Role {
+        case coach
+        case display
+    }
+
+    /// Coach-only: tighter copy under the session header (rep row).
+    enum CoachPresentation {
+        case standard
+        case sessionRepHeader
+    }
+
+    /// Display-only: pill badge vs centered status-bar line.
+    enum DisplayPresentation {
+        case pill
+        case statusBar
+    }
+
+    let role: Role
+    var coachPresentation: CoachPresentation = .standard
+    var displayPresentation: DisplayPresentation = .pill
+
+    @ObservedObject private var coordinator = TrainingPartnerConnectionCoordinator.shared
+    @ObservedObject private var relayDisplay = TrainingPartnerConnectionCoordinator.shared.relayDisplaySession
+    @ObservedObject private var multipeer = ConnectionManager.shared
+    @ObservedObject private var coachRelay = TrainingPartnerConnectionCoordinator.shared.coachRelayRemoteService
+
+    var body: some View {
+        Group {
+            if coordinator.isMidSessionPartnerDisconnect {
+                EmptyView()
+            } else if let text = statusText {
+                switch role {
+                case .coach:
+                    Text(text)
+                        .font(coachPresentation == .sessionRepHeader ? .caption : .subheadline)
+                        .fontWeight(.regular)
+                        .foregroundColor(.white.opacity(coachPresentation == .sessionRepHeader ? 0.6 : 0.55))
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityLabel(text)
+                case .display:
+                    switch displayPresentation {
+                    case .pill:
+                        Text(text)
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.white.opacity(0.88))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(Color.black.opacity(0.38))
+                            .cornerRadius(8)
+                            .accessibilityLabel(text)
+                    case .statusBar:
+                        Text(text)
+                            .font(.caption)
+                            .fontWeight(.regular)
+                            .foregroundColor(.white.opacity(0.6))
+                            .multilineTextAlignment(.center)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity)
+                            .accessibilityLabel(text)
+                    }
+                }
+            }
+        }
+    }
+
+    private var statusText: String? {
+        switch role {
+        case .coach:
+            return PartnerLinkPassiveStatusFormatting.coachLine(
+                isPartnerTrainingSessionActive: coordinator.isPartnerTrainingSessionActive,
+                relayBanner: coordinator.relayLifecycleBanner,
+                multipeerPeerName: multipeer.connectedPeerName,
+                multipeerState: multipeer.connectionState,
+                coachRelayState: coachRelay.connectionState,
+                coachRelayDisplayPeerPresent: coordinator.coachRelayDisplayPeerPresent
+            )
+        case .display:
+            return PartnerLinkPassiveStatusFormatting.displayLine(
+                isPartnerTrainingSessionActive: coordinator.isPartnerTrainingSessionActive,
+                relayBanner: coordinator.relayLifecycleBanner,
+                multipeerPeerName: multipeer.connectedPeerName,
+                multipeerState: multipeer.connectionState,
+                relaySocket: relayDisplay.socketConnectionState,
+                relayCoachPaired: relayDisplay.isCoachPaired
+            )
+        }
+    }
+}
+
+/// Top chrome for iPad/display drills: centered coach link line, then rep + tempo stacked top-leading (de-emphasized).
+struct PartnerDisplaySessionTopChrome: View {
+    var showCoachConnectionLine: Bool
+    var showRepAndTempo: Bool
+    var repLine: String
+    var tempoLine: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if showCoachConnectionLine {
+                PartnerLinkPassiveStatusLine(role: .display, displayPresentation: .statusBar)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 10)
+            }
+            if showRepAndTempo {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(repLine)
+                        .font(.caption.monospacedDigit())
+                        .fontWeight(.regular)
+                        .foregroundColor(.white.opacity(0.6))
+                    Text(tempoLine)
+                        .font(.caption2)
+                        .fontWeight(.regular)
+                        .foregroundColor(.white.opacity(0.6))
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, showCoachConnectionLine ? 16 : 12)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .allowsHitTesting(false)
+    }
+}
+
+/// Full-screen scrim mid-drill when the partner link drops; after ~10s offers **End Session** or **Reconnect** (no engine reset on reconnect).
+struct PartnerMidSessionDisconnectRecoveryOverlay: View {
+    @ObservedObject private var coordinator = TrainingPartnerConnectionCoordinator.shared
+    @EnvironmentObject private var router: AppRouter
+
+    var body: some View {
+        Group {
+            if coordinator.isMidSessionPartnerDisconnect {
+                ZStack {
+                    Color.black.opacity(0.58)
+                        .ignoresSafeArea()
+                    VStack(spacing: 20) {
+                        Text(primaryMessage)
+                            .font(.headline.weight(.semibold))
+                            .foregroundColor(.white)
+                            .multilineTextAlignment(.center)
+                        Text("We’ll resume from the current rep when the link returns.")
+                            .font(.subheadline)
+                            .foregroundColor(.white.opacity(0.72))
+                            .multilineTextAlignment(.center)
+                        if coordinator.showPartnerMidSessionRecoveryChoices {
+                            VStack(spacing: 12) {
+                                Button {
+                                    router.popToRoot(endingPartnerSession: true)
+                                } label: {
+                                    Text("End Session")
+                                        .font(.headline)
+                                        .foregroundColor(.white)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 14)
+                                        .background(Color.red.opacity(0.55))
+                                        .cornerRadius(12)
+                                }
+                                .buttonStyle(.plain)
+                                Button {
+                                    Task {
+                                        await coordinator.attemptPartnerLinkReconnectFromUserChoice()
+                                    }
+                                } label: {
+                                    Text("Reconnect")
+                                        .font(.headline)
+                                        .foregroundColor(.black)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 14)
+                                        .background(Color.yellow)
+                                        .cornerRadius(12)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            .padding(.top, 8)
+                        }
+                    }
+                    .padding(.horizontal, 28)
+                    .padding(.vertical, 32)
+                }
+                .transition(.opacity)
+            }
+        }
+    }
+
+    private var primaryMessage: String {
+        CoachRemoteSessionStartGate.isPadPlayerRole()
+            ? "Connection lost — waiting for coach..."
+            : "Reconnecting..."
+    }
+}
+
+private enum PartnerLinkPassiveStatusFormatting {
+    static func coachLine(
+        isPartnerTrainingSessionActive: Bool,
+        relayBanner: PartnerRelayLifecycleBanner,
+        multipeerPeerName: String?,
+        multipeerState: ConnectionState,
+        coachRelayState: ConnectionState,
+        coachRelayDisplayPeerPresent: Bool
+    ) -> String? {
+        guard isPartnerTrainingSessionActive else { return nil }
+        switch relayBanner {
+        case .reconnecting, .restoringSession:
+            return "Reconnecting..."
+        default:
+            break
+        }
+        if multipeerPeerName != nil {
+            return "Connected to iPad"
+        }
+        if coachRelayState == .connected && coachRelayDisplayPeerPresent {
+            return "Connected to iPad"
+        }
+        if coachRelayState == .connected && !coachRelayDisplayPeerPresent {
+            return "Reconnecting..."
+        }
+        if coachRelayState == .searching || coachRelayState == .connecting {
+            return "Reconnecting..."
+        }
+        if multipeerState == .searching || multipeerState == .connecting {
+            return "Reconnecting..."
+        }
+        return "Disconnected"
+    }
+
+    static func displayLine(
+        isPartnerTrainingSessionActive: Bool,
+        relayBanner: PartnerRelayLifecycleBanner,
+        multipeerPeerName: String?,
+        multipeerState: ConnectionState,
+        relaySocket: ConnectionState,
+        relayCoachPaired: Bool
+    ) -> String? {
+        guard isPartnerTrainingSessionActive else { return nil }
+        if multipeerPeerName != nil {
+            return "Connected to coach"
+        }
+        switch relayBanner {
+        case .reconnecting, .restoringSession:
+            return "Waiting for coach..."
+        default:
+            break
+        }
+        if relaySocket == .connected && relayCoachPaired {
+            return "Connected to coach"
+        }
+        if relaySocket == .searching || relaySocket == .connecting || (relaySocket == .connected && !relayCoachPaired) {
+            return "Waiting for coach..."
+        }
+        if multipeerState == .searching || multipeerState == .connecting {
+            return "Waiting for coach..."
+        }
+        return "Connection lost"
     }
 }
 

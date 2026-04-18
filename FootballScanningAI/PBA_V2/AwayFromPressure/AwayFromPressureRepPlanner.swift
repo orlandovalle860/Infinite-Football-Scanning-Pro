@@ -13,6 +13,18 @@ struct AwayFromPressureRepPlan {
 }
 
 enum AwayFromPressureRepPlanner {
+    static func generatePlan(forBlockSize repCount: Int) -> [AwayFromPressureRepPlan] {
+        let full = generatePlan()
+        guard repCount > 0 else { return [] }
+        if repCount <= full.count {
+            return Array(full.prefix(repCount)).enumerated().map { AwayFromPressureRepPlan(repIndex: $0.offset, pressureGate: $0.element.pressureGate) }
+        }
+        return (0..<repCount).map { i in
+            let t = full[i % full.count]
+            return AwayFromPressureRepPlan(repIndex: i, pressureGate: t.pressureGate)
+        }
+    }
+
     static func generatePlan() -> [AwayFromPressureRepPlan] {
         let pool: [Gate] = [.up, .up, .up, .down, .down, .down, .left, .left, .left, .right, .right, .right]
         var result: [Gate] = []

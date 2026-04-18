@@ -34,6 +34,7 @@ enum PartnerRelayJoinCodeConfig {
 /// Use when `partnerTransportMode == .relayWebSocket` and waiting for coach pairing.
 struct PartnerRelayDisplayWaitingOverlay: View {
     let joinCode: String?
+    var activityTitle: String = "Training"
     /// Optional: show a subtle second line while the display’s DB session is still being created (e.g. Two Minute).
     var isDatabaseSessionCreating: Bool = false
     var scrimOpacity: CGFloat = 0.58
@@ -48,45 +49,52 @@ struct PartnerRelayDisplayWaitingOverlay: View {
             VStack(spacing: 20) {
                 Spacer(minLength: 0)
 
-                if let code = joinCode, !code.isEmpty {
-                    VStack(spacing: 10) {
-                        Text("Join code")
-                            .font(.title3.weight(.bold))
-                            .foregroundColor(.white.opacity(0.95))
+                Text(activityTitle)
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.72))
+                    .textCase(.uppercase)
+                    .tracking(1)
 
+                Text("Scan")
+                    .font(.system(size: 64, weight: .bold, design: .rounded))
+                    .foregroundColor(.white.opacity(0.96))
+                    .multilineTextAlignment(.center)
+
+                if let code = joinCode, !code.isEmpty {
+                    VStack(spacing: 8) {
+                        Text("Join code")
+                            .font(.headline.weight(.semibold))
+                            .foregroundColor(.white.opacity(0.9))
                         Text(code)
-                            .font(.system(size: 44, weight: .bold, design: .monospaced))
+                            .font(.system(size: 52, weight: .bold, design: .monospaced))
                             .foregroundColor(.white)
-                            .minimumScaleFactor(0.5)
                             .lineLimit(1)
-                            .padding(.horizontal, 28)
-                            .padding(.vertical, 18)
+                            .minimumScaleFactor(0.55)
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 14)
                             .background(
                                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .fill(Color.cyan.opacity(0.22))
+                                    .fill(Color.yellow.opacity(0.2))
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                            .stroke(Color.cyan.opacity(0.55), lineWidth: 2)
+                                            .stroke(Color.yellow.opacity(0.9), lineWidth: 2)
                                     )
                             )
                     }
                     .multilineTextAlignment(.center)
-                } else {
-                    VStack(spacing: 14) {
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            .scaleEffect(1.15)
-                        Text("Getting join code…")
-                            .font(.title3.weight(.semibold))
-                            .foregroundColor(.white.opacity(0.92))
-                    }
-                    .accessibilityElement(children: .combine)
                 }
 
                 VStack(spacing: 8) {
-                    Text("Waiting for coach...")
-                        .font(.headline.weight(.semibold))
+                    Text(joinCode == nil ? "Waiting for coach..." : "Waiting to connect...")
+                        .font(.title3.weight(.semibold))
                         .foregroundColor(.white.opacity(0.88))
+                    if joinCode != nil {
+                        Text("Enter this join code on the coach device")
+                            .font(.subheadline)
+                            .foregroundColor(.white.opacity(0.82))
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 28)
+                    }
                     if showTimeoutHelper {
                         VStack(spacing: 4) {
                             Text("Having trouble connecting?")
@@ -110,26 +118,13 @@ struct PartnerRelayDisplayWaitingOverlay: View {
                     }
                 }
 
-                if let onExitSession {
-                    Button("Exit Session") {
-                        onExitSession()
-                    }
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(Color.white.opacity(0.16))
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .padding(.top, 8)
-                }
-
                 Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.vertical, 32)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .allowsHitTesting(onExitSession != nil)
+        .allowsHitTesting(false)
         .onAppear {
             PartnerPersistDebug.log("PartnerRelayDisplayWaitingOverlay onAppear (join-code / waiting UI)")
             showTimeoutHelper = false
@@ -143,6 +138,7 @@ struct PartnerRelayDisplayWaitingOverlay: View {
 /// Two Minute (and similar): relay waiting + optional Supabase session error with retry.
 struct PartnerRelayDisplayWaitingWithSessionErrorOverlay: View {
     let joinCode: String?
+    var activityTitle: String = "Training"
     var isDatabaseSessionCreating: Bool
     var databaseSessionError: String?
     var onRetryDatabaseSession: () -> Void
@@ -177,16 +173,14 @@ struct PartnerRelayDisplayWaitingWithSessionErrorOverlay: View {
                         .foregroundColor(.orange)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 24)
-                    Button("Retry", action: onRetryDatabaseSession)
-                        .buttonStyle(.borderedProminent)
-                        .tint(.orange)
                     Spacer(minLength: 0)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .allowsHitTesting(true)
+                .allowsHitTesting(false)
             } else {
                 PartnerRelayDisplayWaitingOverlay(
                     joinCode: joinCode,
+                    activityTitle: activityTitle,
                     isDatabaseSessionCreating: isDatabaseSessionCreating,
                     scrimOpacity: 0.58,
                     onExitSession: onExitSession
@@ -252,25 +246,11 @@ struct PartnerRelayCoachJoinSection: View {
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            Button(action: onJoin) {
-                Group {
-                    if joinBusy {
-                        ProgressView()
-                            .tint(.black)
-                    } else {
-                        Text("Join session")
-                            .font(.headline.weight(.semibold))
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(Color.yellow.opacity(joinBusy ? 0.75 : 1))
-                .foregroundColor(.black)
-                .cornerRadius(12)
-            }
-            .buttonStyle(.plain)
-            .disabled(joinBusy || normalizedCode(from: joinCodeInput).isEmpty)
-            .accessibilityHint(joinBusy ? "Join in progress" : "Joins the display session using this code")
+            Text("Join starts automatically when the code is complete, or press Join on the keyboard.")
+                .font(.caption2)
+                .foregroundColor(.white.opacity(0.55))
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
             if joinBusy {
                 HStack(alignment: .center, spacing: 10) {

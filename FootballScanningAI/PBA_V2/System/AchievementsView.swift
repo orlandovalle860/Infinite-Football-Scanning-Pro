@@ -51,16 +51,6 @@ struct AchievementsView: View {
         .background(Color(red: 0.08, green: 0.08, blue: 0.12))
         .navigationTitle("Your Achievements")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    router.popToRoot()
-                } label: {
-                    Image(systemName: "house.fill")
-                }
-                .foregroundColor(.white.opacity(0.9))
-            }
-        }
     }
 
     private var headerCard: some View {

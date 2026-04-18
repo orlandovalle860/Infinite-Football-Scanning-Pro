@@ -148,26 +148,34 @@ struct TrainingRecommendationView: View {
                 }
 
                 VStack(spacing: 12) {
-                    Button {
-                        onStartTrainingAFP()
-                    } label: {
-                        Text("Start Training")
-                            .font(.headline)
+                    if CoachRemoteSessionStartGate.isPadPlayerRole() {
+                        Text("Your coach starts the next session from Coach Remote on a phone.")
+                            .font(.subheadline)
+                            .foregroundColor(.white.opacity(0.88))
+                            .multilineTextAlignment(.center)
                             .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.yellow)
-                    .foregroundStyle(.black)
+                    } else {
+                        Button {
+                            onStartTrainingAFP()
+                        } label: {
+                            Text("Start Training")
+                                .font(.headline)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.yellow)
+                        .foregroundStyle(.black)
 
-                    Button {
-                        onRunTestAgain()
-                    } label: {
-                        Text("Run Test Again")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
+                        Button {
+                            onRunTestAgain()
+                        } label: {
+                            Text("Run Test Again")
+                                .font(.headline)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.white)
                     }
-                    .buttonStyle(.bordered)
-                    .tint(.white)
                 }
                 .padding(.top, 8)
             }

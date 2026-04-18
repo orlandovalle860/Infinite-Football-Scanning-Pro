@@ -36,11 +36,13 @@ enum TimingScoreSystem {
         let scorePercent = Int(((Double(earnedPoints) / Double(maxPoints)) * 100).rounded())
 
         let band: String
-        switch scorePercent {
-        case 90...100: band = "Elite Timing"
-        case 75...89: band = "Strong"
-        case 60...74: band = "Developing"
-        default: band = "Reactive"
+        // Tempo label is driven by actual timing distribution, not average timing or score.
+        if late > (totalReps / 2) {
+            band = "Developing"
+        } else if early > (totalReps / 2) {
+            band = "Elite"
+        } else {
+            band = "Solid"
         }
 
         let avgLabel: String

@@ -115,15 +115,6 @@ struct PlayerImprovementProgressView: View {
                 }
                 .frame(maxWidth: .infinity)
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    router.popToRoot()
-                } label: {
-                    Image(systemName: "house.fill")
-                }
-                .foregroundColor(.white.opacity(0.9))
-                .accessibilityLabel("Home")
-            }
         }
         .navigationDestination(isPresented: $navigateToDashboard) {
             PlayerProgressView(profileManager: profileManager, settingsViewModel: settingsViewModel)

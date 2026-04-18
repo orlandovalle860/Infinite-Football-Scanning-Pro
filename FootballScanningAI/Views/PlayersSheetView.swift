@@ -176,7 +176,7 @@ struct PlayersSheetView: View {
                 #if DEBUG
                 print("[PBA-Debug] Supabase delete failed: id=\(profile.id.uuidString), error=\(error.localizedDescription)")
                 #endif
-                deleteErrorMessage = "Cloud delete is pending retry. Player is removed on this device and will retry in background.\n\n\(error.localizedDescription)"
+                deleteErrorMessage = "Cloud delete is pending retry. This player is removed on this device and will sync when your connection is back."
                 showDeleteErrorAlert = true
             }
         }

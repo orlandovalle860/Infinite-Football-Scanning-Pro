@@ -188,7 +188,7 @@ struct PlayerSelectionView: View {
                 }
             } catch {
                 await MainActor.run {
-                    loadError = error.localizedDescription
+                    loadError = UserFacingErrorMessage.message(from: error)
                     isLoading = false
                 }
             }
@@ -237,7 +237,7 @@ struct PlayerSelectionView: View {
                 }
             } catch {
                 await MainActor.run {
-                    loadError = error.localizedDescription
+                    loadError = UserFacingErrorMessage.message(from: error)
                 }
             }
         }

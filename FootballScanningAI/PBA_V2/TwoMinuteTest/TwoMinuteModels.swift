@@ -51,6 +51,14 @@ struct RepLog: Codable {
 /// Partner session messages. **Do not rename cases** without a protocol migration — JSON `kind` must stay backward compatible.
 enum TwoMinuteMessage: Codable {
     case nextRep(repIndex: Int)
+    case repStarted(repIndex: Int, timestamp: Date)
+    /// Display → coach signal that the iPad's pre-beep random delay has elapsed
+    /// and the beep has fired. Until this arrives, the coach's PASS button stays
+    /// in `.waitingBeep` so the user cannot tap PASS before the display enters
+    /// its decision window. Prevents the "early pass is silently dropped by the
+    /// display-side hard gate → rep discarded → recovery path swallows the rep"
+    /// cascade that was causing skipped reps during normal (non-spam) play.
+    case beepArmed(repIndex: Int, timestamp: Date)
     case passTriggered(repIndex: Int, timestamp: Date)
     case exitLogged(repIndex: Int, gate: Gate, timestamp: Date)
     /// Legacy wire name: optional early action before exit (DOP/AFP). TODO: rename to `firstDecisionLogged` with dual-decode.
@@ -69,6 +77,8 @@ enum TwoMinuteMessage: Codable {
     case calibrationPassTapped(timestamp: Date)
     case calibrationArrivalTapped(timestamp: Date)
     case calibrationFinished(averageTravelTimeSeconds: Double?)
+    /// Coach → display: open the partner display flow for this activity (relay / Multipeer). Wire kind: `sessionStarted`.
+    case sessionStarted(activityId: String, totalReps: Int, timestamp: Date)
 
     enum CodingKeys: String, CodingKey {
         case kind
@@ -81,6 +91,7 @@ enum TwoMinuteMessage: Codable {
         case phaseToken
         case relaySessionId
         case averageTravelTimeSeconds
+        case totalReps
     }
 
     init(from decoder: Decoder) throws {
@@ -89,6 +100,10 @@ enum TwoMinuteMessage: Codable {
         switch kind {
         case "nextRep":
             self = .nextRep(repIndex: try c.decode(Int.self, forKey: .repIndex))
+        case "repStarted":
+            self = .repStarted(repIndex: try c.decode(Int.self, forKey: .repIndex), timestamp: try c.decode(Date.self, forKey: .timestamp))
+        case "beepArmed":
+            self = .beepArmed(repIndex: try c.decode(Int.self, forKey: .repIndex), timestamp: try c.decode(Date.self, forKey: .timestamp))
         case "passTriggered":
             self = .passTriggered(repIndex: try c.decode(Int.self, forKey: .repIndex), timestamp: try c.decode(Date.self, forKey: .timestamp))
         case "exitLogged":
@@ -118,6 +133,12 @@ enum TwoMinuteMessage: Codable {
             self = .calibrationArrivalTapped(timestamp: try c.decode(Date.self, forKey: .timestamp))
         case "calibrationFinished":
             self = .calibrationFinished(averageTravelTimeSeconds: try c.decodeIfPresent(Double.self, forKey: .averageTravelTimeSeconds))
+        case "sessionStarted":
+            self = .sessionStarted(
+                activityId: try c.decode(String.self, forKey: .activityId),
+                totalReps: try c.decode(Int.self, forKey: .totalReps),
+                timestamp: try c.decode(Date.self, forKey: .timestamp)
+            )
         default:
             throw DecodingError.dataCorruptedError(forKey: .kind, in: c, debugDescription: "Unknown kind: \(kind)")
         }
@@ -129,6 +150,14 @@ enum TwoMinuteMessage: Codable {
         case .nextRep(let repIndex):
             try c.encode("nextRep", forKey: .kind)
             try c.encode(repIndex, forKey: .repIndex)
+        case .repStarted(let repIndex, let timestamp):
+            try c.encode("repStarted", forKey: .kind)
+            try c.encode(repIndex, forKey: .repIndex)
+            try c.encode(timestamp, forKey: .timestamp)
+        case .beepArmed(let repIndex, let timestamp):
+            try c.encode("beepArmed", forKey: .kind)
+            try c.encode(repIndex, forKey: .repIndex)
+            try c.encode(timestamp, forKey: .timestamp)
         case .passTriggered(let repIndex, let timestamp):
             try c.encode("passTriggered", forKey: .kind)
             try c.encode(repIndex, forKey: .repIndex)
@@ -173,6 +202,11 @@ enum TwoMinuteMessage: Codable {
         case .calibrationFinished(let averageTravelTimeSeconds):
             try c.encode("calibrationFinished", forKey: .kind)
             try c.encodeIfPresent(averageTravelTimeSeconds, forKey: .averageTravelTimeSeconds)
+        case .sessionStarted(let activityId, let totalReps, let timestamp):
+            try c.encode("sessionStarted", forKey: .kind)
+            try c.encode(activityId, forKey: .activityId)
+            try c.encode(totalReps, forKey: .totalReps)
+            try c.encode(timestamp, forKey: .timestamp)
         }
     }
 }
@@ -183,7 +217,7 @@ extension TwoMinuteMessage {
         switch self {
         case .nextRep, .passTriggered, .exitLogged, .firstTouchLogged, .incorrectDecision:
             return true
-        case .coachPaired, .sessionEnded, .partnerTrainingEnded, .partnerSessionCheckpoint, .calibrationPassTapped, .calibrationArrivalTapped, .calibrationFinished:
+        case .repStarted, .beepArmed, .coachPaired, .sessionEnded, .partnerTrainingEnded, .partnerSessionCheckpoint, .calibrationPassTapped, .calibrationArrivalTapped, .calibrationFinished, .sessionStarted:
             return false
         }
     }

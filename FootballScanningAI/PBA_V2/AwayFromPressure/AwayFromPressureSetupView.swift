@@ -84,13 +84,6 @@ struct AwayFromPressureSetupView: View {
             .buttonStyle(PlainButtonStyle())
             .padding(.horizontal, 28)
 
-            Button("View Instructions") {
-                showInstructions = true
-            }
-            .font(.subheadline.weight(.semibold))
-            .foregroundColor(.white.opacity(0.82))
-            .buttonStyle(.plain)
-
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -112,12 +105,6 @@ struct AwayFromPressureSetupView: View {
         .onAppear {
             print("[SetupScreen AFP] onAppear, router path count = \(router.pathCount)")
             profileManager.pendingLevelDifficulty = adaptivePlan.modifiers
-        }
-        .navigationDestination(isPresented: $showInstructions) {
-            ActivityInstructionView(activity: .awayFromPressure, trainingMode: mode) {
-                showInstructions = false
-                navigateToSession = true
-            }
         }
         .navigationDestination(isPresented: $navigateToSession) {
             AwayFromPressureDisplaySessionView(

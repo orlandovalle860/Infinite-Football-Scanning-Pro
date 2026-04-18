@@ -21,6 +21,7 @@ struct TwoMinuteTestResultsView: View {
     @EnvironmentObject private var playerStore: PlayerStore
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
     @EnvironmentObject private var router: AppRouter
+    @EnvironmentObject private var coachRemoteRequiredPrompt: CoachRemoteRequiredPromptController
     @Environment(\.dismiss) private var dismiss
 
     @State private var didSave = false
@@ -291,30 +292,52 @@ struct TwoMinuteTestResultsView: View {
                 }
             }
 
-            Button {
-                navigateToTestAgain = true
-            } label: {
-                Text("Run It Again")
-                    .font(.headline)
+            if CoachRemoteSessionStartGate.isPadPlayerRole() {
+                Text("Your coach starts the next session from Coach Remote on a phone.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.85))
+                    .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.yellow)
-            .foregroundStyle(.black)
-
-            Button {
-                if let onStartTraining = onStartTraining {
-                    onStartTraining(.awayFromPressure)
-                } else {
-                    trainingTarget = .awayFromPressure
+            } else {
+                Button {
+                    let route = PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest)
+                    if CoachRemoteSessionStartGate.shouldBlock(route) {
+                        if !CoachRemoteSessionStartGate.coachDeviceIsPresent() {
+                            coachRemoteRequiredPrompt.present()
+                        }
+                    } else {
+                        navigateToTestAgain = true
+                    }
+                } label: {
+                    Text("Run It Again")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
                 }
-            } label: {
-                Text("Start Training")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
+                .buttonStyle(.borderedProminent)
+                .tint(.yellow)
+                .foregroundStyle(.black)
+
+                Button {
+                    let r = PBASessionFlowPolicy.routeForActivityLaunch(.awayFromPressure)
+                    if CoachRemoteSessionStartGate.shouldBlock(r) {
+                        if !CoachRemoteSessionStartGate.coachDeviceIsPresent() {
+                            coachRemoteRequiredPrompt.present()
+                        }
+                        return
+                    }
+                    if let onStartTraining = onStartTraining {
+                        onStartTraining(.awayFromPressure)
+                    } else {
+                        trainingTarget = .awayFromPressure
+                    }
+                } label: {
+                    Text("Start Training")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .tint(.white)
             }
-            .buttonStyle(.bordered)
-            .tint(.white)
 
             Button {
                 navigateToPlayerReport = true
@@ -621,5 +644,6 @@ private struct DecisionTimingDonutChart: View {
         .environmentObject(PlayerStore())
         .environmentObject(PopToRootTrigger())
         .environmentObject(AppRouter())
+        .environmentObject(CoachRemoteRequiredPromptController())
     }
 }

@@ -131,4 +131,14 @@ final class AppRouter: ObservableObject {
             }
         }
     }
+
+    /// Coach Remote: return to the hub **Start Session** activity grid. Does not end partner transport and does not auto-launch a drill.
+    /// When the activity remote was opened via `NavigationLink` (no path entry), falls back to `dismiss()`.
+    func popCoachRemoteToStartSessionHub(dismiss: DismissAction, expectingTopRoute activityRoute: AppRoute) {
+        if path.last == activityRoute {
+            popLast()
+        } else {
+            dismiss()
+        }
+    }
 }

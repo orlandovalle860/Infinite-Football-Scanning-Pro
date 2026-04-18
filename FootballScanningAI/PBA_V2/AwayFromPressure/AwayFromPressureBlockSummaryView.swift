@@ -10,6 +10,8 @@ import SwiftUI
 struct AwayFromPressureBlockSummaryView: View {
     let logs: [AwayFromPressureRepLog]
     let config: AwayFromPressureConfig
+    /// Pops summary and resets the display session (same activity; no role selection).
+    let onRunItBack: () -> Void
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
     @EnvironmentObject private var progressStore: ProgressStore
@@ -258,12 +260,14 @@ struct AwayFromPressureBlockSummaryView: View {
                     newPersonalBests: newPersonalBestsFromBlock,
                     xpEarned: xpEarnedFromBlock,
                     newlyUnlockedBadges: newlyUnlockedBadgesFromBlock,
+                    onRunItBack: onRunItBack,
                     profileManager: profileManager,
                     settingsViewModel: settingsViewModel
                 )
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
+                .environmentObject(router)
             }
             else { blockSummaryContent }
         }
@@ -466,13 +470,7 @@ struct AwayFromPressureBlockSummaryView: View {
                 }
                 .frame(maxWidth: .infinity)
 
-                Button(showDetails ? "Hide details" : "Show details") {
-                    showDetails.toggle()
-                }
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.8))
-
-                if showDetails {
+                if CoachRemoteSessionStartGate.isPadPlayerRole() {
                     VStack(spacing: 10) {
                         HStack {
                             Text("Correct decisions")
@@ -512,52 +510,105 @@ struct AwayFromPressureBlockSummaryView: View {
                     }
                     .font(.footnote)
                     .foregroundColor(.white.opacity(0.75))
+                    Text("Use the coach remote to start the next block.")
+                        .font(.body.weight(.medium))
+                        .foregroundColor(.white.opacity(0.92))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 16)
+                } else {
+                    Button(showDetails ? "Hide details" : "Show details") {
+                        showDetails.toggle()
+                    }
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.8))
+
+                    if showDetails {
+                        VStack(spacing: 10) {
+                            HStack {
+                                Text("Correct decisions")
+                                Spacer()
+                                Text("\(correctCount)/12")
+                            }
+                            HStack {
+                                Text("Avg latency")
+                                Spacer()
+                                Text(avgLatencyString)
+                            }
+                            HStack(alignment: .top) {
+                                Text("Speed")
+                                Spacer()
+                                VStack(alignment: .trailing, spacing: 4) {
+                                    Text(speedBucket.rawValue.capitalized)
+                                    BlockSummarySpeedCountsSubline(
+                                        fast: speedCounts.fast,
+                                        medium: speedCounts.medium,
+                                        slow: speedCounts.slow,
+                                        foregroundColor: .white.opacity(0.5)
+                                    )
+                                }
+                            }
+                            HStack {
+                                Text("Bias")
+                                Spacer()
+                                Text(biasString)
+                            }
+                            if repsWithFirstTouchLogged >= 3 {
+                                HStack {
+                                    Text("Late corrections")
+                                    Spacer()
+                                    Text("\(lateCorrectionsCount)")
+                                }
+                            }
+                        }
+                        .font(.footnote)
+                        .foregroundColor(.white.opacity(0.75))
+                    }
+
+                    VStack(spacing: 12) {
+                        Button {
+                            navigateToNewBlock = true
+                        } label: {
+                            Text("Continue Training")
+                                .font(.system(size: 18, weight: .semibold, design: .rounded))
+                                .foregroundColor(.black)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 16)
+                                .background(Color.yellow)
+                                .cornerRadius(12)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+
+                        Text(retestMessage)
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.7))
+
+                        Button { navigateToCurriculum = true } label: {
+                            Text("Back to Curriculum")
+                                .font(.subheadline)
+                                .foregroundColor(.white.opacity(0.8))
+                        }
+                        .buttonStyle(PlainButtonStyle())
+
+                        Button {
+                            navigateToTwoMinute = true
+                        } label: {
+                            Text("Re-Test 2-Minute Challenge")
+                                .font(.subheadline)
+                                .foregroundColor(.white.opacity(0.9))
+                        }
+                        .buttonStyle(PlainButtonStyle())
+
+                        Button {
+                            navigateToProgress = true
+                        } label: {
+                            Text("View Progress")
+                                .font(.subheadline)
+                                .foregroundColor(.white.opacity(0.8))
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                    }
+                    .padding(.top, 24)
                 }
-
-                VStack(spacing: 12) {
-                    Button {
-                        navigateToNewBlock = true
-                    } label: {
-                        Text("Continue Training")
-                            .font(.system(size: 18, weight: .semibold, design: .rounded))
-                            .foregroundColor(.black)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 16)
-                            .background(Color.yellow)
-                            .cornerRadius(12)
-                    }
-                    .buttonStyle(PlainButtonStyle())
-
-                    Text(retestMessage)
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.7))
-
-                    Button { navigateToCurriculum = true } label: {
-                        Text("Back to Curriculum")
-                            .font(.subheadline)
-                            .foregroundColor(.white.opacity(0.8))
-                    }
-                    .buttonStyle(PlainButtonStyle())
-
-                    Button {
-                        navigateToTwoMinute = true
-                    } label: {
-                        Text("Re-Test 2-Minute Challenge")
-                            .font(.subheadline)
-                            .foregroundColor(.white.opacity(0.9))
-                    }
-                    .buttonStyle(PlainButtonStyle())
-
-                    Button {
-                        navigateToProgress = true
-                    } label: {
-                        Text("View Progress")
-                            .font(.subheadline)
-                            .foregroundColor(.white.opacity(0.8))
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                }
-                .padding(.top, 24)
 
                 Spacer(minLength: 40)
             }

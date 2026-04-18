@@ -60,7 +60,7 @@ final class TwoMinuteSessionManager: ObservableObject {
                 creationError = nil
                 print("[TwoMinuteSession] local-only session id=\(localId.uuidString) (no Supabase auth); relay/drill proceed without cloud session row")
             } else {
-                creationError = "Couldn't create session. Check network."
+                creationError = UserFacingErrorMessage.connectionIssueRetry
             }
         }
     }

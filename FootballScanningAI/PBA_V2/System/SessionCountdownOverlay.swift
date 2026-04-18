@@ -22,6 +22,8 @@ struct SessionCountdownModifier: ViewModifier {
     @State private var countdown: Int?
     @State private var timer: Timer?
     @State private var hasStartedCountdown = false
+    /// After the first 3–2–1–Go fully finishes, partner relay blips must not re-run the countdown (which would suppress coach `nextRep` mid-block).
+    @State private var hasFinishedInitialCountdown = false
 
     init(waitForPartnerReady: Bool, partnerReady: Bool, suppressCoachMessagesDuringCountdown: Binding<Bool>? = nil) {
         self.waitForPartnerReady = waitForPartnerReady
@@ -58,12 +60,14 @@ struct SessionCountdownModifier: ViewModifier {
         .onChange(of: partnerReady) { _, ready in
             guard waitForPartnerReady else { return }
             if !ready {
-                // Relay reconnect / peer_left can flip partnerReady off briefly; reset so the next "ready" can start 3–2–1 again.
-                hasStartedCountdown = false
                 timer?.invalidate()
                 timer = nil
                 countdown = nil
                 syncCoachMessageSuppression(countdownValue: nil)
+                // Before the first "Go" completes, allow a fresh 3–2–1 after reconnect; after that, never re-arm mid-block.
+                if !hasFinishedInitialCountdown {
+                    hasStartedCountdown = false
+                }
                 return
             }
             startCountdownOnce()
@@ -79,7 +83,11 @@ struct SessionCountdownModifier: ViewModifier {
     }
 
     private func syncCoachMessageSuppression(countdownValue: Int?) {
-        suppressCoachMessagesDuringCountdown?.wrappedValue = (countdownValue != nil)
+        let active = (countdownValue != nil)
+        suppressCoachMessagesDuringCountdown?.wrappedValue = active
+        if suppressCoachMessagesDuringCountdown != nil {
+            TrainingPartnerConnectionCoordinator.shared.setPartnerDisplayCountdownActive(active)
+        }
     }
 
     private func startCountdownOnce() {
@@ -101,6 +109,7 @@ struct SessionCountdownModifier: ViewModifier {
                 tim.invalidate()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
                     countdown = nil
+                    hasFinishedInitialCountdown = true
                 }
             }
         }

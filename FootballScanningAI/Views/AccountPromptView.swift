@@ -499,7 +499,7 @@ struct CreatePlayerAfterAuthView: View {
                         return
                     }
                     await MainActor.run {
-                        errorMessage = error.localizedDescription
+                        errorMessage = UserFacingErrorMessage.message(from: error)
                         isLoading = false
                     }
                     return
@@ -517,7 +517,7 @@ struct CreatePlayerAfterAuthView: View {
                 }
             } catch {
                 await MainActor.run {
-                    errorMessage = error.localizedDescription
+                    errorMessage = UserFacingErrorMessage.message(from: error)
                     isLoading = false
                 }
             }

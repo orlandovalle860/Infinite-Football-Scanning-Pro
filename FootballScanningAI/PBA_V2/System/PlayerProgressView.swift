@@ -275,16 +275,6 @@ struct PlayerProgressView: View {
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
             detectAdaptiveLevelUpIfNeeded()
         }
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button {
-                    router.popToRoot()
-                } label: {
-                    Image(systemName: "house.fill")
-                }
-                .foregroundColor(.white.opacity(0.9))
-            }
-        }
         .navigationDestination(isPresented: $navigateToTrain) {
             trainDestination
         }
@@ -678,18 +668,26 @@ struct PlayerProgressView: View {
 
     private var buttonsSection: some View {
         VStack(spacing: 12) {
-            Button {
-                navigateToTrain = true
-            } label: {
-                Text("Train Now")
-                    .font(.headline)
-                    .foregroundColor(.black)
+            if CoachRemoteSessionStartGate.isPadPlayerRole() {
+                Text("Training is started from Coach Remote on your coach’s phone.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.85))
+                    .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
-                    .background(Color.yellow)
-                    .cornerRadius(14)
+            } else {
+                Button {
+                    navigateToTrain = true
+                } label: {
+                    Text("Train Now")
+                        .font(.headline)
+                        .foregroundColor(.black)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                        .background(Color.yellow)
+                        .cornerRadius(14)
+                }
+                .buttonStyle(PlainButtonStyle())
             }
-            .buttonStyle(PlainButtonStyle())
 
             Button {
                 navigateToPlayerReport = true

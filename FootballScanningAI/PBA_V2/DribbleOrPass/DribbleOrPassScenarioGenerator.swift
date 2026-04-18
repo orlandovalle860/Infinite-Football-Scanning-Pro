@@ -38,6 +38,21 @@ enum DribbleOrPassScenarioGenerator {
         }
     }
 
+    /// Truncates the canonical 12-rep pool or cycles it when the coach requests a longer block.
+    static func generatePlan(forBlockSize repCount: Int) -> [DribbleOrPassRepPlan] {
+        let full = generatePlan()
+        guard repCount > 0 else { return [] }
+        if repCount <= full.count {
+            return Array(full.prefix(repCount)).enumerated().map { idx, p in
+                DribbleOrPassRepPlan(repIndex: idx, up: p.up, down: p.down, left: p.left, right: p.right, expectedCorrectGate: p.expectedCorrectGate)
+            }
+        }
+        return (0..<repCount).map { i in
+            let t = full[i % full.count]
+            return DribbleOrPassRepPlan(repIndex: i, up: t.up, down: t.down, left: t.left, right: t.right, expectedCorrectGate: t.expectedCorrectGate)
+        }
+    }
+
     private static func validOrder(_ plans: [DribbleOrPassRepPlan]) -> Bool {
         var run = 0
         var last: Gate?

@@ -244,32 +244,32 @@ final class ConnectionManager: NSObject, ObservableObject {
     func sendCommand(_ data: Data) {
         queue.async { [weak self] in
             guard let self = self, let session = self.session, !session.connectedPeers.isEmpty else {
-                DispatchQueue.main.async { [weak self] in self?.lastError = "Not connected" }
+                DispatchQueue.main.async { [weak self] in self?.lastError = UserFacingErrorMessage.notConnected }
                 return
             }
             do {
                 try session.send(data, toPeers: session.connectedPeers, with: .reliable)
             } catch {
-                DispatchQueue.main.async { [weak self] in self?.lastError = error.localizedDescription }
+                DispatchQueue.main.async { [weak self] in self?.lastError = UserFacingErrorMessage.message(from: error) }
             }
         }
     }
 
     /// Pressure trigger (iPhone → iPad).
     func sendTrigger() {
-        guard connectedPeerName != nil else { DispatchQueue.main.async { self.lastError = "Not connected to iPad" }; return }
+        guard connectedPeerName != nil else { DispatchQueue.main.async { self.lastError = UserFacingErrorMessage.notConnectedToDisplay }; return }
         sendCommand(triggerMessage)
     }
 
     /// Two-minute test / PBA V2 message (iPhone → iPad).
     func sendTwoMinuteMessage(_ message: TwoMinuteMessage) {
-        guard connectedPeerName != nil else { DispatchQueue.main.async { self.lastError = "Not connected to iPad" }; return }
+        guard connectedPeerName != nil else { DispatchQueue.main.async { self.lastError = UserFacingErrorMessage.notConnectedToDisplay }; return }
         do {
             var data = pba2Prefix
             data.append(try JSONEncoder().encode(message))
             sendCommand(data)
         } catch {
-            DispatchQueue.main.async { self.lastError = error.localizedDescription }
+            DispatchQueue.main.async { self.lastError = UserFacingErrorMessage.genericRetry }
         }
     }
 
@@ -330,7 +330,7 @@ final class ConnectionManager: NSObject, ObservableObject {
                     NotificationCenter.default.post(name: .twoMinuteMessageReceived, object: msg)
                 }
             } catch {
-                DispatchQueue.main.async { self.lastError = "2-min decode: \(error.localizedDescription)" }
+                DispatchQueue.main.async { self.lastError = UserFacingErrorMessage.genericRetry }
             }
         } else if data.count > 8, data.prefix(8) == displayPrefix {
             let json = data.dropFirst(8)

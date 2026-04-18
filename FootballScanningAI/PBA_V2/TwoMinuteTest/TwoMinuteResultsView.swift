@@ -16,6 +16,7 @@ struct TwoMinuteResultsView: View {
     @EnvironmentObject private var playerStore: PlayerStore
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
     @EnvironmentObject private var router: AppRouter
+    @EnvironmentObject private var coachRemoteRequiredPrompt: CoachRemoteRequiredPromptController
     @Environment(\.dismiss) private var dismiss
     @State private var didSave = false
     @State private var showRenameSheet = false
@@ -180,7 +181,17 @@ struct TwoMinuteResultsView: View {
             if showBaselineRecommendation, let rec = baselineRecommendation, let baseline = sessionResult {
                 baselineRecommendationContent(recommendation: rec, baseline: baseline)
             } else if let s = sessionResultForSummary {
-                SessionSummaryScreenView(session: s, playerName: profileManager.currentProfile?.name ?? playerStore.selectedPlayer?.name ?? "Player", isNewPersonalBest: isNewPersonalBestForSummary, newPersonalBests: newPersonalBestsFromBlock, xpEarned: xpEarnedFromBlock, newlyUnlockedBadges: newlyUnlockedBadgesFromBlock, profileManager: profileManager, settingsViewModel: settingsViewModel)
+                SessionSummaryScreenView(
+                    session: s,
+                    playerName: profileManager.currentProfile?.name ?? playerStore.selectedPlayer?.name ?? "Player",
+                    isNewPersonalBest: isNewPersonalBestForSummary,
+                    newPersonalBests: newPersonalBestsFromBlock,
+                    xpEarned: xpEarnedFromBlock,
+                    newlyUnlockedBadges: newlyUnlockedBadgesFromBlock,
+                    onRunItBack: { sessionResultForSummary = nil },
+                    profileManager: profileManager,
+                    settingsViewModel: settingsViewModel
+                )
                     .environmentObject(progressStore)
                     .environmentObject(playerStore)
                     .environmentObject(popToRootTrigger)
@@ -363,36 +374,47 @@ struct TwoMinuteResultsView: View {
                     .foregroundColor(.white.opacity(0.85))
             }
 
-            Button {
-                switch recommendation.nextActivity {
-                case .awayFromPressure:
-                    router.push(PBASessionFlowPolicy.routeForActivityLaunch(.awayFromPressure))
-                case .dribbleOrPass:
-                    router.push(PBASessionFlowPolicy.routeForActivityLaunch(.dribbleOrPass))
-                case .oneTouchPassing:
-                    router.push(PBASessionFlowPolicy.routeForActivityLaunch(.oneTouchPassing))
-                case .twoMinuteTest:
-                    router.push(PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest))
-                }
-            } label: {
-                Text("Start Training")
-                    .font(.headline.weight(.semibold))
-                    .foregroundColor(.black)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
-                    .background(Color.yellow)
-                    .cornerRadius(14)
-            }
-            .buttonStyle(PlainButtonStyle())
-
-            Button {
-                router.popToRoot()
-            } label: {
-                Text("Go to Home")
+            if CoachRemoteSessionStartGate.isPadPlayerRole() {
+                Text("Your coach starts training from Coach Remote on a phone.")
                     .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.9))
+                    .foregroundColor(.white.opacity(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("Use the coach remote to start the next block.")
+                    .font(.body.weight(.medium))
+                    .foregroundColor(.white.opacity(0.92))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 4)
+            } else {
+                Button {
+                    let route: AppRoute = {
+                        switch recommendation.nextActivity {
+                        case .awayFromPressure: return PBASessionFlowPolicy.routeForActivityLaunch(.awayFromPressure)
+                        case .dribbleOrPass: return PBASessionFlowPolicy.routeForActivityLaunch(.dribbleOrPass)
+                        case .oneTouchPassing: return PBASessionFlowPolicy.routeForActivityLaunch(.oneTouchPassing)
+                        case .twoMinuteTest: return PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest)
+                        }
+                    }()
+                    router.pushRespectingCoachRemotePadGate(route, coachRemotePrompt: coachRemoteRequiredPrompt)
+                } label: {
+                    Text("Start Training")
+                        .font(.headline.weight(.semibold))
+                        .foregroundColor(.black)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                        .background(Color.yellow)
+                        .cornerRadius(14)
+                }
+                .buttonStyle(PlainButtonStyle())
+
+                Button {
+                    router.popToRoot()
+                } label: {
+                    Text("Go to Home")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.9))
+                }
+                .buttonStyle(PlainButtonStyle())
             }
-            .buttonStyle(PlainButtonStyle())
 
             Spacer(minLength: 0)
         }
@@ -420,24 +442,53 @@ struct TwoMinuteResultsView: View {
                 resultRow("Strong side tendency", strongSideTendency)
                 twoMinuteDecisionSpeedHeadlineRow
 
-                HStack {
+                if CoachRemoteSessionStartGate.isPadPlayerRole() {
                     Text("Saving progress for: \(playerStore.selectedPlayer?.name ?? "Player 1")")
                         .font(.footnote)
                         .foregroundColor(.white.opacity(0.6))
-                    Button("Rename") {
-                        showRenameSheet = true
+                        .padding(.top, 8)
+                    Text("Use the coach remote to start the next block.")
+                        .font(.body.weight(.medium))
+                        .foregroundColor(.white.opacity(0.92))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 16)
+                } else {
+                    HStack {
+                        Text("Saving progress for: \(playerStore.selectedPlayer?.name ?? "Player 1")")
+                            .font(.footnote)
+                            .foregroundColor(.white.opacity(0.6))
+                        Button("Rename") {
+                            showRenameSheet = true
+                        }
+                        .font(.footnote)
+                        .foregroundColor(.yellow)
                     }
-                    .font(.footnote)
-                    .foregroundColor(.yellow)
-                }
-                .padding(.top, 8)
+                    .padding(.top, 8)
 
-                VStack(spacing: 12) {
-                    if !UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey) {
+                    VStack(spacing: 12) {
+                        if !UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey) {
+                            Button {
+                                navigateToCreateProfile = true
+                            } label: {
+                                Text("Continue to Home")
+                                    .font(.system(size: 18, weight: .semibold, design: .rounded))
+                                    .foregroundColor(.black)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 16)
+                                    .background(Color.yellow)
+                                    .cornerRadius(12)
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                        }
+
                         Button {
-                            navigateToCreateProfile = true
+                            if !UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey) {
+                                navigateToCreateProfile = true
+                                return
+                            }
+                            navigateToCurriculum = true
                         } label: {
-                            Text("Continue to Home")
+                            Text("Go to Curriculum")
                                 .font(.system(size: 18, weight: .semibold, design: .rounded))
                                 .foregroundColor(.black)
                                 .frame(maxWidth: .infinity)
@@ -446,65 +497,48 @@ struct TwoMinuteResultsView: View {
                                 .cornerRadius(12)
                         }
                         .buttonStyle(PlainButtonStyle())
-                    }
-
-                    Button {
-                        if !UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey) {
-                            navigateToCreateProfile = true
-                            return
+                        Button {
+                            if !UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey) {
+                                navigateToCreateProfile = true
+                                return
+                            }
+                            navigateToAwayFromPressure = true
+                        } label: {
+                            Text("Train Away From Pressure Now")
+                                .font(.subheadline)
+                                .foregroundColor(.white.opacity(0.9))
                         }
-                        navigateToCurriculum = true
-                    } label: {
-                        Text("Go to Curriculum")
-                            .font(.system(size: 18, weight: .semibold, design: .rounded))
-                            .foregroundColor(.black)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 16)
-                            .background(Color.yellow)
-                            .cornerRadius(12)
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    Button {
-                        if !UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey) {
-                            navigateToCreateProfile = true
-                            return
-                        }
-                        navigateToAwayFromPressure = true
-                    } label: {
-                        Text("Train Away From Pressure Now")
-                            .font(.subheadline)
-                            .foregroundColor(.white.opacity(0.9))
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    Text("Coach: on the other device, choose Playing Away From Pressure → Coach remote.")
-                        .font(.footnote)
-                        .foregroundColor(.white.opacity(0.7))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 16)
+                        .buttonStyle(PlainButtonStyle())
+                        Text("Coach: on the other device, choose Playing Away From Pressure → Coach remote.")
+                            .font(.footnote)
+                            .foregroundColor(.white.opacity(0.7))
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 16)
 
-                    Button {
-                        if !UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey) {
-                            navigateToCreateProfile = true
-                            return
+                        Button {
+                            if !UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey) {
+                                navigateToCreateProfile = true
+                                return
+                            }
+                            navigateToProgress = true
+                        } label: {
+                            Text("View Progress")
+                                .font(.subheadline)
+                                .foregroundColor(.white.opacity(0.9))
                         }
-                        navigateToProgress = true
-                    } label: {
-                        Text("View Progress")
-                            .font(.subheadline)
-                            .foregroundColor(.white.opacity(0.9))
-                    }
-                    .buttonStyle(PlainButtonStyle())
+                        .buttonStyle(PlainButtonStyle())
 
-                    Button {
-                        dismiss()
-                    } label: {
-                        Text("Retake Test")
-                            .font(.subheadline)
-                            .foregroundColor(.white.opacity(0.8))
+                        Button {
+                            dismiss()
+                        } label: {
+                            Text("Retake Test")
+                                .font(.subheadline)
+                                .foregroundColor(.white.opacity(0.8))
+                        }
+                        .buttonStyle(PlainButtonStyle())
                     }
-                    .buttonStyle(PlainButtonStyle())
+                    .padding(.top, 24)
                 }
-                .padding(.top, 24)
 
                 Spacer(minLength: 40)
             }

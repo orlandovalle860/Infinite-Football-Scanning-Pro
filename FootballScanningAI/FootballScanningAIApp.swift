@@ -12,6 +12,7 @@ import UIKit
 struct FootballScanningAIApp: App {
     @UIApplicationDelegateAdaptor(CoachingNotificationsAppDelegate.self) private var coachingNotificationsAppDelegate
     @StateObject private var router = AppRouter()
+    @StateObject private var coachRemoteRequiredPrompt = CoachRemoteRequiredPromptController()
 
     init() {
         // Prevent screen from dimming and lock screen from appearing while app is running
@@ -53,6 +54,7 @@ struct FootballScanningAIApp: App {
                 .environmentObject(ConnectionManager.shared)
                 .environmentObject(MultipeerManager())
                 .environmentObject(router)
+                .environmentObject(coachRemoteRequiredPrompt)
                 .preferredColorScheme(.dark)
                 .onAppear {
                     // Ensure protection is active when app appears

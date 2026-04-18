@@ -18,7 +18,11 @@ enum AwayFromPressurePhase: Equatable {
 }
 
 final class AwayFromPressureEngine: ObservableObject {
-    @Published private(set) var phase: AwayFromPressurePhase = .waitingForNextRep
+    @Published private(set) var phase: AwayFromPressurePhase = .waitingForNextRep {
+        didSet {
+            print("[PHASE] \(oldValue) → \(phase) [repIndex=\(currentRepIndex)]")
+        }
+    }
     @Published private(set) var repLogs: [AwayFromPressureRepLog] = []
     @Published var instructionTitle: String = ""
     @Published var instructionSubtitle: String = ""
@@ -27,7 +31,7 @@ final class AwayFromPressureEngine: ObservableObject {
     private let config: AwayFromPressureConfig
     private let trainingMode: TrainingMode
     private let plan: [AwayFromPressureRepPlan]
-    private var currentRepIndex: Int = 0
+    private(set) var currentRepIndex: Int = 0
     private var passTriggeredAt: Date?
     private var startedAtForCurrentRep: Date?
     /// Optional early direction (wire: `firstTouchLogged`) before exit; keyed by repIndex. See `CoachRemoteDecisionModelMIGRATION.md`.
@@ -47,6 +51,21 @@ final class AwayFromPressureEngine: ObservableObject {
         self.config = config
         self.trainingMode = trainingMode
         self.plan = plan
+        updateInstructions()
+    }
+
+    private func commitPhase(_ newPhase: AwayFromPressurePhase) {
+        if case .waitingForNextRep = phase {
+            switch newPhase {
+            case .armedScanning, .blockComplete, .waitingForNextRep:
+                break
+            default:
+                print("[INVALID TRANSITION] waitingForNextRep → \(newPhase)")
+                assertionFailure("[INVALID TRANSITION] waitingForNextRep → \(newPhase)")
+                return
+            }
+        }
+        phase = newPhase
         updateInstructions()
     }
 
@@ -88,8 +107,7 @@ final class AwayFromPressureEngine: ObservableObject {
         currentRepIndex = repIndex
         guard repIndex >= 0, repIndex < plan.count else {
             if repIndex >= plan.count {
-                phase = .blockComplete
-                updateInstructions()
+                commitPhase(.blockComplete)
             }
             return
         }
@@ -114,8 +132,7 @@ final class AwayFromPressureEngine: ObservableObject {
         )
         #endif
         let endsAt = Date().addingTimeInterval(delay)
-        phase = .armedScanning(repIndex: repIndex, pressureGate: p.pressureGate, endsAt: endsAt)
-        updateInstructions()
+        commitPhase(.armedScanning(repIndex: repIndex, pressureGate: p.pressureGate, endsAt: endsAt))
 
         scanDelayTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
             DispatchQueue.main.async { self?.onBeepFire(repIndex: repIndex, pressureGate: p.pressureGate) }
@@ -127,13 +144,22 @@ final class AwayFromPressureEngine: ObservableObject {
         guard case .armedScanning(let r, _, _) = phase, r == repIndex else { return }
         scanDelayTimer?.invalidate()
         scanDelayTimer = nil
-        phase = .beepedAwaitingPass(repIndex: repIndex, pressureGate: pressureGate)
-        updateInstructions()
+        commitPhase(.beepedAwaitingPass(repIndex: repIndex, pressureGate: pressureGate))
     }
 
     func onPassTrigger(repIndex: Int, timestamp: Date) {
         guard repIndex == currentRepIndex else { return }
-        guard case .beepedAwaitingPass(let rIdx, let pressureGate) = phase, rIdx == repIndex else { return }
+        let pressureGate: Gate
+        switch phase {
+        case .beepedAwaitingPass(let rIdx, let g) where rIdx == repIndex:
+            pressureGate = g
+        case .armedScanning(let rIdx, let g, _) where rIdx == repIndex:
+            scanDelayTimer?.invalidate()
+            scanDelayTimer = nil
+            pressureGate = g
+        default:
+            return
+        }
 
         passTriggeredAt = timestamp
         passTriggeredByRep[repIndex] = timestamp
@@ -151,8 +177,7 @@ final class AwayFromPressureEngine: ObservableObject {
             configuredWindowSeconds: duration,
             note: "PASS→markerVisible wedge reveal anim 0.22s in DangerZoneOverlay separate from timer"
         )
-        phase = .markerVisible(repIndex: repIndex, pressureGate: pressureGate, endsAt: endsAt)
-        updateInstructions()
+        commitPhase(.markerVisible(repIndex: repIndex, pressureGate: pressureGate, endsAt: endsAt))
 
         markerHideTimer = Timer.scheduledTimer(withTimeInterval: duration, repeats: false) { [weak self] _ in
             DispatchQueue.main.async { self?.transitionToAwaitingExitLog(repIndex: repIndex, pressureGate: pressureGate) }
@@ -166,6 +191,9 @@ final class AwayFromPressureEngine: ObservableObject {
     /// Returns reaction time in seconds when rep was saved; nil when discarded.
     func onExitLogged(repIndex: Int, gate: Gate, timestamp: Date) -> Double? {
         guard repIndex == currentRepIndex else { return nil }
+        if case .waitingForNextRep = phase {
+            return nil
+        }
         var rIdx: Int?
         switch phase {
         case .awaitingExitLog(let ri, _):
@@ -194,8 +222,8 @@ final class AwayFromPressureEngine: ObservableObject {
         if reactionTimeSeconds > Self.maxReactionTimeSeconds {
             passTriggeredAt = nil
             pendingFirstTouchByRep[repIndex] = nil
-            if repIndex + 1 >= plan.count { phase = .blockComplete } else { phase = .waitingForNextRep }
-            updateInstructions()
+            cancelTimers()
+            if repIndex + 1 >= plan.count { commitPhase(.blockComplete) } else { commitPhase(.waitingForNextRep) }
             return nil
         }
 
@@ -249,18 +277,21 @@ final class AwayFromPressureEngine: ObservableObject {
         pendingFirstTouchByRep[repIndex] = nil
         passTriggeredAt = nil
 
+        cancelTimers()
         if repIndex + 1 >= plan.count {
-            phase = .blockComplete
+            commitPhase(.blockComplete)
         } else {
-            phase = .waitingForNextRep
+            commitPhase(.waitingForNextRep)
         }
-        updateInstructions()
         return reactionTimeSeconds
     }
 
     /// Coach ✕ — `exitedGate` nil; required when marking wrong without a direction. See `CoachRemoteDecisionModelMIGRATION.md`.
     func onIncorrectDecision(repIndex: Int, timestamp: Date) -> Double? {
         guard repIndex == currentRepIndex else { return nil }
+        if case .waitingForNextRep = phase {
+            return nil
+        }
         var rIdx: Int?
         switch phase {
         case .awaitingExitLog(let ri, _):
@@ -288,8 +319,8 @@ final class AwayFromPressureEngine: ObservableObject {
         let reactionTimeSeconds = timestamp.timeIntervalSince(triggerTime)
         if reactionTimeSeconds > Self.maxReactionTimeSeconds {
             passTriggeredAt = nil
-            if repIndex + 1 >= plan.count { phase = .blockComplete } else { phase = .waitingForNextRep }
-            updateInstructions()
+            cancelTimers()
+            if repIndex + 1 >= plan.count { commitPhase(.blockComplete) } else { commitPhase(.waitingForNextRep) }
             return nil
         }
 
@@ -329,12 +360,12 @@ final class AwayFromPressureEngine: ObservableObject {
         repLogs.append(log)
         passTriggeredAt = nil
 
+        cancelTimers()
         if repIndex + 1 >= plan.count {
-            phase = .blockComplete
+            commitPhase(.blockComplete)
         } else {
-            phase = .waitingForNextRep
+            commitPhase(.waitingForNextRep)
         }
-        updateInstructions()
         return reactionTimeSeconds
     }
 
@@ -345,6 +376,11 @@ final class AwayFromPressureEngine: ObservableObject {
     }
 
     private func transitionToAwaitingExitLog(repIndex: Int, pressureGate: Gate) {
+        guard case .markerVisible(let r, let g, _) = phase, r == repIndex, g == pressureGate else {
+            markerHideTimer?.invalidate()
+            markerHideTimer = nil
+            return
+        }
         CueTimingDebugLog.logHidden(
             activity: "awayFromPressure",
             repIndex: repIndex,
@@ -356,8 +392,7 @@ final class AwayFromPressureEngine: ObservableObject {
         markerHideTimer?.invalidate()
         markerHideTimer = nil
         markerHiddenAtForCurrentRep = Date()
-        phase = .awaitingExitLog(repIndex: repIndex, pressureGate: pressureGate)
-        updateInstructions()
+        commitPhase(.awaitingExitLog(repIndex: repIndex, pressureGate: pressureGate))
     }
 
     private func cancelTimers() {
@@ -367,9 +402,59 @@ final class AwayFromPressureEngine: ObservableObject {
         markerHideTimer = nil
     }
 
+    /// Clears the finished block and returns to the first rep’s waiting state (same config/mode). Used by “Run It Back” on the display.
+    func restartBlockFromBeginning() {
+        cancelTimers()
+        cueTimingDebugVisibleAt = nil
+        currentRepIndex = 0
+        passTriggeredAt = nil
+        startedAtForCurrentRep = nil
+        markerShownAtForCurrentRep = nil
+        markerHiddenAtForCurrentRep = nil
+        passTriggeredByRep.removeAll()
+        directionLoggedByRep.removeAll()
+        pendingFirstTouchByRep.removeAll()
+        repLogs.removeAll()
+        repDecisions.removeAll()
+        adaptiveState = AdaptiveState()
+        sessionAdaptiveDifficulty = DifficultySettings(cueDuration: 1.0, travelTime: 1.0, thresholdAdjustment: 0.0)
+        commitPhase(.waitingForNextRep)
+    }
+
     /// Call when app enters background so timers don't fire late when returning.
     func applicationDidEnterBackground() {
         cancelTimers()
+    }
+
+    /// After foreground: reschedule scan / marker-hide timers from phase deadlines.
+    func synchronizeTimersAfterEnteringForeground() {
+        let now = Date()
+        switch phase {
+        case .armedScanning(let repIndex, let pressureGate, let endsAt):
+            if now >= endsAt {
+                onBeepFire(repIndex: repIndex, pressureGate: pressureGate)
+            } else {
+                let remaining = max(0.01, endsAt.timeIntervalSince(now))
+                scanDelayTimer?.invalidate()
+                scanDelayTimer = Timer.scheduledTimer(withTimeInterval: remaining, repeats: false) { [weak self] _ in
+                    DispatchQueue.main.async { self?.onBeepFire(repIndex: repIndex, pressureGate: pressureGate) }
+                }
+                if let t = scanDelayTimer { RunLoop.main.add(t, forMode: .common) }
+            }
+        case .markerVisible(let repIndex, let pressureGate, let endsAt):
+            if now >= endsAt {
+                transitionToAwaitingExitLog(repIndex: repIndex, pressureGate: pressureGate)
+            } else {
+                let remaining = max(0.01, endsAt.timeIntervalSince(now))
+                markerHideTimer?.invalidate()
+                markerHideTimer = Timer.scheduledTimer(withTimeInterval: remaining, repeats: false) { [weak self] _ in
+                    DispatchQueue.main.async { self?.transitionToAwaitingExitLog(repIndex: repIndex, pressureGate: pressureGate) }
+                }
+                if let t = markerHideTimer { RunLoop.main.add(t, forMode: .common) }
+            }
+        default:
+            break
+        }
     }
 
     deinit {

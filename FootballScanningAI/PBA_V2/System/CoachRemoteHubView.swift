@@ -12,108 +12,78 @@ struct CoachRemoteHubView: View {
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
     @EnvironmentObject private var router: AppRouter
+    @EnvironmentObject private var connectionManager: ConnectionManager
+    @ObservedObject private var coachRelayRemoteService = TrainingPartnerConnectionCoordinator.shared.coachRelayRemoteService
+    @ObservedObject private var relayDisplaySession = TrainingPartnerConnectionCoordinator.shared.relayDisplaySession
     @AppStorage(AppRole.storageKey) private var appRoleRaw: String = AppRole.player.rawValue
-    @AppStorage("userMode") private var userMode: String = "coach"
     @AppStorage("coachRemoteLastUsedActivityV1") private var lastUsedActivityKey: String = ""
     @State private var partnerSessionActive = false
     @State private var showDisconnectCoachConfirm = false
 
-    private var isCoachMode: Bool {
-        userMode == "coach"
+    private var coachLinkReadyForActivities: Bool {
+        CoachRemoteSessionStartGate.coachDeviceIsPresent()
+    }
+
+    private struct CoachRemoteActivityItem: Identifiable, Equatable {
+        let id: String
+        let activityKind: ActivityKind?
+        let title: String
+        let subtitle: String
+        let icon: String
+        let route: AppRoute
+    }
+
+    private static let activityItems: [CoachRemoteActivityItem] = [
+        CoachRemoteActivityItem(
+            id: "dribble_or_pass",
+            activityKind: .dribbleOrPass,
+            title: "Dribble or Pass",
+            subtitle: "12 reps",
+            icon: "arrow.triangle.branch",
+            route: .dribbleOrPassCoachRemote
+        ),
+        CoachRemoteActivityItem(
+            id: "away_from_pressure",
+            activityKind: .awayFromPressure,
+            title: "Playing Away From Pressure",
+            subtitle: "12 reps",
+            icon: "exclamationmark.triangle.fill",
+            route: .awayFromPressureCoachRemote
+        ),
+        CoachRemoteActivityItem(
+            id: "one_touch_passing",
+            activityKind: .oneTouchPassing,
+            title: "One-Touch Passing",
+            subtitle: "12 reps",
+            icon: "hand.tap.fill",
+            route: .oneTouchPassingCoachRemote
+        ),
+        CoachRemoteActivityItem(
+            id: "two_minute_test",
+            activityKind: .twoMinuteTest,
+            title: "2-Minute Test",
+            subtitle: "10 reps",
+            icon: "soccerball",
+            route: .twoMinuteCoachRemote
+        )
+    ]
+
+    private var recommendedActivity: CoachRemoteActivityItem {
+        let nextKind = GuidedCurriculumEngine.currentProgress(playerId: profileManager.currentProfile?.id).nextActivity
+        return Self.activityItems.first(where: { $0.activityKind == nextKind }) ?? Self.activityItems[0]
+    }
+
+    private var otherActivities: [CoachRemoteActivityItem] {
+        Self.activityItems.filter { $0.id != recommendedActivity.id }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Start Session")
-                    .font(.system(size: 34, weight: .bold, design: .rounded))
-                    .foregroundColor(.white)
-                Text("Tap the activity to start the session")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.65))
-                    .multilineTextAlignment(.leading)
-            }
-            .padding(.horizontal, 24)
-            .padding(.top, 16)
-
-            // Action zone: always visible at the top.
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-                CoachRemoteGridTile(
-                    title: "Dribble or Pass",
-                    subtitle: "12 reps",
-                    icon: "arrow.triangle.branch",
-                    isLastUsed: lastUsedActivityKey == "dribble_or_pass",
-                    route: .dribbleOrPassCoachRemote,
-                    onTap: { lastUsedActivityKey = "dribble_or_pass" },
-                    router: router
-                )
-                CoachRemoteGridTile(
-                    title: "Playing Away From Pressure",
-                    subtitle: "12 reps",
-                    icon: "exclamationmark.triangle.fill",
-                    isLastUsed: lastUsedActivityKey == "away_from_pressure",
-                    route: .awayFromPressureCoachRemote,
-                    onTap: { lastUsedActivityKey = "away_from_pressure" },
-                    router: router
-                )
-                CoachRemoteGridTile(
-                    title: "One-Touch Passing",
-                    subtitle: "12 reps",
-                    icon: "hand.tap.fill",
-                    isLastUsed: lastUsedActivityKey == "one_touch_passing",
-                    route: .oneTouchPassingCoachRemote,
-                    onTap: { lastUsedActivityKey = "one_touch_passing" },
-                    router: router
-                )
-                CoachRemoteGridTile(
-                    title: "2-Minute Test",
-                    subtitle: "10 reps",
-                    icon: "soccerball",
-                    isLastUsed: lastUsedActivityKey == "two_minute_test",
-                    route: .twoMinuteCoachRemote,
-                    onTap: { lastUsedActivityKey = "two_minute_test" },
-                    router: router
-                )
-            }
-            .padding(.horizontal, 20)
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    if isCoachMode {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("Team Insights")
-                                .font(.headline.weight(.semibold))
-                                .foregroundColor(.white.opacity(0.95))
-                                .padding(.horizontal, 4)
-                            TeamChallengeCoachDashboardView(
-                                data: makeCoachChallengeDashboardData(profiles: profileManager.profiles)
-                            )
-                        }
-                        .padding(.top, 28)
-                        .padding(.horizontal, 20)
-                    }
-
-                    if partnerSessionActive {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Ends coach/display connection")
-                                .font(.caption)
-                                .foregroundColor(.white.opacity(0.55))
-                                .padding(.horizontal, 4)
-                            Button {
-                                showDisconnectCoachConfirm = true
-                            } label: {
-                                Text("Disconnect Coach")
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundColor(.orange.opacity(0.95))
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 12)
-                            }
-                            .buttonStyle(PlainButtonStyle())
-                        }
-                        .padding(.horizontal, 20)
-                        .padding(.bottom, 24)
-                    }
-                }
+        Group {
+            if coachLinkReadyForActivities {
+                activitySelectionStack
+            } else {
+                CoachRemoteHubRelayPairingView()
+                    .environmentObject(router)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -150,6 +120,15 @@ struct CoachRemoteHubView: View {
         .onAppear {
             partnerSessionActive = TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive
         }
+        .onChange(of: coachRelayRemoteService.connectionState) { _, _ in
+            partnerSessionActive = TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive
+        }
+        .onChange(of: connectionManager.connectedPeerName) { _, _ in
+            partnerSessionActive = TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive
+        }
+        .onChange(of: relayDisplaySession.isCoachPaired) { _, _ in
+            partnerSessionActive = TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive
+        }
         .alert("Disconnect Coach?", isPresented: $showDisconnectCoachConfirm) {
             Button("Cancel", role: .cancel) {}
             Button("Disconnect", role: .destructive) {
@@ -158,6 +137,88 @@ struct CoachRemoteHubView: View {
             }
         } message: {
             Text("You'll need to enter a new join code to start another session.")
+        }
+    }
+
+    private var activitySelectionStack: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Start Session")
+                    .font(.system(size: 34, weight: .bold, design: .rounded))
+                    .foregroundColor(.white)
+                Text("Tap the activity to start the session")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.65))
+                    .multilineTextAlignment(.leading)
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 16)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Recommended Next")
+                            .font(.headline.weight(.semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 4)
+
+                        CoachRemoteGridTile(
+                            title: recommendedActivity.title,
+                            subtitle: recommendedActivity.subtitle,
+                            icon: recommendedActivity.icon,
+                            isLastUsed: lastUsedActivityKey == recommendedActivity.id,
+                            route: recommendedActivity.route,
+                            isProminent: true,
+                            onTap: { lastUsedActivityKey = recommendedActivity.id },
+                            router: router
+                        )
+                    }
+                    .padding(.horizontal, 20)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Other Activities")
+                            .font(.headline.weight(.semibold))
+                            .foregroundColor(.white.opacity(0.92))
+                            .padding(.horizontal, 4)
+
+                        LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+                            ForEach(otherActivities) { activity in
+                                CoachRemoteGridTile(
+                                    title: activity.title,
+                                    subtitle: activity.subtitle,
+                                    icon: activity.icon,
+                                    isLastUsed: lastUsedActivityKey == activity.id,
+                                    route: activity.route,
+                                    onTap: { lastUsedActivityKey = activity.id },
+                                    router: router
+                                )
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 20)
+
+                    if coachLinkReadyForActivities, partnerSessionActive {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Ends coach/display connection")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.55))
+                                .padding(.horizontal, 4)
+                            Button {
+                                showDisconnectCoachConfirm = true
+                            } label: {
+                                Text("Disconnect Coach")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundColor(.orange.opacity(0.95))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 24)
+                    }
+                }
+            }
         }
     }
 }
@@ -199,11 +260,13 @@ private struct CoachRemoteGridTile: View {
     let icon: String
     let isLastUsed: Bool
     let route: AppRoute
+    var isProminent: Bool = false
     let onTap: () -> Void
     @ObservedObject var router: AppRouter
 
     var body: some View {
         Button {
+            guard CoachRemoteSessionStartGate.coachDeviceIsPresent() else { return }
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
             onTap()
             router.push(route)
@@ -222,17 +285,17 @@ private struct CoachRemoteGridTile: View {
                         .cornerRadius(8)
                 }
                 Text(title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(isProminent ? .headline.weight(.bold) : .subheadline.weight(.semibold))
                     .foregroundColor(.white)
                     .lineLimit(2)
                 Text(subtitle)
-                    .font(.caption2)
+                    .font(isProminent ? .caption.weight(.semibold) : .caption2)
                     .foregroundColor(.white.opacity(0.7))
                 Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
-            .frame(minHeight: 100)
+            .frame(minHeight: isProminent ? 132 : 100)
             .background(Color.white.opacity(0.1))
             .cornerRadius(14)
             .contentShape(Rectangle())

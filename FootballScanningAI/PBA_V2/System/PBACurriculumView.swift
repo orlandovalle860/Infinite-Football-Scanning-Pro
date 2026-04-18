@@ -15,6 +15,7 @@ struct PBACurriculumView: View {
     @ObservedObject var playerStore: PlayerStore
     @ObservedObject var popToRootTrigger: PopToRootTrigger
     @EnvironmentObject private var router: AppRouter
+    @EnvironmentObject private var coachRemoteRequiredPrompt: CoachRemoteRequiredPromptController
     @Environment(\.dismiss) private var dismiss
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
@@ -107,16 +108,6 @@ struct PBACurriculumView: View {
         .preferredColorScheme(.dark)
         .navigationTitle("Path")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    router.popToRoot()
-                } label: {
-                    Image(systemName: "house.fill")
-                }
-                .foregroundColor(.white.opacity(0.9))
-            }
-        }
         .onAppear {
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
         }
@@ -245,17 +236,27 @@ struct PBACurriculumView: View {
                         .padding(.top, 2)
                 }
             }
-            NavigationLink(value: route) {
-                Text("Train")
-                    .font(.body.weight(.semibold))
-                    .foregroundColor(.black)
-                    .frame(maxWidth: .infinity)
-                    .frame(minHeight: trainButtonMinHeight)
-                    .background(Color.yellow)
-                    .cornerRadius(12)
-                    .contentShape(Rectangle())
+            if CoachRemoteSessionStartGate.isPadPlayerRole() {
+                Text("Your coach starts this stage from Coach Remote on a phone.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.82))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, minHeight: trainButtonMinHeight, alignment: .leading)
+            } else {
+                Button {
+                    router.pushRespectingCoachRemotePadGate(route, coachRemotePrompt: coachRemoteRequiredPrompt)
+                } label: {
+                    Text("Train")
+                        .font(.body.weight(.semibold))
+                        .foregroundColor(.black)
+                        .frame(maxWidth: .infinity)
+                        .frame(minHeight: trainButtonMinHeight)
+                        .background(Color.yellow)
+                        .cornerRadius(12)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(PlainButtonStyle())
             }
-            .buttonStyle(PlainButtonStyle())
         }
         .padding(22)
         .frame(maxWidth: .infinity, minHeight: cardMinHeight, alignment: .leading)

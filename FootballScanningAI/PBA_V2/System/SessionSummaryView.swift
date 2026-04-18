@@ -42,6 +42,8 @@ struct SessionSummaryScreenView: View {
     var newlyUnlockedBadges: [PlayerBadge] = []
     /// When set (e.g. from block summary), "Back to Home" calls this to pop to Progress instead of one level.
     var onBackToHome: (() -> Void)? = nil
+    /// When set (e.g. display session hands off), "Run It Back" restarts the drill without role/setup routing. If nil, falls back to `dismiss()`.
+    var onRunItBack: (() -> Void)? = nil
     @ObservedObject var profileManager: UserProfileManager
     @ObservedObject var settingsViewModel: SettingsViewModel
     @EnvironmentObject private var progressStore: ProgressStore
@@ -193,6 +195,7 @@ struct SessionSummaryScreenView: View {
         xpEarned: Int = 0,
         newlyUnlockedBadges: [PlayerBadge] = [],
         onBackToHome: (() -> Void)? = nil,
+        onRunItBack: (() -> Void)? = nil,
         profileManager: UserProfileManager,
         settingsViewModel: SettingsViewModel
     ) {
@@ -203,6 +206,7 @@ struct SessionSummaryScreenView: View {
         self.xpEarned = xpEarned
         self.newlyUnlockedBadges = newlyUnlockedBadges
         self.onBackToHome = onBackToHome
+        self.onRunItBack = onRunItBack
         self.profileManager = profileManager
         self.settingsViewModel = settingsViewModel
     }
@@ -402,9 +406,16 @@ struct SessionSummaryScreenView: View {
         )
     }
 
+    /// Player iPad is display-only; Coach Remote owns all training control (see ``CoachRemoteSessionStartGate``).
+    private var isPlayerIPadDisplayOnly: Bool {
+        CoachRemoteSessionStartGate.isPadPlayerRole()
+    }
+
     var body: some View {
         if !profiles.contains(where: { $0.id == session.playerID }) {
             deletedPlayerPlaceholder
+        } else if isPlayerIPadDisplayOnly {
+            playerIPadDisplayOnlyContent
         } else {
             sessionSummaryContent
         }
@@ -418,15 +429,69 @@ struct SessionSummaryScreenView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(red: 0.08, green: 0.08, blue: 0.12))
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    router.popToRoot()
-                } label: {
-                    Image(systemName: "house.fill")
+    }
+
+    /// Read-only results for partner display iPad: no actions, no navigation, no session start.
+    private var playerIPadDisplayOnlyContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(activityName)
+                        .font(.title2.weight(.bold))
+                        .foregroundColor(.white)
+                    Text(playerName)
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.72))
                 }
-                .foregroundColor(.white.opacity(0.9))
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Score")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.white.opacity(0.65))
+                    Text("\(decisionScoreValue)")
+                        .font(.system(size: 52, weight: .bold, design: .rounded))
+                        .foregroundColor(.yellow)
+                    Text("Accuracy: \(accuracyDisplayText)")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.88))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Timing")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.white.opacity(0.65))
+                    Text("\(primaryMetricLabel): \(primaryMetricValue)")
+                        .font(.title3.weight(.semibold))
+                        .foregroundColor(.white)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("Avg reaction: \(avgReactionTimeSecondsDisplay)")
+                        .font(.footnote)
+                        .foregroundColor(.white.opacity(0.72))
+                    if let windowText = session.avgDecisionWindowSeconds.map({ DecisionTimingModel.summaryText(windowSeconds: $0) }) {
+                        Text("Decision window: \(windowText)")
+                            .font(.footnote)
+                            .foregroundColor(.white.opacity(0.72))
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Text("Use the coach remote to start the next block.")
+                    .font(.body.weight(.medium))
+                    .foregroundColor(.white.opacity(0.92))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 8)
             }
+            .padding(24)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(red: 0.08, green: 0.08, blue: 0.12))
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
+            runFeedbackAnimations()
         }
     }
 
@@ -449,16 +514,6 @@ struct SessionSummaryScreenView: View {
         .background(Color(red: 0.08, green: 0.08, blue: 0.12))
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    router.popToRoot()
-                } label: {
-                    Image(systemName: "house.fill")
-                }
-                .foregroundColor(.white.opacity(0.9))
-            }
-        }
         .onAppear {
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
             runFeedbackAnimations()
@@ -859,8 +914,11 @@ struct SessionSummaryScreenView: View {
     private func runItBack() {
         showAlmostTherePrompt = false
         profileManager.pendingLevelDifficulty = nil
-        roleSelectionTarget = session.activityType
-        navigateToRoleSelection = true
+        if let onRunItBack {
+            onRunItBack()
+        } else {
+            dismiss()
+        }
     }
 
     private func startRecommended() {

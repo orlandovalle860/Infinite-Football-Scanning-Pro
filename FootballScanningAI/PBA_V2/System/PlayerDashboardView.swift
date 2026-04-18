@@ -35,6 +35,7 @@ struct PlayerDashboardView: View {
     @EnvironmentObject private var playerStore: PlayerStore
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
     @EnvironmentObject private var router: AppRouter
+    @EnvironmentObject private var coachRemoteRequiredPrompt: CoachRemoteRequiredPromptController
     @Environment(\.dismiss) private var dismiss
 
     @State private var navigateToFullProgress = false
@@ -487,17 +488,24 @@ struct PlayerDashboardView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 header
-                if effectiveDashboardRole == .coach {
+                if CoachRemoteSessionStartGate.isPadPlayerRole() {
+                    if effectiveDashboardRole == .coach {
+                        coachChallengeSection
+                        teamLeadersSection
+                    }
+                    playerSnapshotCard
+                    progressGraphsSection
+                    trainingRecommendationCard
+                    ipadPlayerDashboardLinksSection
+                } else if effectiveDashboardRole == .coach {
                     coachChallengeSection
                     teamLeadersSection
                     playerSnapshotCard
                     progressGraphsSection
                     trainingRecommendationCard
+                    actionsSection
                 } else {
                     parentPlayerDashboardSection
-                }
-                if effectiveDashboardRole == .coach {
-                    actionsSection
                 }
             }
             .padding(20)
@@ -518,16 +526,20 @@ struct PlayerDashboardView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
+            syncPlayerHomeGlobalOverlayVisibility()
         }
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button {
-                    router.popToRoot()
-                } label: {
-                    Image(systemName: "house.fill")
-                }
-                .foregroundColor(.white.opacity(0.9))
-            }
+        .onChange(of: navigateToFullProgress) { _, _ in syncPlayerHomeGlobalOverlayVisibility() }
+        .onChange(of: navigateToTrain) { _, _ in syncPlayerHomeGlobalOverlayVisibility() }
+        .onChange(of: navigateToReportCard) { _, _ in syncPlayerHomeGlobalOverlayVisibility() }
+        .onChange(of: navigateToDevelopmentSnapshot) { _, _ in syncPlayerHomeGlobalOverlayVisibility() }
+        .onChange(of: popToRootTrigger.request) { _, requested in
+            guard requested else { return }
+            navigateToFullProgress = false
+            navigateToTrain = false
+            navigateToReportCard = false
+            navigateToDevelopmentSnapshot = false
+            popToRootTrigger.isPlayerHomeLocalNavigationActive = false
+            popToRootTrigger.request = false
         }
         .alert(metricInfoToShow?.title ?? "", isPresented: Binding(
             get: { metricInfoToShow != nil },
@@ -565,17 +577,35 @@ struct PlayerDashboardView: View {
         }
     }
 
+    private func syncPlayerHomeGlobalOverlayVisibility() {
+        let active = navigateToFullProgress || navigateToTrain || navigateToReportCard || navigateToDevelopmentSnapshot
+        if popToRootTrigger.isPlayerHomeLocalNavigationActive != active {
+            popToRootTrigger.isPlayerHomeLocalNavigationActive = active
+        }
+    }
+
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(effectiveDashboardRole == .coach ? (activeProfile?.name ?? "Player") : "Train")
+            Text(headerTitleText)
                 .font(.system(size: 28, weight: .bold, design: .rounded))
                 .foregroundColor(.white)
-            if effectiveDashboardRole == .coach {
+            if effectiveDashboardRole == .coach, !CoachRemoteSessionStartGate.isPadPlayerRole() {
                 Text("Coach Dashboard")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.8))
+            } else if CoachRemoteSessionStartGate.isPadPlayerRole() {
+                Text("Your progress")
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.8))
             }
         }
+    }
+
+    private var headerTitleText: String {
+        if CoachRemoteSessionStartGate.isPadPlayerRole() {
+            return activeProfile?.name ?? "Player"
+        }
+        return effectiveDashboardRole == .coach ? (activeProfile?.name ?? "Player") : "Train"
     }
 
     private var parentPlayerDashboardSection: some View {
@@ -593,7 +623,7 @@ struct PlayerDashboardView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 Button {
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    router.push(routeForActivity(parentRecommendedNext.activity))
+                    router.pushRespectingCoachRemotePadGate(routeForActivity(parentRecommendedNext.activity), coachRemotePrompt: coachRemoteRequiredPrompt)
                 } label: {
                     Text("Start Session")
                         .font(.headline)
@@ -638,7 +668,7 @@ struct PlayerDashboardView: View {
     private func parentActivityButton(title: String, activity: ActivityKind) -> some View {
         Button {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            router.push(routeForActivity(activity))
+            router.pushRespectingCoachRemotePadGate(routeForActivity(activity), coachRemotePrompt: coachRemoteRequiredPrompt)
         } label: {
             HStack {
                 Text(title)
@@ -982,6 +1012,13 @@ struct PlayerDashboardView: View {
             }
             .buttonStyle(PlainButtonStyle())
 
+            ipadPlayerDashboardLinksSection
+        }
+    }
+
+    /// Progress / report destinations only (no session entry). Used on iPad player dashboard.
+    private var ipadPlayerDashboardLinksSection: some View {
+        VStack(spacing: 12) {
             Button {
                 navigateToFullProgress = true
             } label: {

@@ -318,6 +318,7 @@ struct ContentView: View {
     @StateObject private var settingsViewModel = SettingsViewModel()
     @StateObject private var profileManager = UserProfileManager()
     @EnvironmentObject private var router: AppRouter
+    @EnvironmentObject private var coachRemoteRequiredPrompt: CoachRemoteRequiredPromptController
     /// Injected at root so any screen (including navigation destinations) can use @EnvironmentObject.
     @ObservedObject private var progressStore = ProgressStore.shared
     @StateObject private var playerStore = PlayerStore()
@@ -336,6 +337,8 @@ struct ContentView: View {
         .environmentObject(playerStore)
         .environmentObject(popToRootTrigger)
         .environmentObject(router)
+        .environmentObject(coachRemoteRequiredPrompt)
+        .environmentObject(TrainingPartnerConnectionCoordinator.shared)
         .environmentObject(connectionManager)
         .environmentObject(multipeerManager)
         .navigationViewStyle(.stack)
@@ -353,6 +356,7 @@ struct PostAuthView: View {
     @EnvironmentObject private var playerStore: PlayerStore
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
     @EnvironmentObject private var multipeerManager: MultipeerManager
+    @EnvironmentObject private var coachRemoteRequiredPrompt: CoachRemoteRequiredPromptController
 
     @State private var hasFetched = false
     @State private var showCreatePlayer = false
@@ -412,6 +416,8 @@ struct PostAuthView: View {
         .environmentObject(playerStore)
         .environmentObject(popToRootTrigger)
         .environmentObject(router)
+        .environmentObject(coachRemoteRequiredPrompt)
+        .environmentObject(TrainingPartnerConnectionCoordinator.shared)
         .environmentObject(ConnectionManager.shared)
         .environmentObject(multipeerManager)
         .task(id: loadGeneration) {
@@ -619,11 +625,16 @@ struct MainAppView: View {
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var router: AppRouter
     @ObservedObject private var authManager = AuthManager.shared
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var connectionManager: ConnectionManager
+    @ObservedObject private var coachRelayRemoteService = TrainingPartnerConnectionCoordinator.shared.coachRelayRemoteService
+    @ObservedObject private var relayDisplaySession = TrainingPartnerConnectionCoordinator.shared.relayDisplaySession
+    @ObservedObject private var partnerTrainingCoordinator = TrainingPartnerConnectionCoordinator.shared
     @EnvironmentObject private var multipeerManager: MultipeerManager
     @EnvironmentObject private var progressStore: ProgressStore
     @EnvironmentObject private var playerStore: PlayerStore
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
+    @EnvironmentObject private var coachRemoteRequiredPrompt: CoachRemoteRequiredPromptController
     @State private var showsTopToggle: Bool = true
     @State private var showLoginSheet: Bool = false
     @State private var showCreatePlayerAfterAuth: Bool = false
@@ -638,8 +649,15 @@ struct MainAppView: View {
     @State private var signOutUXPhase: SignOutUXPhase = .idle
     @State private var showDashboardAudienceRolePrompt = false
     @State private var showWhatsNewControlsPrompt = false
+    /// Limits automatic Coach Remote join prompt to once per app foreground session (avoids repeated presentation on re-render).
+    @State private var didAutoPresentCoachRemoteJoinPromptThisForeground = false
 
     private var resolvedAppRole: AppRole { AppRole.resolved(from: appRoleRaw) }
+
+    /// iPhone fresh install: skip the marketing intro and open the Coach Remote hub so the join phase matches the iPad display (join code ↔ code entry). Role and intro flags sync in ``coachRemoteRootView``.
+    private var iPhoneFirstLaunchUseCoachHubForConnection: Bool {
+        UIDevice.current.userInterfaceIdiom == .phone && !hasSeenIntro
+    }
     private var shouldShowAudiencePrompt: Bool {
         resolvedAppRole != .coachRemote
             && hasCompletedInitialTest
@@ -663,6 +681,13 @@ struct MainAppView: View {
         return profileManager.profiles.isEmpty && playerStore.players.isEmpty
     }
 
+    /// Player iPad with a live coach/display link must never sit on Intro, player picker, or Home under the join sheet — root is always ``playerHomeRoot`` (passive standby).
+    private var iPadPlayerLiveCoachLinkTakesRoot: Bool {
+        UIDevice.current.userInterfaceIdiom == .pad
+            && CoachRemoteSessionStartGate.isPadPlayerRole()
+            && CoachRemoteSessionStartGate.iPadDisplayCoachRelayLinkIsLive()
+    }
+
     private var launchBootstrapPlaceholder: some View {
         ZStack {
             Color(red: 0.05, green: 0.05, blue: 0.1).ignoresSafeArea()
@@ -678,6 +703,12 @@ struct MainAppView: View {
         CoachRemoteHubView(settingsViewModel: settingsViewModel, profileManager: profileManager)
             .environmentObject(popToRootTrigger)
             .environmentObject(router)
+            .onAppear {
+                guard iPhoneFirstLaunchUseCoachHubForConnection else { return }
+                appRoleRaw = AppRole.coachRemote.rawValue
+                hasSeenIntro = true
+                AppRoleDebug.log("routing_decision reason=iphone_first_launch_sync_coach_remote_for_join_alignment")
+            }
     }
 
     /// Launch: auth/bootstrap → Intro until baseline is done locally or in Supabase user_metadata (see `AuthFlowOnboardingSync`); then Home / player pick.
@@ -686,8 +717,10 @@ struct MainAppView: View {
         Group {
             if authManager.isRestoring {
                 launchBootstrapPlaceholder
-            } else if resolvedAppRole == .coachRemote {
+            } else if resolvedAppRole == .coachRemote || iPhoneFirstLaunchUseCoachHubForConnection {
                 coachRemoteRootView
+            } else if iPadPlayerLiveCoachLinkTakesRoot {
+                playerHomeRoot
             } else if shouldWaitForRemoteHydration {
                 launchBootstrapPlaceholder
             } else if !hasSeenIntro {
@@ -707,13 +740,7 @@ struct MainAppView: View {
                     signOutUXPhase: $signOutUXPhase
                 )
             } else if playerStore.players.isEmpty, profileManager.profiles.isEmpty {
-                HomeDashboardView(
-                    profileManager: profileManager,
-                    settingsViewModel: settingsViewModel,
-                    showsTopToggle: $showsTopToggle,
-                    showLoginSheet: $showLoginSheet,
-                    signOutUXPhase: $signOutUXPhase
-                )
+                playerHomeRoot
             } else if Config.isSupabaseConfigured, authManager.currentSession != nil, playerStore.selectedPlayerId == nil {
                 PlayerSelectionView(
                     profileManager: profileManager,
@@ -723,13 +750,7 @@ struct MainAppView: View {
                     signOutUXPhase: $signOutUXPhase
                 )
             } else {
-                HomeDashboardView(
-                    profileManager: profileManager,
-                    settingsViewModel: settingsViewModel,
-                    showsTopToggle: $showsTopToggle,
-                    showLoginSheet: $showLoginSheet,
-                    signOutUXPhase: $signOutUXPhase
-                )
+                playerHomeRoot
             }
         }
         .environmentObject(progressStore)
@@ -741,7 +762,8 @@ struct MainAppView: View {
     private func logLaunchRouting(reason: String) {
         let route: String = {
             if authManager.isRestoring { return "bootstrap_auth_restoring" }
-            if resolvedAppRole == .coachRemote { return "coach_remote_root" }
+            if resolvedAppRole == .coachRemote || iPhoneFirstLaunchUseCoachHubForConnection { return "coach_remote_root" }
+            if iPadPlayerLiveCoachLinkTakesRoot { return "ipad_player_coach_link_root" }
             if shouldWaitForRemoteHydration { return "bootstrap_wait_remote_hydration" }
             if !hasSeenIntro { return "intro_first_launch" }
             if hasCompletedInitialTest, playerStore.players.isEmpty, profileManager.profiles.isEmpty,
@@ -772,163 +794,348 @@ struct MainAppView: View {
         )
     }
 
-    var body: some View {
+    /// Player iPad with an active coach/display link — Home is replaced by a passive standby (no training or role switching).
+    private var iPadPlayerDisplayConnectedStandby: Bool {
+        guard CoachRemoteSessionStartGate.isPadPlayerRole() else { return false }
+        _ = coachRelayRemoteService.connectionState
+        _ = relayDisplaySession.isCoachPaired
+        return CoachRemoteSessionStartGate.iPadDisplayCoachRelayLinkIsLive()
+    }
+
+    @ViewBuilder
+    private var playerHomeRoot: some View {
+        if iPadPlayerDisplayConnectedStandby {
+            IPadPlayerDisplayConnectedStandbyView(coachLinkActive: CoachRemoteSessionStartGate.iPadDisplayCoachRelayLinkIsLive())
+        } else {
+            HomeDashboardView(
+                profileManager: profileManager,
+                settingsViewModel: settingsViewModel,
+                showsTopToggle: $showsTopToggle,
+                showLoginSheet: $showLoginSheet,
+                signOutUXPhase: $signOutUXPhase
+            )
+        }
+    }
+
+    private func popNavigationToRootIfIPadPlayerStandby() {
+        guard iPadPlayerDisplayConnectedStandby, !router.path.isEmpty else { return }
+        router.popToRoot()
+    }
+
+    /// When the coach link goes live on a player iPad, leave first-run intro behind so we never flash tablet “Start Training” after the join sheet dismisses.
+    private func markIntroSeenForIPadPlayerIfCoachLinked() {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { return }
+        guard CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
+        guard CoachRemoteSessionStartGate.iPadDisplayCoachRelayLinkIsLive() else { return }
+        guard !hasSeenIntro else { return }
+        hasSeenIntro = true
+    }
+
+    private func handleCoachSessionStartedNotification(_ notification: Notification) {
+        guard let msg = notification.object as? TwoMinuteMessage else { return }
+        guard case .sessionStarted(let activityId, let totalReps, let timestamp) = msg else { return }
+        // 1) Session state (authoritative block metadata) — independent of navigation.
+        TrainingPartnerConnectionCoordinator.shared.applySessionStartedFromCoach(
+            activityId: activityId,
+            totalReps: totalReps,
+            startedAt: timestamp
+        )
+        // 2) Navigation — separate step; `.id(partnerDisplaySurfaceId)` recreates the drill surface if already on-route.
+        applyIPadDisplayRouteFromCoachSessionStarted(activityId: activityId)
+    }
+
+    /// Relay `sessionStarted` from coach phone: open the matching partner **display** route (no local iPad tap).
+    private func applyIPadDisplayRouteFromCoachSessionStarted(activityId: String) {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { return }
+        guard CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
+        guard CoachRemoteSessionStartGate.iPadDisplayCoachRelayLinkIsLive() else { return }
+        guard let activity = ActivityKind.fromSessionActivityId(activityId) else {
+            AppRoleDebug.log("sessionStarted ignored unknown activityId=\(activityId)")
+            return
+        }
+        let route = PBASessionFlowPolicy.routeForActivityLaunch(activity)
+        if router.path.last == route {
+            AppRoleDebug.log("sessionStarted display already on route activity=\(activity.rawValue) — DisplaySessionState refreshed; surface id updated")
+            return
+        }
+        router.popToRoot(endingPartnerSession: false)
+        router.push(route)
+        AppRoleDebug.log("sessionStarted display navigation activity=\(activity.rawValue) route=push")
+    }
+
+    /// Forces a fresh partner drill `View` identity when the coach restarts `sessionStarted` (new `partnerDisplaySurfaceId`).
+    private func partnerDisplaySurface<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        content()
+            .id(partnerTrainingCoordinator.partnerDisplaySurfaceId)
+    }
+
+    /// Player iPad: show join-code prompt once per foreground if disconnected (including first launch).
+    private func evaluateAutoPresentCoachRemoteJoinPrompt() {
+        guard CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
+        guard !authManager.isRestoring else { return }
+        guard resolvedAppRole != .coachRemote else { return }
+        guard !shouldWaitForRemoteHydration else { return }
+        guard !CoachRemoteSessionStartGate.iPadDisplayCoachRelayLinkIsLive() else { return }
+        guard !coachRemoteRequiredPrompt.isPresented else { return }
+        guard !didAutoPresentCoachRemoteJoinPromptThisForeground else { return }
+        coachRemoteRequiredPrompt.present(pendingRoute: nil)
+        didAutoPresentCoachRemoteJoinPromptThisForeground = true
+    }
+
+    private func mainAppOnAppear() {
+#if DEBUG
+        print("DEBUG SUPABASE_URL:", Bundle.main.object(forInfoDictionaryKey: "SUPABASE_URL") ?? "nil")
+        print("DEBUG SUPABASE_ANON_KEY:", Bundle.main.object(forInfoDictionaryKey: "SUPABASE_ANON_KEY") ?? "nil")
+#endif
+        print("[Supabase] App main screen appeared — checking config and unsynced sessions.")
+        progressStore.load()
+        // PlayerStore loads persisted players in its init (first frame); no duplicate load() here.
+        if let selectedId = playerStore.selectedPlayerId,
+           let selectedProfile = profileManager.profile(id: selectedId) {
+            profileManager.switchToProfile(selectedProfile)
+        }
+        if !playerStore.players.isEmpty, !profileManager.profiles.isEmpty {
+            if let current = profileManager.currentProfile,
+               !playerStore.players.contains(where: { $0.id == current.id }) {
+                playerStore.addPlayer(id: current.id, name: current.name)
+            }
+        }
+        AppRoleDebug.log("launch appRole=\(resolvedAppRole.rawValue)")
+        logLaunchRouting(reason: "MainAppView.onAppear_before_hydrate")
+        hydratePlayersIfNeeded()
+        logLaunchRouting(reason: "MainAppView.onAppear_after_hydrate_scheduled")
+        // One-time clear of unsynced sessions and pending decisions so old data (outdated schema) is not retried.
+        let clearedKey = "SupabaseDidClearUnsyncedQueue"
+        if !UserDefaults.standard.bool(forKey: clearedKey) {
+            progressStore.clearUnsyncedSessionQueue()
+            SupabaseDecisionService.shared.clearPendingDecisionsQueue()
+            UserDefaults.standard.set(true, forKey: clearedKey)
+            print("[Supabase] Cleared unsynced sessions and pending decisions queue (one-time reset).")
+        }
+        let count = progressStore.unsyncedSessions.count
+        print("[Supabase] Configured. Retrying \(count) unsynced session(s) on launch.")
+        SupabaseSessionService.shared.retryPendingSessions(progressStore: progressStore)
+        SupabaseDecisionService.shared.retryPendingDecisions()
+        SupabasePlayerService.shared.retryPendingPlayers(profileManager: profileManager)
+        SupabasePlayerService.shared.retryPendingDeletes()
+        refreshCoachingTrainingNudgesIfNeeded()
+        showDashboardAudienceRolePrompt = false
+        showWhatsNewControlsPrompt = false
+        evaluateAutoPresentCoachRemoteJoinPrompt()
+    }
+
+    /// Split from `body` so the SwiftUI type checker can finish in reasonable time.
+    private var mainAppNavigationAndCoachObservers: some View {
         Group {
             NavigationStack(path: router.pathBinding) {
                 rootView
+                    .onReceive(NotificationCenter.default.publisher(for: .twoMinuteMessageReceived)) { self.handleCoachSessionStartedNotification($0) }
                     .navigationDestination(for: AppRoute.self) { route in
                         routeView(for: route)
                     }
             }
+            .overlay(alignment: .topTrailing) {
+                GlobalHomeNavigationOverlay()
+            }
         }
-        .overlay {
-            SignOutUXBlockingOverlay(phase: signOutUXPhase)
+        .onChange(of: router.path.count) { _, count in
+            if count == 0 {
+                popToRootTrigger.request = false
+            }
         }
-        .animation(.easeInOut(duration: 0.2), value: signOutUXPhase)
-        .environmentObject(connectionManager)
-        .environmentObject(multipeerManager)
-        .environmentObject(progressStore)
-        .environmentObject(playerStore)
-        .environmentObject(popToRootTrigger)
-        .environmentObject(router)
-        .sheet(isPresented: $showLoginSheet) {
-            LoginView()
-                .onDisappear {
-                    if authManager.currentSession != nil { hydratePlayersIfNeeded() }
-                }
+        .task(id: appRoleRaw) {
+            guard UIDevice.current.userInterfaceIdiom == .pad else { return }
+            guard AppRole.resolved(from: appRoleRaw) == .player else { return }
+            await TrainingPartnerConnectionCoordinator.shared.warmUpCoachLinkSurfaceOnPlayerDisplayIfNeeded()
+            evaluateAutoPresentCoachRemoteJoinPrompt()
         }
-        .sheet(isPresented: $showCreatePlayerAfterAuth) {
-            CreatePlayerAfterAuthView(
-                profileManager: profileManager,
-                playerStore: playerStore,
-                twoMinuteTestResult: nil,
-                onComplete: {
-                    showCreatePlayerAfterAuth = false
-                    if let selectedId = playerStore.selectedPlayerId,
-                       let selectedProfile = profileManager.profile(id: selectedId) {
-                        profileManager.switchToProfile(selectedProfile)
-                        playerStore.persist()
-                    }
-                }
-            )
+        .onChange(of: coachRelayRemoteService.connectionState) { _, _ in
+            markIntroSeenForIPadPlayerIfCoachLinked()
+            popNavigationToRootIfIPadPlayerStandby()
+        }
+        .onChange(of: relayDisplaySession.isCoachPaired) { _, _ in
+            markIntroSeenForIPadPlayerIfCoachLinked()
+            popNavigationToRootIfIPadPlayerStandby()
+        }
+        .onChange(of: connectionManager.connectedPeerName) { _, _ in
+            markIntroSeenForIPadPlayerIfCoachLinked()
+            popNavigationToRootIfIPadPlayerStandby()
+        }
+    }
+
+    private var mainAppEnvironmentAndBlockingOverlay: some View {
+        mainAppNavigationAndCoachObservers
+            .overlay {
+                SignOutUXBlockingOverlay(phase: signOutUXPhase)
+            }
+            .animation(.easeInOut(duration: 0.2), value: signOutUXPhase)
+            .environmentObject(connectionManager)
+            .environmentObject(multipeerManager)
             .environmentObject(progressStore)
-        }
-        .sheet(isPresented: $showDashboardAudienceRolePrompt) {
-            DashboardAudienceRolePromptSheet(
-                onSelectCoach: {
-                    dashboardAudienceRoleRaw = "coach"
-                    dashboardAudienceRolePromptSeen = true
-                    showDashboardAudienceRolePrompt = false
-                },
-                onSelectParentPlayer: {
-                    dashboardAudienceRoleRaw = "parent_player"
-                    dashboardAudienceRolePromptSeen = true
-                    showDashboardAudienceRolePrompt = false
-                },
-                onDismiss: {
-                    dashboardAudienceRolePromptSeen = true
-                    showDashboardAudienceRolePrompt = false
-                }
-            )
-        }
-        .sheet(isPresented: $showWhatsNewControlsPrompt, onDismiss: {
-            whatsNewControlsSeen = true
-            showWhatsNewControlsPrompt = false
-        }) {
-            WhatsNewControlsView {
+            .environmentObject(playerStore)
+            .environmentObject(popToRootTrigger)
+            .environmentObject(router)
+            .environmentObject(coachRemoteRequiredPrompt)
+    }
+
+    private var coachRemoteRequiredPromptPresentedBinding: Binding<Bool> {
+        Binding(
+            get: { coachRemoteRequiredPrompt.isPresented },
+            set: { coachRemoteRequiredPrompt.isPresented = $0 }
+        )
+    }
+
+    /// Further split so Swift can type-check `MainAppView` presentations (see `mainAppSheets`).
+    private var mainAppWithCoachRemoteFullScreen: some View {
+        mainAppEnvironmentAndBlockingOverlay
+            .fullScreenCover(isPresented: coachRemoteRequiredPromptPresentedBinding, onDismiss: {
+                coachRemoteRequiredPrompt.clearPendingSessionAfterDismiss()
+            }) {
+                CoachRemoteRequiredPromptView()
+                    .environmentObject(coachRemoteRequiredPrompt)
+                    .environmentObject(router)
+            }
+    }
+
+    private var mainAppWithLoginSheet: some View {
+        mainAppWithCoachRemoteFullScreen
+            .sheet(isPresented: $showLoginSheet) {
+                LoginView()
+                    .onDisappear {
+                        if authManager.currentSession != nil { hydratePlayersIfNeeded() }
+                    }
+            }
+    }
+
+    private var mainAppWithCreatePlayerSheet: some View {
+        mainAppWithLoginSheet
+            .sheet(isPresented: $showCreatePlayerAfterAuth) {
+                CreatePlayerAfterAuthView(
+                    profileManager: profileManager,
+                    playerStore: playerStore,
+                    twoMinuteTestResult: nil,
+                    onComplete: {
+                        showCreatePlayerAfterAuth = false
+                        if let selectedId = playerStore.selectedPlayerId,
+                           let selectedProfile = profileManager.profile(id: selectedId) {
+                            profileManager.switchToProfile(selectedProfile)
+                            playerStore.persist()
+                        }
+                    }
+                )
+                .environmentObject(progressStore)
+            }
+    }
+
+    private var mainAppWithDashboardAudienceSheet: some View {
+        mainAppWithCreatePlayerSheet
+            .sheet(isPresented: $showDashboardAudienceRolePrompt) {
+                DashboardAudienceRolePromptSheet(
+                    onSelectCoach: {
+                        dashboardAudienceRoleRaw = "coach"
+                        dashboardAudienceRolePromptSeen = true
+                        showDashboardAudienceRolePrompt = false
+                    },
+                    onSelectParentPlayer: {
+                        dashboardAudienceRoleRaw = "parent_player"
+                        dashboardAudienceRolePromptSeen = true
+                        showDashboardAudienceRolePrompt = false
+                    },
+                    onDismiss: {
+                        dashboardAudienceRolePromptSeen = true
+                        showDashboardAudienceRolePrompt = false
+                    }
+                )
+            }
+    }
+
+    private var mainAppSheets: some View {
+        mainAppWithDashboardAudienceSheet
+            .sheet(isPresented: $showWhatsNewControlsPrompt, onDismiss: {
                 whatsNewControlsSeen = true
                 showWhatsNewControlsPrompt = false
-            }
-        }
-        .onAppear {
-#if DEBUG
-            print("DEBUG SUPABASE_URL:", Bundle.main.object(forInfoDictionaryKey: "SUPABASE_URL") ?? "nil")
-            print("DEBUG SUPABASE_ANON_KEY:", Bundle.main.object(forInfoDictionaryKey: "SUPABASE_ANON_KEY") ?? "nil")
-#endif
-            print("[Supabase] App main screen appeared — checking config and unsynced sessions.")
-            progressStore.load()
-            // PlayerStore loads persisted players in its init (first frame); no duplicate load() here.
-            if let selectedId = playerStore.selectedPlayerId,
-               let selectedProfile = profileManager.profile(id: selectedId) {
-                profileManager.switchToProfile(selectedProfile)
-            }
-            if !playerStore.players.isEmpty, !profileManager.profiles.isEmpty {
-                if let current = profileManager.currentProfile,
-                   !playerStore.players.contains(where: { $0.id == current.id }) {
-                    playerStore.addPlayer(id: current.id, name: current.name)
+            }) {
+                WhatsNewControlsView {
+                    whatsNewControlsSeen = true
+                    showWhatsNewControlsPrompt = false
                 }
             }
-            AppRoleDebug.log("launch appRole=\(resolvedAppRole.rawValue)")
-            logLaunchRouting(reason: "MainAppView.onAppear_before_hydrate")
-            hydratePlayersIfNeeded()
-            logLaunchRouting(reason: "MainAppView.onAppear_after_hydrate_scheduled")
-            // One-time clear of unsynced sessions and pending decisions so old data (outdated schema) is not retried.
-            let clearedKey = "SupabaseDidClearUnsyncedQueue"
-            if !UserDefaults.standard.bool(forKey: clearedKey) {
-                progressStore.clearUnsyncedSessionQueue()
-                SupabaseDecisionService.shared.clearPendingDecisionsQueue()
-                UserDefaults.standard.set(true, forKey: clearedKey)
-                print("[Supabase] Cleared unsynced sessions and pending decisions queue (one-time reset).")
+    }
+
+    private var mainAppSceneAndAuthObservers: some View {
+        mainAppSheets
+            .onAppear(perform: mainAppOnAppear)
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .background || phase == .inactive {
+                    didAutoPresentCoachRemoteJoinPromptThisForeground = false
+                } else if phase == .active {
+                    evaluateAutoPresentCoachRemoteJoinPrompt()
+                }
             }
-            let count = progressStore.unsyncedSessions.count
-            print("[Supabase] Configured. Retrying \(count) unsynced session(s) on launch.")
-            SupabaseSessionService.shared.retryPendingSessions(progressStore: progressStore)
-            SupabaseDecisionService.shared.retryPendingDecisions()
-            SupabasePlayerService.shared.retryPendingPlayers(profileManager: profileManager)
-            SupabasePlayerService.shared.retryPendingDeletes()
-            refreshCoachingTrainingNudgesIfNeeded()
-            showDashboardAudienceRolePrompt = shouldShowAudiencePrompt
-            showWhatsNewControlsPrompt = shouldShowWhatsNewControlsPrompt
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-            refreshCoachingTrainingNudgesIfNeeded()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .coachingTrainingNudgesShouldRefresh)) { _ in
-            refreshCoachingTrainingNudgesIfNeeded()
-        }
-        .onChange(of: authManager.isRestoring) { _, restoring in
-            if !restoring {
-                logLaunchRouting(reason: "auth_isRestoring_false")
-                hydratePlayersIfNeeded()
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                refreshCoachingTrainingNudgesIfNeeded()
             }
-        }
-        .onChange(of: authManager.currentSession != nil) { _, hasSession in
-            if !hasSession {
-                hasHydratedPlayersForSession = false
-                showCreatePlayerAfterAuth = false
-            } else { hydratePlayersIfNeeded() }
-            logLaunchRouting(reason: "session_changed hasSession=\(hasSession)")
-        }
-        .onChange(of: hasHydratedPlayersForSession) { _, v in
-            logLaunchRouting(reason: "hasHydratedPlayersForSession=\(v)")
-        }
-        .onChange(of: hasCompletedInitialTest) { _, v in
-            logLaunchRouting(reason: "hasCompletedInitialTest=\(v)")
-        }
-        .onChange(of: hasSeenIntro) { _, v in
-            logLaunchRouting(reason: "hasSeenIntro=\(v)")
-        }
-        .onChange(of: appRoleRaw) { oldValue, newValue in
-            AppRoleDebug.log("role_change old=\(oldValue) new=\(newValue) routing=\(AppRole.resolved(from: newValue) == .coachRemote ? "coach_remote_root" : "player_flow")")
-            router.popToRoot()
-            logLaunchRouting(reason: "app_role_storage_changed")
-        }
-        .onChange(of: hasCompletedInitialTest) { _, _ in
-            showDashboardAudienceRolePrompt = shouldShowAudiencePrompt
-        }
-        .onChange(of: dashboardAudienceRoleRaw) { _, _ in
-            showDashboardAudienceRolePrompt = shouldShowAudiencePrompt
-        }
-        .onChange(of: showDashboardAudienceRolePrompt) { _, _ in
-            showWhatsNewControlsPrompt = shouldShowWhatsNewControlsPrompt
-        }
-        .onReceive(NetworkReachabilityObserver.shared.reachableSubject) { _ in
-            SupabaseSessionService.shared.retryPendingSessions(progressStore: progressStore)
-            SupabaseDecisionService.shared.retryPendingDecisions()
-            SupabasePlayerService.shared.retryPendingPlayers(profileManager: profileManager)
-            SupabasePlayerService.shared.retryPendingDeletes()
-            AnalyticsManager.shared.flushIfNeeded()
-        }
+            .onReceive(NotificationCenter.default.publisher(for: .coachingTrainingNudgesShouldRefresh)) { _ in
+                refreshCoachingTrainingNudgesIfNeeded()
+            }
+            .onChange(of: authManager.isRestoring) { _, restoring in
+                if !restoring {
+                    logLaunchRouting(reason: "auth_isRestoring_false")
+                    hydratePlayersIfNeeded()
+                    evaluateAutoPresentCoachRemoteJoinPrompt()
+                }
+            }
+            .onChange(of: authManager.currentSession != nil) { _, hasSession in
+                if !hasSession {
+                    hasHydratedPlayersForSession = false
+                    showCreatePlayerAfterAuth = false
+                } else { hydratePlayersIfNeeded() }
+                logLaunchRouting(reason: "session_changed hasSession=\(hasSession)")
+            }
+    }
+
+    private var mainAppRoutingObservers: some View {
+        mainAppSceneAndAuthObservers
+            .onChange(of: hasHydratedPlayersForSession) { _, v in
+                logLaunchRouting(reason: "hasHydratedPlayersForSession=\(v)")
+                evaluateAutoPresentCoachRemoteJoinPrompt()
+            }
+            .onChange(of: hasCompletedInitialTest) { _, v in
+                logLaunchRouting(reason: "hasCompletedInitialTest=\(v)")
+            }
+            .onChange(of: hasSeenIntro) { _, v in
+                logLaunchRouting(reason: "hasSeenIntro=\(v)")
+                evaluateAutoPresentCoachRemoteJoinPrompt()
+            }
+            .onChange(of: appRoleRaw) { oldValue, newValue in
+                AppRoleDebug.log("role_change old=\(oldValue) new=\(newValue) routing=\(AppRole.resolved(from: newValue) == .coachRemote ? "coach_remote_root" : "player_flow")")
+                router.popToRoot()
+                logLaunchRouting(reason: "app_role_storage_changed")
+                if AppRole.resolved(from: newValue) == .player {
+                    didAutoPresentCoachRemoteJoinPromptThisForeground = false
+                }
+                evaluateAutoPresentCoachRemoteJoinPrompt()
+            }
+            .onChange(of: hasCompletedInitialTest) { _, _ in
+                showDashboardAudienceRolePrompt = false
+            }
+            .onChange(of: dashboardAudienceRoleRaw) { _, _ in
+                showDashboardAudienceRolePrompt = false
+            }
+            .onChange(of: showDashboardAudienceRolePrompt) { _, _ in
+                showWhatsNewControlsPrompt = false
+            }
+            .onReceive(NetworkReachabilityObserver.shared.reachableSubject) { _ in
+                SupabaseSessionService.shared.retryPendingSessions(progressStore: progressStore)
+                SupabaseDecisionService.shared.retryPendingDecisions()
+                SupabasePlayerService.shared.retryPendingPlayers(profileManager: profileManager)
+                SupabasePlayerService.shared.retryPendingDeletes()
+                AnalyticsManager.shared.flushIfNeeded()
+            }
+    }
+
+    var body: some View {
+        mainAppRoutingObservers
     }
 
     /// When signed in, fetch players from Supabase and hydrate stores once per session. If no players, offer Create Player sheet.
@@ -987,29 +1194,41 @@ struct MainAppView: View {
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
         case .twoMinuteCoachRemote:
-            TwoMinuteCoachRemoteView(settingsViewModel: settingsViewModel, profileManager: profileManager)
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(popToRootTrigger)
-                .environmentObject(router)
+            CoachRemoteActivityConnectionGate {
+                TwoMinuteCoachRemoteView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+                    .environmentObject(progressStore)
+                    .environmentObject(playerStore)
+                    .environmentObject(popToRootTrigger)
+                    .environmentObject(router)
+            }
+            .environmentObject(router)
         case .dribbleOrPassCoachRemote:
-            DribbleOrPassCoachRemoteView(settingsViewModel: settingsViewModel, profileManager: profileManager)
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(popToRootTrigger)
-                .environmentObject(router)
+            CoachRemoteActivityConnectionGate {
+                DribbleOrPassCoachRemoteView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+                    .environmentObject(progressStore)
+                    .environmentObject(playerStore)
+                    .environmentObject(popToRootTrigger)
+                    .environmentObject(router)
+            }
+            .environmentObject(router)
         case .awayFromPressureCoachRemote:
-            AwayFromPressureCoachRemoteView(settingsViewModel: settingsViewModel, profileManager: profileManager)
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(popToRootTrigger)
-                .environmentObject(router)
+            CoachRemoteActivityConnectionGate {
+                AwayFromPressureCoachRemoteView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+                    .environmentObject(progressStore)
+                    .environmentObject(playerStore)
+                    .environmentObject(popToRootTrigger)
+                    .environmentObject(router)
+            }
+            .environmentObject(router)
         case .oneTouchPassingCoachRemote:
-            OneTouchPassingCoachRemoteView(settingsViewModel: settingsViewModel, profileManager: profileManager)
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(popToRootTrigger)
-                .environmentObject(router)
+            CoachRemoteActivityConnectionGate {
+                OneTouchPassingCoachRemoteView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+                    .environmentObject(progressStore)
+                    .environmentObject(playerStore)
+                    .environmentObject(popToRootTrigger)
+                    .environmentObject(router)
+            }
+            .environmentObject(router)
         case .curriculum:
             PBACurriculumView(
                 settingsViewModel: settingsViewModel,
@@ -1037,53 +1256,63 @@ struct MainAppView: View {
                 .environmentObject(router)
         case .warmup(let mode):
             MainView(settingsViewModel: settingsViewModel, profileManager: profileManager, displayMode: mode, showModeSelection: false)
-        case .trainingModeSelection(let activityTitle):
-            TrainingModeSelectionView(activityTitle: activityTitle, onSelectMode: { mode in
-                router.push(.twoMinuteSetup(mode: mode))
-            }) { _ in EmptyView() }
-            .environmentObject(progressStore)
-            .environmentObject(playerStore)
-            .environmentObject(popToRootTrigger)
-            .environmentObject(router)
-        case .twoMinuteSetup(let mode):
-            TwoMinuteTestSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(popToRootTrigger)
-                .environmentObject(router)
-        case .twoMinuteGetReady(let mode):
-            TwoMinuteGetReadyView(mode: mode, config: TwoMinuteTestConfig.baseline, settingsViewModel: settingsViewModel, profileManager: profileManager)
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(popToRootTrigger)
-                .environmentObject(router)
-        case .awayFromPressureRoleSelection:
-            AwayFromPressureRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(popToRootTrigger)
-                .environmentObject(router)
-        case .awayFromPressureTrainingModeSelection:
-            TrainingModeSelectionView(activityTitle: "Playing Away From Pressure", onSelectMode: { mode in
-                router.push(.awayFromPressureSetup(mode: mode))
-            }) { _ in EmptyView() }
-            .environmentObject(progressStore)
-            .environmentObject(playerStore)
-            .environmentObject(popToRootTrigger)
-            .environmentObject(router)
-        case .awayFromPressureSetup(let mode):
-            AwayFromPressureSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(popToRootTrigger)
-                .environmentObject(router)
-        case .dribbleOrPassRoleSelection:
-            if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
-                DribbleOrPassRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
+        case .trainingModeSelection:
+            partnerDisplaySurface {
+                TwoMinuteCriticalScanSessionView(config: TwoMinuteTestConfig.baseline, mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
                     .environmentObject(progressStore)
                     .environmentObject(playerStore)
                     .environmentObject(popToRootTrigger)
                     .environmentObject(router)
+            }
+        case .twoMinuteSetup:
+            partnerDisplaySurface {
+                TwoMinuteCriticalScanSessionView(config: TwoMinuteTestConfig.baseline, mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                    .environmentObject(progressStore)
+                    .environmentObject(playerStore)
+                    .environmentObject(popToRootTrigger)
+                    .environmentObject(router)
+            }
+        case .twoMinuteGetReady:
+            partnerDisplaySurface {
+                TwoMinuteCriticalScanSessionView(config: TwoMinuteTestConfig.baseline, mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                    .environmentObject(progressStore)
+                    .environmentObject(playerStore)
+                    .environmentObject(popToRootTrigger)
+                    .environmentObject(router)
+            }
+        case .awayFromPressureRoleSelection:
+            partnerDisplaySurface {
+                AwayFromPressureDisplaySessionView(config: AwayFromPressureConfig.config(for: .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                    .environmentObject(progressStore)
+                    .environmentObject(playerStore)
+                    .environmentObject(popToRootTrigger)
+                    .environmentObject(router)
+            }
+        case .awayFromPressureTrainingModeSelection:
+            partnerDisplaySurface {
+                AwayFromPressureDisplaySessionView(config: AwayFromPressureConfig.config(for: .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                    .environmentObject(progressStore)
+                    .environmentObject(playerStore)
+                    .environmentObject(popToRootTrigger)
+                    .environmentObject(router)
+            }
+        case .awayFromPressureSetup:
+            partnerDisplaySurface {
+                AwayFromPressureDisplaySessionView(config: AwayFromPressureConfig.config(for: .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                    .environmentObject(progressStore)
+                    .environmentObject(playerStore)
+                    .environmentObject(popToRootTrigger)
+                    .environmentObject(router)
+            }
+        case .dribbleOrPassRoleSelection:
+            if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
+                partnerDisplaySurface {
+                    DribbleOrPassDisplaySessionView(config: DribbleOrPassConfig.defaultConfig(for: .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                        .environmentObject(progressStore)
+                        .environmentObject(playerStore)
+                        .environmentObject(popToRootTrigger)
+                        .environmentObject(router)
+                }
             } else {
                 PremiumPaywallView(profileManager: profileManager)
                     .environmentObject(playerStore)
@@ -1091,25 +1320,27 @@ struct MainAppView: View {
             }
         case .dribbleOrPassTrainingModeSelection:
             if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
-                TrainingModeSelectionView(activityTitle: "Dribble or Pass", onSelectMode: { mode in
-                    router.push(.dribbleOrPassSetup(mode: mode))
-                }) { _ in EmptyView() }
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(popToRootTrigger)
-                .environmentObject(router)
+                partnerDisplaySurface {
+                    DribbleOrPassDisplaySessionView(config: DribbleOrPassConfig.defaultConfig(for: .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                        .environmentObject(progressStore)
+                        .environmentObject(playerStore)
+                        .environmentObject(popToRootTrigger)
+                        .environmentObject(router)
+                }
             } else {
                 PremiumPaywallView(profileManager: profileManager)
                     .environmentObject(playerStore)
                     .environmentObject(router)
             }
-        case .dribbleOrPassSetup(let mode):
+        case .dribbleOrPassSetup:
             if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
-                DribbleOrPassSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
-                    .environmentObject(progressStore)
-                    .environmentObject(playerStore)
-                    .environmentObject(popToRootTrigger)
-                    .environmentObject(router)
+                partnerDisplaySurface {
+                    DribbleOrPassDisplaySessionView(config: DribbleOrPassConfig.defaultConfig(for: .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                        .environmentObject(progressStore)
+                        .environmentObject(playerStore)
+                        .environmentObject(popToRootTrigger)
+                        .environmentObject(router)
+                }
             } else {
                 PremiumPaywallView(profileManager: profileManager)
                     .environmentObject(playerStore)
@@ -1117,11 +1348,13 @@ struct MainAppView: View {
             }
         case .oneTouchPassingRoleSelection:
             if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
-                OneTouchPassingRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
-                    .environmentObject(progressStore)
-                    .environmentObject(playerStore)
-                    .environmentObject(popToRootTrigger)
-                    .environmentObject(router)
+                partnerDisplaySurface {
+                    OneTouchPassingDisplaySessionView(config: OneTouchPassingConfig.defaultConfig(for: .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                        .environmentObject(progressStore)
+                        .environmentObject(playerStore)
+                        .environmentObject(popToRootTrigger)
+                        .environmentObject(router)
+                }
             } else {
                 PremiumPaywallView(profileManager: profileManager)
                     .environmentObject(playerStore)
@@ -1129,25 +1362,27 @@ struct MainAppView: View {
             }
         case .oneTouchPassingTrainingModeSelection:
             if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
-                TrainingModeSelectionView(activityTitle: "One-Touch Passing", onSelectMode: { mode in
-                    router.push(.oneTouchPassingSetup(mode: mode))
-                }) { _ in EmptyView() }
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(popToRootTrigger)
-                .environmentObject(router)
+                partnerDisplaySurface {
+                    OneTouchPassingDisplaySessionView(config: OneTouchPassingConfig.defaultConfig(for: .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                        .environmentObject(progressStore)
+                        .environmentObject(playerStore)
+                        .environmentObject(popToRootTrigger)
+                        .environmentObject(router)
+                }
             } else {
                 PremiumPaywallView(profileManager: profileManager)
                     .environmentObject(playerStore)
                     .environmentObject(router)
             }
-        case .oneTouchPassingSetup(let mode):
+        case .oneTouchPassingSetup:
             if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
-                OneTouchPassingSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
-                    .environmentObject(progressStore)
-                    .environmentObject(playerStore)
-                    .environmentObject(popToRootTrigger)
-                    .environmentObject(router)
+                partnerDisplaySurface {
+                    OneTouchPassingDisplaySessionView(config: OneTouchPassingConfig.defaultConfig(for: .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                        .environmentObject(progressStore)
+                        .environmentObject(playerStore)
+                        .environmentObject(popToRootTrigger)
+                        .environmentObject(router)
+                }
             } else {
                 PremiumPaywallView(profileManager: profileManager)
                     .environmentObject(playerStore)
@@ -1162,68 +1397,30 @@ struct MainAppView: View {
     }
 }
 
-/// SCREEN 1 — INTRO. Shown when no player exists (playerStore.players.isEmpty). New users see this first.
+/// SCREEN 1 — INTRO. First launch: iPhone defaults to Coach Remote story; iPad keeps display vs remote choice.
 struct IntroOnboardingView: View {
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
     @EnvironmentObject private var router: AppRouter
     @AppStorage(hasSeenIntroKey) private var hasSeenIntro = false
+    @AppStorage(AppRole.storageKey) private var appRoleRaw: String = AppRole.player.rawValue
     @State private var headlineVisible = false
     @State private var subtextVisible = false
     @State private var buttonVisible = false
     @State private var buttonPressed = false
     @State private var buttonIdlePulse = false
 
+    private var isIPhone: Bool {
+        UIDevice.current.userInterfaceIdiom == .phone
+    }
+
     var body: some View {
-        VStack(spacing: 24) {
-            Spacer(minLength: 48)
-            Text("Do you know what you're going to do before the ball arrives?")
-                .font(.system(size: 30, weight: .bold, design: .rounded))
-                .foregroundColor(.white)
-                .multilineTextAlignment(.center)
-                .minimumScaleFactor(0.85)
-                .padding(.horizontal, 28)
-                .opacity(headlineVisible ? 1 : 0)
-                .animation(.easeInOut(duration: 0.35), value: headlineVisible)
-
-            Text("Elite players do.")
-                .font(.system(size: 20, weight: .semibold, design: .rounded))
-                .foregroundColor(.white.opacity(0.85))
-                .multilineTextAlignment(.center)
-                .opacity(subtextVisible ? 1 : 0)
-                .animation(.easeInOut(duration: 0.35), value: subtextVisible)
-
-            Spacer(minLength: 12)
-
-            Button {
-                withAnimation(.easeOut(duration: 0.12)) {
-                    buttonPressed = true
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                    withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
-                        buttonPressed = false
-                    }
-                }
-                hasSeenIntro = true
-                router.push(PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest))
-            } label: {
-                Text("Start 2-Minute Test →")
-                    .font(.system(size: 20, weight: .bold, design: .rounded))
-                    .foregroundColor(.black)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 18)
-                    .background(Color.yellow)
-                    .cornerRadius(16)
-                    .contentShape(Rectangle())
+        Group {
+            if isIPhone {
+                iphoneIntroLayout
+            } else {
+                tabletIntroLayout
             }
-            .buttonStyle(PlainButtonStyle())
-            .padding(.horizontal, 28)
-            .opacity(buttonVisible ? 1 : 0)
-            .animation(.easeInOut(duration: 0.35), value: buttonVisible)
-            .scaleEffect(buttonPressed ? 0.97 : (buttonIdlePulse ? 1.02 : 1.0))
-            .animation(.easeInOut(duration: 1.8).repeatForever(autoreverses: true), value: buttonIdlePulse)
-
-            Spacer(minLength: 52)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
@@ -1264,6 +1461,151 @@ struct IntroOnboardingView: View {
             }
         }
     }
+
+    /// iPhone: Coach Remote is the expected role; sessions are driven from this device with iPad as display.
+    private var iphoneIntroLayout: some View {
+        VStack(spacing: 24) {
+            Spacer(minLength: 48)
+            Text("This phone is your control center.")
+                .font(.system(size: 30, weight: .bold, design: .rounded))
+                .foregroundColor(.white)
+                .multilineTextAlignment(.center)
+                .minimumScaleFactor(0.85)
+                .padding(.horizontal, 28)
+                .opacity(headlineVisible ? 1 : 0)
+                .animation(.easeInOut(duration: 0.35), value: headlineVisible)
+
+            Text("The iPad shows the drill. You start the session here and run reps as Coach Remote—training doesn’t begin on the phone alone.")
+                .font(.system(size: 17, weight: .medium, design: .rounded))
+                .foregroundColor(.white.opacity(0.88))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+                .opacity(subtextVisible ? 1 : 0)
+                .animation(.easeInOut(duration: 0.35), value: subtextVisible)
+
+            Spacer(minLength: 12)
+
+            Button {
+                withAnimation(.easeOut(duration: 0.12)) {
+                    buttonPressed = true
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                        buttonPressed = false
+                    }
+                }
+                appRoleRaw = AppRole.coachRemote.rawValue
+                hasSeenIntro = true
+            } label: {
+                Text("Start Coaching Session")
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .foregroundColor(.black)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 18)
+                    .background(Color.yellow)
+                    .cornerRadius(16)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(PlainButtonStyle())
+            .padding(.horizontal, 28)
+            .opacity(buttonVisible ? 1 : 0)
+            .animation(.easeInOut(duration: 0.35), value: buttonVisible)
+            .scaleEffect(buttonPressed ? 0.97 : (buttonIdlePulse ? 1.02 : 1.0))
+            .animation(.easeInOut(duration: 1.8).repeatForever(autoreverses: true), value: buttonIdlePulse)
+            .accessibilityLabel("Start Coaching Session")
+            .accessibilityHint("Use this iPhone as Coach Remote with an iPad display.")
+
+            Button {
+                appRoleRaw = AppRole.player.rawValue
+                hasSeenIntro = true
+            } label: {
+                Text("Player profile on this iPhone")
+                    .font(.system(size: 17, weight: .semibold, design: .rounded))
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                    .background(Color.clear)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16)
+                            .stroke(Color.yellow.opacity(0.9), lineWidth: 2)
+                    )
+                    .cornerRadius(16)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(PlainButtonStyle())
+            .padding(.horizontal, 28)
+            .opacity(buttonVisible ? 1 : 0)
+            .animation(.easeInOut(duration: 0.35), value: buttonVisible)
+            .accessibilityLabel("Player profile on this iPhone")
+            .accessibilityHint("View progress and home on this device. Start sessions from Coach Remote with an iPad display.")
+
+            Spacer(minLength: 52)
+        }
+    }
+
+    /// iPad (and Mac Catalyst): original display-first vs Coach Remote choice.
+    private var tabletIntroLayout: some View {
+        VStack(spacing: 24) {
+            Spacer(minLength: 48)
+            Text("Do you know what you're going to do before the ball arrives?")
+                .font(.system(size: 30, weight: .bold, design: .rounded))
+                .foregroundColor(.white)
+                .multilineTextAlignment(.center)
+                .minimumScaleFactor(0.85)
+                .padding(.horizontal, 28)
+                .opacity(headlineVisible ? 1 : 0)
+                .animation(.easeInOut(duration: 0.35), value: headlineVisible)
+
+            Text("Elite players do.")
+                .font(.system(size: 20, weight: .semibold, design: .rounded))
+                .foregroundColor(.white.opacity(0.85))
+                .multilineTextAlignment(.center)
+                .opacity(subtextVisible ? 1 : 0)
+                .animation(.easeInOut(duration: 0.35), value: subtextVisible)
+
+            Spacer(minLength: 12)
+
+            Text("This iPad is the display. Sessions are started from Coach Remote on a phone—nothing starts here.")
+                .font(.system(size: 16, weight: .medium, design: .rounded))
+                .foregroundColor(.white.opacity(0.88))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 28)
+                .opacity(subtextVisible ? 1 : 0)
+                .animation(.easeInOut(duration: 0.35), value: subtextVisible)
+
+            Button {
+                withAnimation(.easeOut(duration: 0.12)) {
+                    buttonPressed = true
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                        buttonPressed = false
+                    }
+                }
+                appRoleRaw = AppRole.player.rawValue
+                hasSeenIntro = true
+            } label: {
+                Text("Continue")
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .foregroundColor(.black)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 18)
+                    .background(Color.yellow)
+                    .cornerRadius(16)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(PlainButtonStyle())
+            .padding(.horizontal, 28)
+            .opacity(buttonVisible ? 1 : 0)
+            .animation(.easeInOut(duration: 0.35), value: buttonVisible)
+            .scaleEffect(buttonPressed ? 0.97 : (buttonIdlePulse ? 1.02 : 1.0))
+            .animation(.easeInOut(duration: 1.8).repeatForever(autoreverses: true), value: buttonIdlePulse)
+            .accessibilityLabel("Continue")
+            .accessibilityHint("Use this iPad as the training display. Connect a phone with Coach Remote.")
+
+            Spacer(minLength: 52)
+        }
+    }
 }
 
 /// Card style for Home dashboard: consistent for all non-pinned cards.
@@ -1299,6 +1641,7 @@ struct IntroView: View {
     @EnvironmentObject private var playerStore: PlayerStore
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
     @EnvironmentObject private var router: AppRouter
+    @EnvironmentObject private var coachRemoteRequiredPrompt: CoachRemoteRequiredPromptController
     @State private var showHowItWorks = false
     @State private var showStatusUpgrade = false
     @State private var upgradedStatus: PlayerStatus?
@@ -1841,6 +2184,11 @@ struct IntroView: View {
         }
     }
 
+    /// iPad in player display mode: data and pairing only; sessions start from Coach Remote.
+    private var isPadPlayerPresentationMode: Bool {
+        CoachRemoteSessionStartGate.isPadPlayerRole()
+    }
+
     /// Encouragement message for Today's Goal based on blocks completed today.
     private var todayGoalEncouragement: String {
         switch dailyCompleted {
@@ -1929,19 +2277,21 @@ struct IntroView: View {
                 }
             }
 #endif
-            ToolbarItem(placement: .topBarLeading) {
-                Menu {
-                    Button("Switch to Coach Remote") {
-                        let old = appRoleRaw
-                        appRoleRaw = AppRole.coachRemote.rawValue
-                        router.popToRoot()
-                        AppRoleDebug.log("role_change reason=home_menu_coach old=\(old) new=\(AppRole.coachRemote.rawValue) routing=coach_remote_root")
+            if !isPadPlayerPresentationMode {
+                ToolbarItem(placement: .topBarLeading) {
+                    Menu {
+                        Button("Switch to Coach Remote") {
+                            let old = appRoleRaw
+                            appRoleRaw = AppRole.coachRemote.rawValue
+                            router.popToRoot()
+                            AppRoleDebug.log("role_change reason=home_menu_coach old=\(old) new=\(AppRole.coachRemote.rawValue) routing=coach_remote_root")
+                        }
+                    } label: {
+                        Image(systemName: "arrow.left.arrow.right.circle")
+                            .foregroundColor(.white.opacity(0.9))
                     }
-                } label: {
-                    Image(systemName: "arrow.left.arrow.right.circle")
-                        .foregroundColor(.white.opacity(0.9))
+                    .accessibilityLabel("Switch device role")
                 }
-                .accessibilityLabel("Switch device role")
             }
             if Config.isSupabaseConfigured, authManager.currentSession != nil {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -2146,42 +2496,7 @@ struct IntroView: View {
     }
 
     private func evaluateProgressModals(previousStage: Int?, previousLoop: Int?, previousTier: String?, previousIdentity: PlayerIdentity?, newIdentity: PlayerIdentity?, previousStats: RollingStats, newStats: RollingStats, sessions: [SessionResult], wedgeDifficultyIncreased: Bool, wedgeDifficultyLevel: Int) {
-        guard activeProgressModal == nil else { return }
-        if let prevLoop = previousLoop, guidedProgress.loop > prevLoop {
-            activeProgressModal = .curriculumComplete(
-                decisionSpeedChange: metricChangeText(oldValue: earlyAverageDecisionTime(from: sessions), newValue: recentAverageDecisionTime(from: sessions), unit: "s", lowerIsBetter: true),
-                accuracyChange: metricChangeText(oldValue: earlyAccuracyPercent(from: sessions), newValue: recentAccuracyPercent(from: sessions), unit: "%", lowerIsBetter: false),
-                forwardThinkingChange: metricChangeText(oldValue: earlyForwardThinkingPercent(from: sessions), newValue: recentForwardThinkingPercent(from: sessions), unit: "%", lowerIsBetter: false),
-                recommendedActivity: guidedProgress.nextActivity
-            )
-            return
-        }
-        if wedgeDifficultyIncreased {
-            activeProgressModal = .adaptiveWedgeDifficulty(level: wedgeDifficultyLevel)
-            return
-        }
-        if let prevTier = previousTier, let newTier = newStats.tier, tierRank(newTier) > tierRank(prevTier) {
-            activeProgressModal = .levelUp(
-                previousTier: prevTier,
-                newTier: newTier,
-                previousAvg: previousStats.avgTime,
-                newAvg: newStats.avgTime,
-                previousAccuracy: previousStats.accuracyPercent,
-                newAccuracy: newStats.accuracyPercent
-            )
-            return
-        }
-        if let prevStage = previousStage, guidedProgress.stage > prevStage {
-            activeProgressModal = .stageUnlocked(stage: guidedProgress.stage, activity: guidedProgress.nextActivity)
-            return
-        }
-        if let newIdentity, previousIdentity != nil, newIdentity != previousIdentity {
-            activeProgressModal = .identityChanged(identity: newIdentity)
-            return
-        }
-        if let event = profileManager.dequeuePendingBadgeTierUnlock(playerId: playerId) {
-            activeProgressModal = .badgeTierUnlocked(event: event)
-        }
+        activeProgressModal = nil
     }
 
     private func recentAverageDecisionTime(from sessions: [SessionResult]) -> Double? {
@@ -2274,21 +2589,37 @@ struct IntroView: View {
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.9))
                     .multilineTextAlignment(.center)
-                Button("Start Stage \(stage)") {
-                    dismissProgressModal()
-                    router.push(routeForTrainNowActivity(activity))
+                if isPadPlayerPresentationMode {
+                    Button("OK") {
+                        dismissProgressModal()
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.black)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Color.yellow)
+                    .cornerRadius(12)
+                    Text("Your coach starts training from Coach Remote on a phone.")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.8))
+                        .multilineTextAlignment(.center)
+                } else {
+                    Button("Start Stage \(stage)") {
+                        dismissProgressModal()
+                        router.pushRespectingCoachRemotePadGate(routeForTrainNowActivity(activity), coachRemotePrompt: coachRemoteRequiredPrompt)
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.black)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Color.yellow)
+                    .cornerRadius(12)
+                    Button("Keep Training") {
+                        dismissProgressModal()
+                    }
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.85))
                 }
-                .font(.subheadline.weight(.semibold))
-                .foregroundColor(.black)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(Color.yellow)
-                .cornerRadius(12)
-                Button("Keep Training") {
-                    dismissProgressModal()
-                }
-                .font(.caption)
-                .foregroundColor(.white.opacity(0.85))
             case .curriculumComplete(_, _, _, let recommendedActivity):
                 Text("Curriculum Complete")
                     .font(.headline.weight(.bold))
@@ -2301,21 +2632,37 @@ struct IntroView: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(.white)
                     .multilineTextAlignment(.center)
-                Button("Start Next Focus") {
-                    dismissProgressModal()
-                    router.push(routeForTrainNowActivity(recommendedActivity))
+                if isPadPlayerPresentationMode {
+                    Button("OK") {
+                        dismissProgressModal()
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.black)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Color.yellow)
+                    .cornerRadius(12)
+                    Text("Your coach starts the next focus from Coach Remote.")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.8))
+                        .multilineTextAlignment(.center)
+                } else {
+                    Button("Start Next Focus") {
+                        dismissProgressModal()
+                        router.pushRespectingCoachRemotePadGate(routeForTrainNowActivity(recommendedActivity), coachRemotePrompt: coachRemoteRequiredPrompt)
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.black)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Color.yellow)
+                    .cornerRadius(12)
+                    Button("Keep Training") {
+                        dismissProgressModal()
+                    }
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.85))
                 }
-                .font(.subheadline.weight(.semibold))
-                .foregroundColor(.black)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(Color.yellow)
-                .cornerRadius(12)
-                Button("Keep Training") {
-                    dismissProgressModal()
-                }
-                .font(.caption)
-                .foregroundColor(.white.opacity(0.85))
             case .adaptiveWedgeDifficulty:
                 Text("Your training just got sharper.")
                     .font(.headline.weight(.bold))
@@ -2484,31 +2831,38 @@ struct IntroView: View {
                             .foregroundColor(.white.opacity(0.85))
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    Button {
-                        guard !isNavigatingToTraining else { return }
-                        isNavigatingToTraining = true
-                        isStartTrainingPressed = true
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                            isStartTrainingPressed = false
-                            router.push(PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest))
-                            isNavigatingToTraining = false
+                    if isPadPlayerPresentationMode {
+                        Text("Your coach runs the 2-minute assessment from Coach Remote on a phone.")
+                            .font(.subheadline)
+                            .foregroundColor(.white.opacity(0.8))
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Button {
+                            guard !isNavigatingToTraining else { return }
+                            isNavigatingToTraining = true
+                            isStartTrainingPressed = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                                isStartTrainingPressed = false
+                                router.pushRespectingCoachRemotePadGate(PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest), coachRemotePrompt: coachRemoteRequiredPrompt)
+                                isNavigatingToTraining = false
+                            }
+                        } label: {
+                            Text("Start 2-Minute Assessment")
+                                .font(.headline.weight(.semibold))
+                                .foregroundColor(.black)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 16)
+                                .background(Color.yellow)
+                                .cornerRadius(14)
+                                .contentShape(Rectangle())
                         }
-                    } label: {
-                        Text("Start 2-Minute Assessment")
-                            .font(.headline.weight(.semibold))
-                            .foregroundColor(.black)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 16)
-                            .background(Color.yellow)
-                            .cornerRadius(14)
-                            .contentShape(Rectangle())
+                        .buttonStyle(PlainButtonStyle())
+                        .scaleEffect(isStartTrainingPressed ? 0.98 : 1.0)
+                        .animation(.spring(response: 0.25, dampingFraction: 0.6), value: isStartTrainingPressed)
+                        .disabled(isNavigatingToTraining)
+                        .accessibilityLabel("Start 2-Minute Assessment")
+                        .accessibilityHint("Double tap to run your baseline assessment.")
                     }
-                    .buttonStyle(PlainButtonStyle())
-                    .scaleEffect(isStartTrainingPressed ? 0.98 : 1.0)
-                    .animation(.spring(response: 0.25, dampingFraction: 0.6), value: isStartTrainingPressed)
-                    .disabled(isNavigatingToTraining)
-                    .accessibilityLabel("Start 2-Minute Assessment")
-                    .accessibilityHint("Double tap to run your baseline assessment.")
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             } else {
@@ -2533,37 +2887,39 @@ struct IntroView: View {
                     Text("Focus: \(focusText)")
                         .font(.caption)
                         .foregroundColor(.white.opacity(0.85))
-#if DEBUG
-                    Text("DEBUG: Wedge Difficulty Level \(wedgeDifficultyLevel)")
-                        .font(.caption2)
-                        .foregroundColor(.white.opacity(0.7))
-#endif
-                    Button {
-                        guard !isNavigatingToTraining else { return }
-                        isNavigatingToTraining = true
-                        isStartTrainingPressed = true
-                        let route = routeForTrainNowActivity(continueTrainingCardActivity)
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                            isStartTrainingPressed = false
-                            router.push(route)
-                            isNavigatingToTraining = false
+                    if isPadPlayerPresentationMode {
+                        Text("Training is started from Coach Remote on your coach’s phone.")
+                            .font(.subheadline)
+                            .foregroundColor(.white.opacity(0.8))
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Button {
+                            guard !isNavigatingToTraining else { return }
+                            isNavigatingToTraining = true
+                            isStartTrainingPressed = true
+                            let route = routeForTrainNowActivity(continueTrainingCardActivity)
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                                isStartTrainingPressed = false
+                                router.pushRespectingCoachRemotePadGate(route, coachRemotePrompt: coachRemoteRequiredPrompt)
+                                isNavigatingToTraining = false
+                            }
+                        } label: {
+                            Text("Start Training")
+                                .font(.headline.weight(.semibold))
+                                .foregroundColor(.black)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 16)
+                                .background(Color.yellow)
+                                .cornerRadius(14)
+                                .contentShape(Rectangle())
                         }
-                    } label: {
-                        Text("Start Training")
-                            .font(.headline.weight(.semibold))
-                            .foregroundColor(.black)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 16)
-                            .background(Color.yellow)
-                            .cornerRadius(14)
-                            .contentShape(Rectangle())
+                        .buttonStyle(PlainButtonStyle())
+                        .scaleEffect(isStartTrainingPressed ? 0.98 : 1.0)
+                        .animation(.spring(response: 0.25, dampingFraction: 0.6), value: isStartTrainingPressed)
+                        .disabled(isNavigatingToTraining)
+                        .accessibilityLabel("Start Training")
+                        .accessibilityHint("Double tap to continue the guided training path.")
                     }
-                    .buttonStyle(PlainButtonStyle())
-                    .scaleEffect(isStartTrainingPressed ? 0.98 : 1.0)
-                    .animation(.spring(response: 0.25, dampingFraction: 0.6), value: isStartTrainingPressed)
-                    .disabled(isNavigatingToTraining)
-                    .accessibilityLabel("Start Training")
-                    .accessibilityHint("Double tap to continue the guided training path.")
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -3013,7 +3369,7 @@ struct IntroView: View {
                 }
             }
             Button {
-                router.push(routeForTrainNowActivity(dailyPlanBlocks[0]))
+                router.pushRespectingCoachRemotePadGate(routeForTrainNowActivity(dailyPlanBlocks[0]), coachRemotePrompt: coachRemoteRequiredPrompt)
             } label: {
                 Text("Start Training")
                     .font(.subheadline.weight(.semibold))
@@ -3114,19 +3470,21 @@ struct IntroView: View {
                         .foregroundColor(.white.opacity(0.9))
                 }
                 Spacer(minLength: 8)
-                Button {
-                    let old = appRoleRaw
-                    appRoleRaw = AppRole.coachRemote.rawValue
-                    router.popToRoot()
-                    AppRoleDebug.log("role_change reason=home_device_role_coach old=\(old) new=\(AppRole.coachRemote.rawValue) routing=coach_remote_root")
-                } label: {
-                    Text("Use as Coach Remote")
-                        .font(.caption.weight(.semibold))
+                if !isPadPlayerPresentationMode {
+                    Button {
+                        let old = appRoleRaw
+                        appRoleRaw = AppRole.coachRemote.rawValue
+                        router.popToRoot()
+                        AppRoleDebug.log("role_change reason=home_device_role_coach old=\(old) new=\(AppRole.coachRemote.rawValue) routing=coach_remote_root")
+                    } label: {
+                        Text("Use as Coach Remote")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.yellow)
+                    .foregroundStyle(.black)
+                    .accessibilityLabel("Switch to Coach Remote mode")
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.yellow)
-                .foregroundStyle(.black)
-                .accessibilityLabel("Switch to Coach Remote mode")
             }
             if let identity = currentPlayerIdentity {
                 VStack(alignment: .leading, spacing: 2) {
@@ -3296,11 +3654,15 @@ struct IntroView: View {
             otherActivityRow(title: "Achievements", subtitle: "See earned and locked badges") {
                 router.push(.achievements)
             }
-            otherActivityRow(title: "Run 2-Minute Test", subtitle: "Re-test baseline and benchmark progress") {
-                router.push(PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest))
+            if !isPadPlayerPresentationMode {
+                otherActivityRow(title: "Run 2-Minute Test", subtitle: "Re-test baseline and benchmark progress") {
+                    router.pushRespectingCoachRemotePadGate(PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest), coachRemotePrompt: coachRemoteRequiredPrompt)
+                }
             }
-            otherActivityRow(title: "Coach Remote", subtitle: "Open partner training remote") {
-                router.push(.coachRemote)
+            if !isPadPlayerPresentationMode {
+                otherActivityRow(title: "Coach Remote", subtitle: "Open partner training remote") {
+                    router.push(.coachRemote)
+                }
             }
             otherActivityRow(title: "Scan Warmups", subtitle: "Open warmup activities") {
                 router.push(.warmupHub)
@@ -3327,7 +3689,7 @@ struct IntroView: View {
                 let route = routeForTrainNowActivity(pinnedActivity)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
                     isStartTrainingPressed = false
-                    router.push(route)
+                    router.pushRespectingCoachRemotePadGate(route, coachRemotePrompt: coachRemoteRequiredPrompt)
                     isNavigatingToTraining = false
                 }
             } label: {
@@ -3400,7 +3762,7 @@ struct IntroView: View {
                     router.push(.coachRemote)
                 }
                 otherActivityRow(title: "2-Minute Test", subtitle: "Benchmark your decision speed") {
-                    router.push(PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest))
+                    router.pushRespectingCoachRemotePadGate(PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest), coachRemotePrompt: coachRemoteRequiredPrompt)
                 }
                 otherActivityRow(title: "Personal Bests", subtitle: "Fastest decision speed, AFP first-decision accuracy, forward intent") {
                     router.push(.progress)
@@ -3521,7 +3883,7 @@ struct IntroView: View {
                 .font(.footnote)
                 .foregroundColor(.white.opacity(0.8))
             Button {
-                router.push(PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest))
+                router.pushRespectingCoachRemotePadGate(PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest), coachRemotePrompt: coachRemoteRequiredPrompt)
             } label: {
                 Text("Run Test")
                     .font(.subheadline.weight(.medium))
@@ -3745,6 +4107,7 @@ struct TwoMinuteRoleSelectionView: View {
     @EnvironmentObject private var playerStore: PlayerStore
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
     @EnvironmentObject private var router: AppRouter
+    @ObservedObject private var partnerTrainingCoordinator = TrainingPartnerConnectionCoordinator.shared
     @AppStorage("userMode") private var userMode: String = "coach"
     @State private var showTrainingModeSelection = false
     @State private var savedRole: SavedTwoMinuteRole?
@@ -3913,17 +4276,12 @@ struct TwoMinuteRoleSelectionView: View {
             showFullRoleSelection = false
         }
         .navigationDestination(isPresented: $showTrainingModeSelection) {
-            TrainingModeSelectionView(activityTitle: "2-Minute Test") { mode in
-                TwoMinuteTestSetupView(mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
-                    .environmentObject(progressStore)
-                    .environmentObject(playerStore)
-                    .environmentObject(popToRootTrigger)
-                    .environmentObject(router)
-            }
-            .environmentObject(progressStore)
-            .environmentObject(playerStore)
-            .environmentObject(popToRootTrigger)
-            .environmentObject(router)
+            TwoMinuteCriticalScanSessionView(config: TwoMinuteTestConfig.baseline, mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(popToRootTrigger)
+                .environmentObject(router)
+                .id(partnerTrainingCoordinator.partnerDisplaySurfaceId)
         }
     }
 
@@ -4039,27 +4397,23 @@ struct TwoMinuteGetReadyView: View {
     @EnvironmentObject private var playerStore: PlayerStore
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
     @EnvironmentObject private var router: AppRouter
+    @ObservedObject private var partnerTrainingCoordinator = TrainingPartnerConnectionCoordinator.shared
     @Environment(\.dismiss) private var dismiss
     @State private var showLeaveAlert = false
 
-    private enum Phase {
-        case instructions
-        case session
-    }
-    @State private var phase: Phase = ActivityInstructionContent.shouldShowInstructions(for: .twoMinuteTest) ? .instructions : .session
+    @State private var phase: Bool = true
 
     var body: some View {
         Group {
-            if phase == .session {
+            if phase {
                 TwoMinuteCriticalScanSessionView(config: config, mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
                     .environmentObject(progressStore)
                     .environmentObject(playerStore)
                     .environmentObject(popToRootTrigger)
                     .environmentObject(router)
+                    .id(mode.requiresPhoneDisplayRelay ? partnerTrainingCoordinator.partnerDisplaySurfaceId.uuidString : "twoMinute-get-ready-solo")
             } else {
-                ActivityInstructionView(activity: .twoMinuteTest, trainingMode: mode) {
-                    phase = .session
-                }
+                EmptyView()
             }
         }
         .alert("Leave training?", isPresented: $showLeaveAlert) {

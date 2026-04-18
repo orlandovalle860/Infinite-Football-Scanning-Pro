@@ -11,6 +11,8 @@ import MultipeerConnectivity
 
 enum AwayFromPressureCoachState {
     case ready
+    case waitingForRepStart(repIndex: Int)
+    case armedForPass(repIndex: Int)
     case logging(repIndex: Int)
     case blockComplete
 }
@@ -53,6 +55,19 @@ struct AwayFromPressureCoachRemoteView: View {
     @State private var hasChosenCalibrationAction = false
     @State private var shouldRunCalibration = true
     @State private var showCalibrationCompletionFeedback = false
+    @State private var repStartAckTimeoutWorkItem: DispatchWorkItem?
+    @State private var repStartTapSentTimestamp: TimeInterval = 0
+    @State private var pendingRepStartHardResetRepIndex: Int?
+    @State private var coachSessionInputResetToken = UUID()
+    /// 0-based rep index the display has beeped for; `nil` before any beep in
+    /// the current rep. Updated on `.beepArmed` messages and passed to
+    /// `CoachSessionView` so the PASS button only arms after the iPad's beep.
+    @State private var externalBeepArmedRepIndex: Int? = nil
+    @State private var didBroadcastCoachSessionStart = false
+    @State private var showReconnectRestartOverlay = false
+    @State private var coachRepIndexSnapshotAtDisconnect: Int?
+    private let repStartAckTimeoutWindow: TimeInterval = 4.5
+    private let repStartLateAckGraceWindow: TimeInterval = 0.6
 
     private let totalReps = 12
 
@@ -85,7 +100,7 @@ struct AwayFromPressureCoachRemoteView: View {
                 .onTapGesture { }
             VStack(spacing: 24) {
                 switch state {
-                case .ready, .logging:
+                case .ready, .waitingForRepStart, .armedForPass, .logging:
                     readyView
                 case .blockComplete: blockCompleteView
                 }
@@ -93,11 +108,36 @@ struct AwayFromPressureCoachRemoteView: View {
             if Self.partnerTransportMode == .relayWebSocket {
                 PartnerRelayLifecycleBannerOverlay()
             }
+            PartnerMidSessionDisconnectRecoveryOverlay()
+                .zIndex(160)
+            if showReconnectRestartOverlay {
+                Text("Reconnected — restarting rep")
+                    .font(.headline)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+                    .background(Color.black.opacity(0.8))
+                    .foregroundColor(.white)
+                    .cornerRadius(12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                    .transition(.opacity)
+                    .zIndex(1000)
+                    .allowsHitTesting(false)
+            }
         }
+        .animation(.easeInOut(duration: 0.2), value: showReconnectRestartOverlay)
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onReceive(NotificationCenter.default.publisher(for: .twoMinuteMessageReceived)) { notification in
             guard let msg = notification.object as? TwoMinuteMessage else { return }
+            if case .repStarted(let repIndex, _) = msg {
+                handleRepStartedAcknowledgement(repIndex: repIndex)
+            }
+            if case .beepArmed(let repIndex, _) = msg {
+                handleBeepArmed(repIndex: repIndex)
+            }
+            if case .partnerSessionCheckpoint(let sourceRole, _, let repIndex, _, _, _) = msg, sourceRole == "display" {
+                handleDisplayRepSignal(repIndex: repIndex)
+            }
             if case .sessionEnded = msg {
                 #if DEBUG
                 if Self.partnerTransportMode == .relayWebSocket {
@@ -110,12 +150,14 @@ struct AwayFromPressureCoachRemoteView: View {
                 }
                 #endif
                 state = .ready
-                hasCompletedPassTempoCalibration = false
+                hasCompletedPassTempoCalibration = true
                 partnerCalibration.reset()
-                hasChosenCalibrationAction = false
-                shouldRunCalibration = true
+                hasChosenCalibrationAction = true
+                shouldRunCalibration = false
                 showConnectedConfirmation = false
                 hasStartedConnectedToCalibrationTransition = false
+                clearRepStartAckWaitState()
+                resetCoachSessionInput()
                 // Stay in activity-ready state; explicit end/disconnect paths handle full reset.
             }
             PartnerRelayCheckpointCoachUI.handleDisplayCheckpointMessage(
@@ -128,12 +170,12 @@ struct AwayFromPressureCoachRemoteView: View {
         .onAppear {
             didNavigateBackToCoachHubAfterDisplayDisconnect = false
             didAttemptCoachRelayAutoReconnect = false
-            hasCompletedPassTempoCalibration = false
+            hasCompletedPassTempoCalibration = true
             partnerCalibration.reset()
             showConnectedConfirmation = false
             hasStartedConnectedToCalibrationTransition = false
-            hasChosenCalibrationAction = false
-            shouldRunCalibration = true
+            hasChosenCalibrationAction = true
+            shouldRunCalibration = false
             #if DEBUG
             if Self.partnerTransportMode == .relayWebSocket {
                 CoachPersistDebug.log("onAppear", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
@@ -141,25 +183,19 @@ struct AwayFromPressureCoachRemoteView: View {
             #endif
             TrainingPartnerConnectionCoordinator.shared.beginPartnerTrainingSessionIfNeeded()
             let coordinator = TrainingPartnerConnectionCoordinator.shared
-            if coordinator.sessionCalibrationResolved {
-                hasCompletedPassTempoCalibration = true
-                hasChosenCalibrationAction = true
-                shouldRunCalibration = false
-            } else if coordinator.isConnected,
-                      !PartnerPassTempoCalibrationStore.requiresCalibration(for: .partner) {
-                hasCompletedPassTempoCalibration = true
-                hasChosenCalibrationAction = true
-                shouldRunCalibration = false
-                coordinator.markSessionCalibrationResolved(
-                    averageTravelTimeSeconds: PartnerPassTempoCalibrationStore.savedAverageTravelTimeSeconds(),
-                    trainingMode: .partner
-                )
-            }
+            coordinator.markSessionCalibrationResolved(
+                averageTravelTimeSeconds: PartnerPassTempoCalibrationStore.seededAverageTravelTimeSeconds(),
+                trainingMode: .partner
+            )
             if Self.partnerTransportMode == .multipeer {
                 TrainingPartnerConnectionCoordinator.shared.prepareMultipeerCoachRemote(connectionManager: connectionManager)
             }
             if Self.partnerTransportMode == .relayWebSocket {
                 attemptCoachRelayAutoReconnectIfNeeded()
+            }
+            didBroadcastCoachSessionStart = false
+            if coachSessionConnected {
+                broadcastCoachSessionStartIfNeeded()
             }
             beginConnectedToCalibrationTransitionIfNeeded()
         }
@@ -202,19 +238,42 @@ struct AwayFromPressureCoachRemoteView: View {
             #endif
             resetLocalUIForDisconnect(source: "relayRemoteService=disconnected")
         }
-        .onChange(of: coachSessionConnected) { _, connected in
+        .onChange(of: coachSessionConnected) { wasConnected, connected in
             if connected {
+                if !wasConnected,
+                   TrainingPartnerConnectionCoordinator.shared.shouldPersistPartnerPairing,
+                   let snap = coachRepIndexSnapshotAtDisconnect,
+                   snap == coachSyncRepIndexForCheckpoint() {
+                    triggerReconnectRestartOverlay()
+                }
+                coachRepIndexSnapshotAtDisconnect = nil
+                broadcastCoachSessionStartIfNeeded()
                 beginConnectedToCalibrationTransitionIfNeeded()
             } else {
+                if TrainingPartnerConnectionCoordinator.shared.shouldPersistPartnerPairing, wasConnected {
+                    coachRepIndexSnapshotAtDisconnect = coachSyncRepIndexForCheckpoint()
+                } else {
+                    coachRepIndexSnapshotAtDisconnect = nil
+                }
+                if !TrainingPartnerConnectionCoordinator.shared.shouldPersistPartnerPairing {
+                    didBroadcastCoachSessionStart = false
+                }
                 showConnectedConfirmation = false
                 hasStartedConnectedToCalibrationTransition = false
-                hasChosenCalibrationAction = false
-                shouldRunCalibration = true
+                hasCompletedPassTempoCalibration = true
+                hasChosenCalibrationAction = true
+                shouldRunCalibration = false
             }
         }
         .preferredColorScheme(.dark)
-        .navigationTitle("Coach — Playing Away From Pressure (12 reps)")
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func broadcastCoachSessionStartIfNeeded() {
+        guard !didBroadcastCoachSessionStart else { return }
+        didBroadcastCoachSessionStart = true
+        TrainingPartnerConnectionCoordinator.shared.broadcastSessionStartedFromCoach(activity: .awayFromPressure, totalReps: totalReps)
     }
 
     private var readyView: some View {
@@ -224,56 +283,42 @@ struct AwayFromPressureCoachRemoteView: View {
             } else if showConnectedConfirmation {
                 PartnerConnectedConfirmationView()
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
-            } else if !hasChosenCalibrationAction {
-                CoachCalibrationDecisionView(
-                    hasPreviousCalibration: PartnerPassTempoCalibrationStore.hasSavedCalibration,
-                    onStartCalibration: chooseStartCalibration,
-                    onSkip: skipCalibrationAndStartSession
-                )
-            } else if shouldRunCalibration && !hasCompletedPassTempoCalibration {
-                CoachRemotePassTempoCalibrationView(
-                    sampleCount: partnerCalibration.sampleCount,
-                    targetSamples: partnerCalibration.targetSamples,
-                    step: partnerCalibration.step,
-                    canFinish: partnerCalibration.canFinish,
-                    onTapPass: handleCalibrationPassTap,
-                    onTapArrival: handleCalibrationArrivalTap,
-                    onFinish: finishCalibrationAndStartSession,
-                    showCompletionFeedback: showCalibrationCompletionFeedback
-                )
             } else {
-                VStack(spacing: 10) {
-                    sharedSessionInput(repIndex: currentRepIndex)
-                    Button("Recalibrate timing") {
-                        chooseStartCalibration()
-                    }
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.white.opacity(0.82))
-                    .buttonStyle(.plain)
-                }
+                sharedSessionInput(repIndex: currentRepIndex)
             }
         }
     }
 
     private func sharedSessionInput(repIndex: Int) -> some View {
         CoachSessionView(
-            mode: .playPicture,
+            coachRemoteHeaderTitle: "Coach — Playing Away From Pressure (\(totalReps) reps)",
             totalReps: totalReps,
+            currentRepOneBased: currentRepIndex + 1,
             preBeepDelayRange: 0.0...0.0,
+            waitsForExternalBeepArm: true,
+            externalBeepArmedRepIndex: $externalBeepArmedRepIndex,
             onRepStarted: { _ in
                 startNextRepIfReady()
             },
-            onPassTriggered: { rep in
-                sendPassTrigger(repIndex: rep)
+            // Use parent `currentRepIndex` — `CoachSessionView` resets its own `repIndex` when `.id` changes after each rep.
+            onPassTriggered: { _ in
+                sendPassTrigger(repIndex: currentRepIndex)
             },
-            onDirectionLogged: { rep, swipe in
-                logDecision(repIndex: rep, gate: swipe.gate)
-            }
+            onDirectionLogged: { _, swipe in
+                logDecision(repIndex: currentRepIndex, gate: swipe.gate)
+            },
+            coachFirstRunActivityId: ActivityKind.awayFromPressure.sessionActivityActivityId,
+            coachTransportConnected: coachSessionConnected
         )
+        .id(coachSessionInputResetToken)
     }
 
-    private func startNextRepIfReady() {
-        guard case .ready = state, currentRepIndex < totalReps else { return }
+    @discardableResult
+    private func startNextRepIfReady() -> Bool {
+        guard case .ready = state, currentRepIndex < totalReps else { return false }
+        let now = Date().timeIntervalSince1970
+        repStartTapSentTimestamp = now
+        pendingRepStartHardResetRepIndex = nil
         if Self.partnerTransportMode == .multipeer {
             connectionManager.lastError = nil
         }
@@ -283,10 +328,15 @@ struct AwayFromPressureCoachRemoteView: View {
         }
         #endif
         remoteService.sendNextRep(repIndex: currentRepIndex)
-        state = .logging(repIndex: currentRepIndex)
+        state = .waitingForRepStart(repIndex: currentRepIndex)
+        scheduleRepStartAckTimeout(for: currentRepIndex)
+        return true
     }
 
-    private func sendPassTrigger(repIndex: Int) {
+    private func sendPassTrigger(repIndex: Int) -> Bool {
+        guard case .armedForPass(let armedRep) = state, armedRep == repIndex else { return false }
+        clearRepStartAckWaitState()
+        state = .logging(repIndex: repIndex)
         #if DEBUG
         if Self.partnerTransportMode == .relayWebSocket {
             afpCoachRelayLog("send passTriggered repIndex=\(repIndex)")
@@ -297,6 +347,7 @@ struct AwayFromPressureCoachRemoteView: View {
         #else
         remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
         #endif
+        return true
     }
 
     private var connectionSection: some View {
@@ -426,6 +477,7 @@ struct AwayFromPressureCoachRemoteView: View {
             let displayPeerJoinedBinding = $coachRelayDisplayPeerJoined
             let remote = remoteService
             transport.onRawTextReceived = { text in
+                TrainingPartnerConnectionCoordinator.shared.ingestCoachRelayRawControlText(text)
                 if text.contains("peer_joined") {
                     afpCoachRelayLog("peer_joined detected (raw frame)")
                     Task { @MainActor in
@@ -453,31 +505,22 @@ struct AwayFromPressureCoachRemoteView: View {
             }
         } catch {
             afpCoachRelayLog("join HTTP: failure \(error.localizedDescription)")
+            if WebSocketSessionAPI.isInvalidOrExpiredJoinSessionError(error) {
+                await MainActor.run {
+                    TrainingPartnerConnectionCoordinator.shared.recoverCoachRelayStateAfterExpiredJoinCode()
+                    coachRelayJoinCodeInput = ""
+                    coachRelayJoinBusy = false
+                    coachRelayDisplayPeerJoined = false
+                    coachRelayJoinError = WebSocketSessionAPI.relayJoinCodeExpiredUserMessage
+                    coachRelayJoinBanner = WebSocketSessionAPI.relayJoinCodeExpiredUserMessage
+                }
+                return
+            }
             await MainActor.run {
                 coachRelayJoinBusy = false
-                if let api = error as? WebSocketSessionAPIError {
-                    switch api {
-                    case .httpError(let code, let body):
-                        if code == 409, body?.contains("COACH_SLOT_TAKEN") == true {
-                            let friendly = "That code doesn’t match the relay session on the iPad. Enter the join code shown on the display **right now**, then tap Join session."
-                            coachRelayJoinError = friendly
-                            coachRelayJoinBanner = friendly
-                        } else {
-                            let friendly = "Join failed (\(code)): \(body ?? "")"
-                            coachRelayJoinError = friendly
-                            coachRelayJoinBanner = friendly
-                        }
-                    case .decodingFailed:
-                        coachRelayJoinError = "Join response decode failed."
-                        coachRelayJoinBanner = coachRelayJoinError
-                    case .invalidURL:
-                        coachRelayJoinError = "Invalid URL."
-                        coachRelayJoinBanner = coachRelayJoinError
-                    }
-                } else {
-                    coachRelayJoinError = error.localizedDescription
-                    coachRelayJoinBanner = error.localizedDescription
-                }
+                let friendly = WebSocketSessionAPI.userFacingJoinErrorMessage(error)
+                coachRelayJoinError = friendly
+                coachRelayJoinBanner = friendly
             }
         }
     }
@@ -510,8 +553,26 @@ struct AwayFromPressureCoachRemoteView: View {
             Text("Results on the Display.")
                 .font(.subheadline)
                 .foregroundColor(.white.opacity(0.7))
+            Button {
+                coachStartNextBlockTapped()
+            } label: {
+                Text("Start Next Block")
+                    .font(.headline)
+                    .foregroundColor(.black)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                    .background(Color.yellow)
+                    .cornerRadius(14)
+            }
+            .buttonStyle(PlainButtonStyle())
+            .padding(.horizontal, 8)
             Spacer()
         }
+    }
+
+    private func coachStartNextBlockTapped() {
+        didNavigateBackToCoachHubAfterDisplayDisconnect = false
+        router.popCoachRemoteToStartSessionHub(dismiss: dismiss, expectingTopRoute: .awayFromPressureCoachRemote)
     }
 
     private func logDecision(repIndex: Int, gate: Gate) {
@@ -531,13 +592,29 @@ struct AwayFromPressureCoachRemoteView: View {
 
     private func advanceToNextRep(after repIndex: Int) {
         currentRepIndex = repIndex + 1
-        state = currentRepIndex >= totalReps ? .blockComplete : .ready
+        clearRepStartAckWaitState()
+        if currentRepIndex >= totalReps {
+            CoachFirstRunGuidanceStore.markCompletedFirstRun(activityId: ActivityKind.awayFromPressure.sessionActivityActivityId)
+            state = .blockComplete
+        } else {
+            state = .ready
+            resetCoachSessionInput()
+        }
     }
 
     /// Aligns with display ``partnerSessionCheckpoint`` rep index (0-based).
+    private func triggerReconnectRestartOverlay() {
+        showReconnectRestartOverlay = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            showReconnectRestartOverlay = false
+        }
+    }
+
     private func coachSyncRepIndexForCheckpoint() -> Int {
         switch state {
         case .ready: return currentRepIndex
+        case .waitingForRepStart(let r): return r
+        case .armedForPass(let r): return r
         case .logging(let r): return r
         case .blockComplete: return totalReps
         }
@@ -546,12 +623,100 @@ struct AwayFromPressureCoachRemoteView: View {
     private func resetLocalUIForDisconnect(source: String) {
         switch state {
         case .ready: return
-        case .logging, .blockComplete: break
+        case .waitingForRepStart, .armedForPass, .logging, .blockComplete: break
         }
 #if DEBUG
         print("[AFP Coach] disconnect reset -> state=.ready [\(source)]")
 #endif
+        clearRepStartAckWaitState()
         state = .ready
+        resetCoachSessionInput()
+    }
+
+    private func handleRepStartedAcknowledgement(repIndex: Int) {
+        if case .waitingForRepStart(let waitingRep) = state, waitingRep == repIndex {
+            clearRepStartAckWaitState()
+            state = .armedForPass(repIndex: repIndex)
+            #if DEBUG
+            let deltaMs = Int((Date().timeIntervalSince1970 - repStartTapSentTimestamp) * 1000)
+            print("[AFP Coach] repStarted ACK in \(deltaMs)ms for rep \(repIndex)")
+            #endif
+            return
+        }
+        if case .armedForPass(let r) = state, r == repIndex {
+            clearRepStartAckWaitState()
+            return
+        }
+        if case .logging(let r) = state, r == repIndex {
+            clearRepStartAckWaitState()
+            return
+        }
+        if case .ready = state, currentRepIndex == repIndex {
+            clearRepStartAckWaitState()
+            pendingRepStartHardResetRepIndex = nil
+            state = .armedForPass(repIndex: repIndex)
+            #if DEBUG
+            print("[AFP Coach] repStarted ACK accepted while .ready (late after timeout) rep \(repIndex)")
+            #endif
+            return
+        }
+        guard pendingRepStartHardResetRepIndex == repIndex else { return }
+        clearRepStartAckWaitState()
+        pendingRepStartHardResetRepIndex = nil
+        state = .armedForPass(repIndex: repIndex)
+        #if DEBUG
+        let deltaMs = Int((Date().timeIntervalSince1970 - repStartTapSentTimestamp) * 1000)
+        print("[AFP Coach] late repStarted ACK accepted in \(deltaMs)ms for rep \(repIndex)")
+        #endif
+    }
+
+    private func handleDisplayRepSignal(repIndex: Int) {
+        guard case .waitingForRepStart(let waitingRep) = state, waitingRep == repIndex else { return }
+        clearRepStartAckWaitState()
+        pendingRepStartHardResetRepIndex = nil
+        state = .armedForPass(repIndex: repIndex)
+    }
+
+    private func scheduleRepStartAckTimeout(for repIndex: Int) {
+        repStartAckTimeoutWorkItem?.cancel()
+        let work = DispatchWorkItem {
+            guard case .waitingForRepStart(let waitingRep) = state, waitingRep == repIndex else { return }
+            pendingRepStartHardResetRepIndex = repIndex
+            let hardReset = DispatchWorkItem {
+                guard case .waitingForRepStart(let stillWaitingRep) = state, stillWaitingRep == repIndex else { return }
+                guard pendingRepStartHardResetRepIndex == repIndex else { return }
+                state = .ready
+                pendingRepStartHardResetRepIndex = nil
+                resetCoachSessionInput()
+            }
+            repStartAckTimeoutWorkItem = hardReset
+            DispatchQueue.main.asyncAfter(deadline: .now() + repStartLateAckGraceWindow, execute: hardReset)
+        }
+        repStartAckTimeoutWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + repStartAckTimeoutWindow, execute: work)
+    }
+
+    private func clearRepStartAckWaitState() {
+        repStartAckTimeoutWorkItem?.cancel()
+        repStartAckTimeoutWorkItem = nil
+        pendingRepStartHardResetRepIndex = nil
+    }
+
+    private func resetCoachSessionInput() {
+        coachSessionInputResetToken = UUID()
+        // Drop any stale beep-arm signal so a leftover value from the previous
+        // rep can't pre-arm the next rep's PASS button before the display beeps.
+        externalBeepArmedRepIndex = nil
+    }
+
+    private func handleBeepArmed(repIndex: Int) {
+        guard repIndex == currentRepIndex else {
+            #if DEBUG
+            print("[AFP Coach] beepArmed ignored: repIndex=\(repIndex) currentRepIndex=\(currentRepIndex)")
+            #endif
+            return
+        }
+        externalBeepArmedRepIndex = repIndex
     }
 
     /// Clears join code + relay banners when the session ends or the relay drops so a new display session gets a fresh field.
@@ -614,20 +779,10 @@ struct AwayFromPressureCoachRemoteView: View {
 
 
     private func beginConnectedToCalibrationTransitionIfNeeded() {
-        guard coachSessionConnected,
-              !hasCompletedPassTempoCalibration,
-              !hasStartedConnectedToCalibrationTransition else { return }
-        hasStartedConnectedToCalibrationTransition = true
+        guard coachSessionConnected else { return }
         relayJoinCodeFieldFocused = false
         PartnerRelayCoachJoinKeyboard.dismiss()
-        withAnimation(.easeInOut(duration: 0.2)) {
-            showConnectedConfirmation = true
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + PartnerCalibrationTransition.connectedConfirmationDuration) {
-            withAnimation(.easeInOut(duration: 0.2)) {
-                showConnectedConfirmation = false
-            }
-        }
+        showConnectedConfirmation = false
     }
 
     private func clearCoachRelayJoinForm() {

@@ -119,7 +119,7 @@ final class AuthManager: ObservableObject {
                 }
             }
         } catch {
-            await MainActor.run { lastError = error.localizedDescription }
+            await MainActor.run { lastError = UserFacingErrorMessage.message(from: error) }
         }
     }
 
@@ -136,7 +136,7 @@ final class AuthManager: ObservableObject {
             }
             print("[AuthFlow-Debug] auth operation=signInWithPassword email=\(email.trimmingCharacters(in: .whitespacesAndNewlines)) auth.uid=\(session.user.id.uuidString.lowercased())")
         } catch {
-            await MainActor.run { lastError = error.localizedDescription }
+            await MainActor.run { lastError = UserFacingErrorMessage.message(from: error) }
         }
     }
 
@@ -169,7 +169,7 @@ final class AuthManager: ObservableObject {
                 await MainActor.run { lastError = nil }
                 return
             }
-            await MainActor.run { lastError = error.localizedDescription }
+            await MainActor.run { lastError = UserFacingErrorMessage.message(from: error) }
             return
         case .success(let authorization):
             guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
@@ -204,7 +204,7 @@ final class AuthManager: ObservableObject {
             }
             print("[AuthFlow-Debug] auth operation=signInWithApple auth.uid=\(session.user.id.uuidString.lowercased()) email=\(session.user.email ?? "nil")")
         } catch {
-            await MainActor.run { lastError = error.localizedDescription }
+            await MainActor.run { lastError = UserFacingErrorMessage.message(from: error) }
         }
     }
 

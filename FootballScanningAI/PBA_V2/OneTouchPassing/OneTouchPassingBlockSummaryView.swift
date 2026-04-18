@@ -11,6 +11,7 @@ import Combine
 struct OneTouchPassingBlockSummaryView: View {
     let results: [OneTouchRepResult]
     let config: OneTouchPassingConfig
+    let onRunItBack: () -> Void
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
     @EnvironmentObject private var progressStore: ProgressStore
@@ -209,12 +210,14 @@ struct OneTouchPassingBlockSummaryView: View {
                     newPersonalBests: newPersonalBestsFromBlock,
                     xpEarned: xpEarnedFromBlock,
                     newlyUnlockedBadges: newlyUnlockedBadgesFromBlock,
+                    onRunItBack: onRunItBack,
                     profileManager: profileManager,
                     settingsViewModel: settingsViewModel
                 )
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
+                .environmentObject(router)
             }
             else { blockSummaryContent }
         }
@@ -389,13 +392,7 @@ struct OneTouchPassingBlockSummaryView: View {
                 }
                 .frame(maxWidth: .infinity)
 
-                Button(showDetails ? "Hide details" : "Show details") {
-                    showDetails.toggle()
-                }
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.8))
-
-                if showDetails {
+                if CoachRemoteSessionStartGate.isPadPlayerRole() {
                     VStack(spacing: 10) {
                         detailRow("Average decision window", String(format: "%.2fs", blockResult.averageDecisionTime))
                         detailRow("Fast", "\(blockResult.fastCount)")
@@ -408,33 +405,59 @@ struct OneTouchPassingBlockSummaryView: View {
                     }
                     .font(.footnote)
                     .foregroundColor(.white.opacity(0.75))
-                }
+                    Text("Use the coach remote to start the next block.")
+                        .font(.body.weight(.medium))
+                        .foregroundColor(.white.opacity(0.92))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 16)
+                } else {
+                    Button(showDetails ? "Hide details" : "Show details") {
+                        showDetails.toggle()
+                    }
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.8))
 
-                VStack(spacing: 12) {
-                    Button { navigateToNewBlock = true } label: {
-                        Text("Continue Training")
-                            .font(.system(size: 18, weight: .semibold, design: .rounded))
-                            .foregroundColor(.black)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 16)
-                            .background(Color.yellow)
-                            .cornerRadius(12)
+                    if showDetails {
+                        VStack(spacing: 10) {
+                            detailRow("Average decision window", String(format: "%.2fs", blockResult.averageDecisionTime))
+                            detailRow("Fast", "\(blockResult.fastCount)")
+                            detailRow("Medium", "\(blockResult.mediumCount)")
+                            detailRow("Slow", "\(blockResult.slowCount)")
+                            detailRow("Up", "\(blockResult.directionCounts[.up] ?? 0)")
+                            detailRow("Down", "\(blockResult.directionCounts[.down] ?? 0)")
+                            detailRow("Left", "\(blockResult.directionCounts[.left] ?? 0)")
+                            detailRow("Right", "\(blockResult.directionCounts[.right] ?? 0)")
+                        }
+                        .font(.footnote)
+                        .foregroundColor(.white.opacity(0.75))
                     }
-                    .buttonStyle(PlainButtonStyle())
-                    Button { navigateToCurriculum = true } label: {
-                        Text("Back to Curriculum")
-                            .font(.subheadline)
-                            .foregroundColor(.white.opacity(0.8))
+
+                    VStack(spacing: 12) {
+                        Button { navigateToNewBlock = true } label: {
+                            Text("Continue Training")
+                                .font(.system(size: 18, weight: .semibold, design: .rounded))
+                                .foregroundColor(.black)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 16)
+                                .background(Color.yellow)
+                                .cornerRadius(12)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        Button { navigateToCurriculum = true } label: {
+                            Text("Back to Curriculum")
+                                .font(.subheadline)
+                                .foregroundColor(.white.opacity(0.8))
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        Button { navigateToProgress = true } label: {
+                            Text("View Progress")
+                                .font(.subheadline)
+                                .foregroundColor(.white.opacity(0.8))
+                        }
+                        .buttonStyle(PlainButtonStyle())
                     }
-                    .buttonStyle(PlainButtonStyle())
-                    Button { navigateToProgress = true } label: {
-                        Text("View Progress")
-                            .font(.subheadline)
-                            .foregroundColor(.white.opacity(0.8))
-                    }
-                    .buttonStyle(PlainButtonStyle())
+                    .padding(.top, 24)
                 }
-                .padding(.top, 24)
                 Spacer(minLength: 40)
             }
             .padding(24)

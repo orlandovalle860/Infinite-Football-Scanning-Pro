@@ -22,6 +22,17 @@ enum ActivityKind: String, Codable, Hashable, Identifiable {
         case .oneTouchPassing: return "one_touch_passing"
         }
     }
+
+    /// Inverse of ``sessionActivityActivityId`` for relay `sessionStarted` payloads.
+    static func fromSessionActivityId(_ id: String) -> ActivityKind? {
+        switch id {
+        case "two_minute_test": return .twoMinuteTest
+        case "away_from_pressure": return .awayFromPressure
+        case "dribble_or_pass": return .dribbleOrPass
+        case "one_touch_passing": return .oneTouchPassing
+        default: return nil
+        }
+    }
 }
 
 enum GridSize: String, Codable {

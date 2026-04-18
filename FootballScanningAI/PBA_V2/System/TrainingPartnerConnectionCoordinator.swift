@@ -65,13 +65,26 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
 
     // MARK: - Mid-session disconnect (drill freeze + recovery)
 
-    /// True after a live coach↔display transport link was observed during this partner run.
+    /// True only after transport was live **and** drill play had begun this partner run (used for mid-session disconnect eligibility).
     private var hadPartnerTransportLinkLiveThisSession: Bool = false
+    /// True after drill play has begun (countdown finished, rep sync, or coach `nextRep`) so we do not show recovery during pairing/setup.
+    private var hasStartedAtLeastOneRep: Bool = false
     /// Full-screen recovery UI while partner link drops mid-drill (both devices).
     @Published private(set) var isMidSessionPartnerDisconnect: Bool = false
-    /// After ~10s without link, show **End Session** / **Reconnect**.
-    @Published private(set) var showPartnerMidSessionRecoveryChoices: Bool = false
-    private var midSessionDisconnectRecoveryTask: Task<Void, Never>?
+    private var midSessionDisconnectDebounceWorkItem: DispatchWorkItem?
+    /// True after transport dropped while drilling (foreground only); cleared when link returns or session resets.
+    private var linkDownSinceDrillUnderway: Bool = false
+    /// True while iOS background suspend has torn down relay sockets — avoids treating that as a mid-drill drop for soft rep restart.
+    private var partnerRelaySuspendedForBackground: Bool = false
+    /// After foreground relay reconnect completes, ignore brief transport flaps that would post ``partnerSoftReconnectRepRestart`` and reset the display rep.
+    private var partnerRelayForegroundReconnectCooldownUntil: Date?
+    /// Suppresses duplicate `partnerSoftReconnectRepRestart` posts while a soft reconnect is in flight.
+    private var isHandlingSoftReconnect: Bool = false
+    /// Suppresses concurrent ``startNewPartnerSessionFromDisconnect(router:)`` (double-tap / overlapping Tasks).
+    private var isStartingNewSession: Bool = false
+
+    /// Set from ``relayDisplaySession.joinCode`` after a fresh relay mint in ``startNewPartnerSessionFromDisconnect``; `nil` while none / during reset. Prefer ``relayDisplaySession`` in SwiftUI; this nudges coordinator observers.
+    @Published private(set) var currentJoinCode: String?
 
     // MARK: - Soft resume (grace window)
 
@@ -81,6 +94,8 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
     private var relaySessionIdSnapshotAtSuspend: String?
     /// Server session id from display HTTP create or coach HTTP join (same logical session).
     private(set) var trackedRelaySessionId: String?
+    /// Last relay server session id known to match the displayed join code (iPad display + coach join). Used after background to detect local/server drift.
+    private var lastKnownValidRelaySessionId: String?
     /// Coach iPhone: brief reconnect succeeded; waiting for display ``partnerSessionCheckpoint`` to validate soft resume.
     private(set) var awaitingSoftResumeCheckpointValidation: Bool = false
 
@@ -88,6 +103,7 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
     func recordRelaySessionId(_ id: String?) {
         guard let id, !id.isEmpty else { return }
         trackedRelaySessionId = id
+        lastKnownValidRelaySessionId = id
     }
 
     private func clearSoftResumeInterruptionState() {
@@ -214,7 +230,7 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         if let recycleDisplayRelayDueToExpiredCodeObserver {
             NotificationCenter.default.removeObserver(recycleDisplayRelayDueToExpiredCodeObserver)
         }
-        midSessionDisconnectRecoveryTask?.cancel()
+        midSessionDisconnectDebounceWorkItem?.cancel()
         midSessionLinkCancellable?.cancel()
     }
 
@@ -237,6 +253,7 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         coachRelayDisplayPeerPresent = false
         clearRecordedCoachRelayJoinCode()
         trackedRelaySessionId = nil
+        lastKnownValidRelaySessionId = nil
         awaitingSoftResumeCheckpointValidation = false
         clearSoftResumeInterruptionState()
         relayLifecycleBanner = .hidden
@@ -263,24 +280,6 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         return false
     }
 
-    /// User tapped **Reconnect** after a mid-session drop — retry relay + Multipeer without ending the training run.
-    @MainActor
-    func attemptPartnerLinkReconnectFromUserChoice() async {
-        showPartnerMidSessionRecoveryChoices = false
-        midSessionDisconnectRecoveryTask?.cancel()
-        midSessionDisconnectRecoveryTask = nil
-        relayLifecycleBanner = .reconnecting
-        await relayDisplaySession.startDisplaySessionIfNeeded()
-        coachRelayRemoteService.connect()
-        prepareMultipeerDisplayPartner(connectionManager: ConnectionManager.shared)
-        prepareMultipeerCoachRemote(connectionManager: ConnectionManager.shared)
-        try? await Task.sleep(nanoseconds: 400_000_000)
-        refreshMidSessionPartnerDisconnectState()
-        if isMidSessionPartnerDisconnect {
-            scheduleMidSessionDisconnectRecoveryTimer()
-        }
-    }
-
     private func subscribeMidSessionPartnerLinkMonitoring() {
         let relaySock = relayDisplaySession.$socketConnectionState.map { _ in () }
         let relayPaired = relayDisplaySession.$isCoachPaired.map { _ in () }
@@ -305,53 +304,196 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
 
     private func refreshMidSessionPartnerDisconnectState() {
         guard isPartnerTrainingSessionActive else {
-            if isMidSessionPartnerDisconnect || showPartnerMidSessionRecoveryChoices {
+            cancelMidSessionDisconnectDebounce()
+            if isMidSessionPartnerDisconnect {
                 clearMidSessionPartnerDisconnectState()
             }
             return
         }
         let live = isPartnerTransportLinkLive
         if live {
-            hadPartnerTransportLinkLiveThisSession = true
+            if linkDownSinceDrillUnderway {
+                let foregroundReconnectCooldownActive = partnerRelayForegroundReconnectCooldownUntil.map { Date() < $0 } ?? false
+                if !partnerRelaySuspendedForBackground, !foregroundReconnectCooldownActive, shouldPartnerSoftReconnectPreserveRep() {
+                    if isHandlingSoftReconnect {
+                        linkDownSinceDrillUnderway = false
+                    } else {
+                        isHandlingSoftReconnect = true
+                        linkDownSinceDrillUnderway = false
+                        relayLifecycleBanner = .reconnectedRestartingRep
+                        scheduleAutoHideReconnectedRestartingRepBanner()
+                        NotificationCenter.default.post(name: .partnerSoftReconnectRepRestart, object: nil)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) { [weak self] in
+                            self?.isHandlingSoftReconnect = false
+                        }
+                    }
+                } else {
+                    linkDownSinceDrillUnderway = false
+                }
+            }
+            if hasStartedAtLeastOneRep {
+                hadPartnerTransportLinkLiveThisSession = true
+            }
+            cancelMidSessionDisconnectDebounce()
             if case .reconnecting = relayLifecycleBanner {
                 relayLifecycleBanner = .hidden
             }
             if isMidSessionPartnerDisconnect {
                 isMidSessionPartnerDisconnect = false
-                showPartnerMidSessionRecoveryChoices = false
-                midSessionDisconnectRecoveryTask?.cancel()
-                midSessionDisconnectRecoveryTask = nil
             }
             return
         }
-        if hadPartnerTransportLinkLiveThisSession {
-            if !isMidSessionPartnerDisconnect {
-                isMidSessionPartnerDisconnect = true
-                showPartnerMidSessionRecoveryChoices = false
-                scheduleMidSessionDisconnectRecoveryTimer()
-            }
+        if hadPartnerTransportLinkLiveThisSession, hasStartedAtLeastOneRep, !partnerRelaySuspendedForBackground {
+            linkDownSinceDrillUnderway = true
         }
+        guard hadPartnerTransportLinkLiveThisSession, hasStartedAtLeastOneRep else {
+            cancelMidSessionDisconnectDebounce()
+            return
+        }
+        guard !isMidSessionPartnerDisconnect else { return }
+        scheduleMidSessionDisconnectOverlayIfNeeded()
     }
 
-    private func scheduleMidSessionDisconnectRecoveryTimer() {
-        midSessionDisconnectRecoveryTask?.cancel()
-        midSessionDisconnectRecoveryTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 10_000_000_000)
-            guard !Task.isCancelled else { return }
-            guard isPartnerTrainingSessionActive else { return }
-            guard !isPartnerTransportLinkLive else { return }
-            guard hadPartnerTransportLinkLiveThisSession else { return }
-            guard isMidSessionPartnerDisconnect else { return }
-            showPartnerMidSessionRecoveryChoices = true
+    private func cancelMidSessionDisconnectDebounce() {
+        midSessionDisconnectDebounceWorkItem?.cancel()
+        midSessionDisconnectDebounceWorkItem = nil
+    }
+
+    private func scheduleMidSessionDisconnectOverlayIfNeeded() {
+        guard midSessionDisconnectDebounceWorkItem == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            Task { @MainActor [weak self] in
+                defer { self?.midSessionDisconnectDebounceWorkItem = nil }
+                guard let self else { return }
+                guard self.isPartnerTrainingSessionActive else { return }
+                guard !self.isPartnerTransportLinkLive else { return }
+                guard self.hadPartnerTransportLinkLiveThisSession else { return }
+                guard self.hasStartedAtLeastOneRep else { return }
+                guard !self.isMidSessionPartnerDisconnect else { return }
+                self.isMidSessionPartnerDisconnect = true
+                self.relayDisplaySession.cancelRelayDisconnectRecycleTask()
+            }
         }
+        midSessionDisconnectDebounceWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
     }
 
     private func clearMidSessionPartnerDisconnectState() {
+        cancelMidSessionDisconnectDebounce()
         hadPartnerTransportLinkLiveThisSession = false
+        hasStartedAtLeastOneRep = false
         isMidSessionPartnerDisconnect = false
-        showPartnerMidSessionRecoveryChoices = false
-        midSessionDisconnectRecoveryTask?.cancel()
-        midSessionDisconnectRecoveryTask = nil
+        linkDownSinceDrillUnderway = false
+        partnerRelaySuspendedForBackground = false
+        isHandlingSoftReconnect = false
+    }
+
+    /// Whether transport came back with the same relay drill context so the current rep can restart without `CurrentSessionStore` / relay reset.
+    @MainActor
+    private func shouldPartnerSoftReconnectPreserveRep() -> Bool {
+        guard isPartnerTrainingSessionActive else { return false }
+        guard hasStartedAtLeastOneRep else { return false }
+        guard isPartnerTransportLinkLive else { return false }
+        guard let tid = trackedRelaySessionId, !tid.isEmpty else { return false }
+        if CoachRemoteSessionStartGate.isPadPlayerRole() {
+            guard let rid = relayDisplaySession.relaySessionId, rid == tid else { return false }
+            guard relayDisplaySession.joinCode != nil else { return false }
+            guard CurrentSessionStore.shared.sessionId != nil,
+                  CurrentSessionStore.shared.currentSessionActivityId != nil else { return false }
+            guard let dss = displaySessionState, dss.currentRepIndex >= 0 else { return false }
+            guard dss.totalReps > 0 else { return false }
+            if dss.currentRepIndex >= dss.totalReps { return false }
+            return true
+        }
+        return true
+    }
+
+    /// Call when partner drill play has begun (display: countdown finished or rep index sync; coach: `nextRep` sent) so mid-session recovery does not appear before the block is actually running.
+    @MainActor
+    func markPartnerDrillUnderwayForMidSessionRecovery() {
+        guard isPartnerTrainingSessionActive else { return }
+        if hasStartedAtLeastOneRep { return }
+        hasStartedAtLeastOneRep = true
+        if isPartnerTransportLinkLive {
+            hadPartnerTransportLinkLiveThisSession = true
+        }
+        refreshMidSessionPartnerDisconnectState()
+    }
+
+    /// Player iPad: **only** path for “Start New Session” after a mid-session disconnect — full local reset, new relay session + join code, Multipeer host restart, pop to root (partner run stays active).
+    @MainActor
+    func startNewPartnerSessionFromDisconnect(router: AppRouter) async {
+        guard CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
+        guard isPartnerTrainingSessionActive else { return }
+        guard !isStartingNewSession else { return }
+        isStartingNewSession = true
+        defer { isStartingNewSession = false }
+
+        currentJoinCode = nil
+        lastKnownValidRelaySessionId = nil
+        CurrentSessionStore.shared.clear()
+        displaySessionState = nil
+        trackedRelaySessionId = nil
+        relaySessionMutationToken += 1
+        awaitingSoftResumeCheckpointValidation = false
+        clearSoftResumeInterruptionState()
+        clearRecordedCoachRelayJoinCode()
+        relayLifecycleBanner = .hidden
+        partnerDisplaySurfaceId = UUID()
+        coachRelayDisplayPeerPresent = false
+        clearMidSessionPartnerDisconnectState()
+
+        relayDisplaySession.stopHosting()
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        await relayDisplaySession.resetSession()
+
+        currentJoinCode = relayDisplaySession.joinCode
+
+        print("NEW SESSION CREATED:", relayDisplaySession.relaySessionId as Any)
+        print("NEW JOIN CODE:", relayDisplaySession.joinCode as Any)
+
+        if relayDisplaySession.joinCode == nil {
+            #if DEBUG
+            print("[Partner] startNewPartnerSessionFromDisconnect: joinCode missing after reset — join prompt may be empty until relay recovers")
+            #endif
+        }
+
+        NotificationCenter.default.post(name: .partnerDisplayWillStartNewSessionFromDisconnect, object: nil)
+
+        ConnectionManager.shared.stopHosting()
+        prepareMultipeerDisplayPartner(connectionManager: ConnectionManager.shared)
+        router.navigateToPlayerDisplayJoinPromptAfterPartnerSessionReset()
+    }
+
+    /// Player iPad: remote dropped mid-session — forwards to ``startNewPartnerSessionFromDisconnect(router:)``.
+    @MainActor
+    func handleDisplayStartNewSessionAfterRemoteDisconnect(router: AppRouter) async {
+        await startNewPartnerSessionFromDisconnect(router: router)
+    }
+
+    /// Coach device: display relay unavailable mid-session — leave drill UI, clear stale relay join state, return to hub join step (pairing run stays active). Does **not** notify the display.
+    @MainActor
+    func handleCoachEnterCodeAfterDisplayUnavailable(router: AppRouter) {
+        guard !CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
+        guard isPartnerTrainingSessionActive else { return }
+        relaySessionMutationToken += 1
+        CurrentSessionStore.shared.clear()
+        coachRelayRemoteService.disconnect()
+        coachRelayDisplayPeerPresent = false
+        clearRecordedCoachRelayJoinCode()
+        trackedRelaySessionId = nil
+        lastKnownValidRelaySessionId = nil
+        awaitingSoftResumeCheckpointValidation = false
+        clearSoftResumeInterruptionState()
+        relayLifecycleBanner = .hidden
+        displaySessionState = nil
+        partnerDisplaySurfaceId = UUID()
+        clearMidSessionPartnerDisconnectState()
+        ConnectionManager.shared.stopBrowsing()
+        prepareMultipeerCoachRemote(connectionManager: ConnectionManager.shared)
+        print("[Partner] Coach ready for new code — relay disconnected, cached join code cleared, Multipeer browsing restarted")
+        router.popToRoot(endingPartnerSession: false)
     }
 
     /// Player iPad: replace the display relay with a fresh `/v1/sessions` + join code while keeping the partner training run active.
@@ -362,9 +504,85 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         RelaySoftResumeDebug.logFallbackToRejoin(reason: "\(reason)_ipad_auto_recycle")
         relayDisplaySession.cancelRelayDisconnectRecycleTask()
         trackedRelaySessionId = nil
+        lastKnownValidRelaySessionId = nil
         clearSoftResumeInterruptionState()
         relayLifecycleBanner = .hidden
-        await relayDisplaySession.recycleRelaySessionForExpiredJoinCode()
+        await forceRegenerateIPadDisplayRelaySessionAfterForeground(reason: "\(reason)_ipad_auto_recycle")
+    }
+
+    /// Player iPad: tear down relay and `POST /v1/sessions` so join code + `relaySessionId` stay aligned with the server.
+    @MainActor
+    private func forceRegenerateIPadDisplayRelaySessionAfterForeground(reason: String) async {
+        relayDisplaySession.stopHosting()
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        trackedRelaySessionId = nil
+        lastKnownValidRelaySessionId = nil
+        await relayDisplaySession.resetSession()
+        await MainActor.run {
+            self.currentJoinCode = self.relayDisplaySession.joinCode
+        }
+        if let rid = relayDisplaySession.relaySessionId?.trimmingCharacters(in: .whitespacesAndNewlines), !rid.isEmpty {
+            lastKnownValidRelaySessionId = rid
+        }
+        #if DEBUG
+        print("[RelayWS-DEBUG] iPad relay regen (\(reason)) joinCode=\(relayDisplaySession.joinCode ?? "nil") sessionId=\(relayDisplaySession.relaySessionId ?? "nil")")
+        #endif
+    }
+
+    /// Player iPad: after foreground reconnect, validate socket + session id vs last known good state; mint a new relay if join code may not match the server session.
+    @MainActor
+    private func mintFreshIPadDisplayRelaySessionWhenForegroundReconnectStillOffline() async {
+        guard CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
+        guard isPartnerTrainingSessionActive else { return }
+        let joinTrimmed = relayDisplaySession.joinCode?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if joinTrimmed.isEmpty {
+            await forceRegenerateIPadDisplayRelaySessionAfterForeground(reason: "foreground_missing_join_code")
+            return
+        }
+        if relayDisplaySession.socketConnectionState == .connecting || relayDisplaySession.socketConnectionState == .searching {
+            try? await Task.sleep(nanoseconds: 600_000_000)
+        }
+
+        let curId = relayDisplaySession.relaySessionId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let connected = relayDisplaySession.isRelaySocketConnected
+        let idMissing = curId.isEmpty
+
+        let idDriftFromLastKnown: Bool = {
+            guard let last = lastKnownValidRelaySessionId?.trimmingCharacters(in: .whitespacesAndNewlines), !last.isEmpty else { return false }
+            return last != curId
+        }()
+
+        let idDriftFromTracked: Bool = {
+            guard let t = trackedRelaySessionId?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty,
+                  !curId.isEmpty else { return false }
+            return t != curId
+        }()
+
+        let needsRegen = !connected || idMissing || idDriftFromLastKnown || idDriftFromTracked
+
+        if needsRegen {
+            await forceRegenerateIPadDisplayRelaySessionAfterForeground(
+                reason: "foreground_relay_validation connected=\(connected) idMissing=\(idMissing) driftLast=\(idDriftFromLastKnown) driftTracked=\(idDriftFromTracked)"
+            )
+            return
+        }
+
+        await MainActor.run {
+            self.currentJoinCode = self.relayDisplaySession.joinCode
+        }
+        lastKnownValidRelaySessionId = curId
+    }
+
+    private func postRelayForegroundReconnectCompleted() async {
+        await mintFreshIPadDisplayRelaySessionWhenForegroundReconnectStillOffline()
+        await finalizeRelayForegroundReconnectNotifications()
+    }
+
+    /// Posts `relayForegroundReconnectCompleted` and clears background-suspend bookkeeping (without mint/validation).
+    private func finalizeRelayForegroundReconnectNotifications() async {
+        NotificationCenter.default.post(name: .relayForegroundReconnectCompleted, object: nil)
+        partnerRelayForegroundReconnectCooldownUntil = Date().addingTimeInterval(0.75)
+        partnerRelaySuspendedForBackground = false
     }
 
     private func scheduleBannerHiddenIfReconnecting() {
@@ -398,10 +616,42 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         }
     }
 
+    private func scheduleAutoHideReconnectedRestartingRepBanner() {
+        bannerAutoHideTask?.cancel()
+        bannerAutoHideTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            guard !Task.isCancelled else { return }
+            if case .reconnectedRestartingRep = self.relayLifecycleBanner {
+                self.relayLifecycleBanner = .hidden
+            }
+        }
+    }
+
     /// After `suspendPartnerSessionForBackground()`, relay sockets are disconnected; reconnect when the app is active again.
     private func reconnectPartnerRelayAfterForegroundIfNeeded() async {
-        guard isPartnerTrainingSessionActive else { return }
+        guard isPartnerTrainingSessionActive else {
+            partnerRelaySuspendedForBackground = false
+            return
+        }
         awaitingSoftResumeCheckpointValidation = false
+
+        if partnerRelaySuspendedForBackground, CoachRemoteSessionStartGate.isPadPlayerRole() {
+            print("Background resume — forcing new relay session")
+            relayDisplaySession.cancelRelayDisconnectRecycleTask()
+            trackedRelaySessionId = nil
+            lastKnownValidRelaySessionId = nil
+            clearSoftResumeInterruptionState()
+            relayLifecycleBanner = .hidden
+            relayDisplaySession.stopHosting()
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            await relayDisplaySession.resetSession()
+            currentJoinCode = relayDisplaySession.joinCode
+            if let rid = relayDisplaySession.relaySessionId?.trimmingCharacters(in: .whitespacesAndNewlines), !rid.isEmpty {
+                lastKnownValidRelaySessionId = rid
+            }
+            await finalizeRelayForegroundReconnectNotifications()
+            return
+        }
 
         LifecycleReconnectDebug.logForegroundEntered(source: "UIApplication.didBecomeActiveNotification")
         let beforeCoach = coachRelayRemoteService.connectionState
@@ -461,7 +711,7 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
                 relayLifecycleBanner = .sessionRequiresRejoin
                 clearSoftResumeInterruptionState()
             }
-            NotificationCenter.default.post(name: .relayForegroundReconnectCompleted, object: nil)
+            await postRelayForegroundReconnectCompleted()
             return
         }
 
@@ -483,7 +733,7 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
                 scheduleAutoHideSessionRestoredSoftBanner()
                 clearSoftResumeInterruptionState()
                 RelaySoftResumeDebug.logSoftResumeOutcome(success: true, reason: "display_session_id_preserved")
-                NotificationCenter.default.post(name: .relayForegroundReconnectCompleted, object: nil)
+                await postRelayForegroundReconnectCompleted()
                 return
             }
             if CoachRemoteSessionStartGate.isPadPlayerRole() {
@@ -493,7 +743,7 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
                 relayLifecycleBanner = .sessionRequiresRejoin
                 clearSoftResumeInterruptionState()
             }
-            NotificationCenter.default.post(name: .relayForegroundReconnectCompleted, object: nil)
+            await postRelayForegroundReconnectCompleted()
             return
         }
 
@@ -501,7 +751,7 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         if !displayHasRelaySession, softEligible, recovered, hadDisconnect {
             awaitingSoftResumeCheckpointValidation = true
             RelaySoftResumeDebug.logSoftResumeOutcome(success: false, reason: "coach_awaiting_checkpoint_validation")
-            NotificationCenter.default.post(name: .relayForegroundReconnectCompleted, object: nil)
+            await postRelayForegroundReconnectCompleted()
             #if DEBUG
             PartnerPersistDebug.log("UIApplication.didBecomeActive — coach soft-resume awaiting checkpoint")
             #endif
@@ -539,7 +789,7 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
             }
         }
 
-        NotificationCenter.default.post(name: .relayForegroundReconnectCompleted, object: nil)
+        await postRelayForegroundReconnectCompleted()
         #if DEBUG
         PartnerPersistDebug.log("UIApplication.didBecomeActive — reconnectPartnerRelayAfterForegroundIfNeeded complete")
         #endif
@@ -589,6 +839,7 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         sessionCalibrationAverageTravelTime = PartnerPassTempoCalibrationStore.seededAverageTravelTimeSeconds()
         sessionCalibrationMode = .partner
         trackedRelaySessionId = nil
+        lastKnownValidRelaySessionId = nil
         clearSoftResumeInterruptionState()
         relayLifecycleBanner = .hidden
         #if DEBUG
@@ -601,7 +852,11 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
     /// Called from ``SessionCountdownModifier`` when the display shows or hides 3–2–1–Go (partner drills with coach suppression).
     func setPartnerDisplayCountdownActive(_ active: Bool) {
         guard isPartnerDisplayCountdownActive != active else { return }
+        let wasShowingCountdown = isPartnerDisplayCountdownActive
         isPartnerDisplayCountdownActive = active
+        if wasShowingCountdown, !active {
+            markPartnerDrillUnderwayForMidSessionRecovery()
+        }
     }
 
     /// Ends pairing for this training run: optionally notify the peer so **both** devices invalidate relay state, then tear down locally.
@@ -624,6 +879,7 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         let endToken = relaySessionMutationToken
         isPartnerTrainingSessionActive = false
         isPartnerDisplayCountdownActive = false
+        currentJoinCode = nil
         displaySessionState = nil
         partnerDisplaySurfaceId = UUID()
         clearRecordedCoachRelayJoinCode()
@@ -631,6 +887,7 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         sessionCalibrationAverageTravelTime = nil
         sessionCalibrationMode = nil
         trackedRelaySessionId = nil
+        lastKnownValidRelaySessionId = nil
         clearSoftResumeInterruptionState()
         relayLifecycleBanner = .hidden
 
@@ -715,6 +972,11 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         isPartnerTrainingSessionActive && ConnectionManager.shared.connectedPeerName != nil
     }
 
+    /// True while background suspend is active or briefly after foreground relay reconnect — skip ``partnerSoftReconnectRepRestart`` so rep index is not reset.
+    var isPartnerSoftReconnectRepRestartSuppressed: Bool {
+        partnerRelaySuspendedForBackground || (partnerRelayForegroundReconnectCooldownUntil.map { Date() < $0 } ?? false)
+    }
+
     /// Global partner connection state for activity entry gates. True means the existing partner pairing
     /// should be reused and activities should skip fresh role/join flows.
     var isConnected: Bool {
@@ -751,6 +1013,13 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         guard var state = displaySessionState, state.activityId == activityId else { return }
         state.currentRepIndex = index
         displaySessionState = state
+        markPartnerDrillUnderwayForMidSessionRecovery()
+    }
+
+    /// Authoritative rep index (0-based) from the last coach `sessionStarted` + display sync — use after background to realign a recreated engine.
+    func authoritativePartnerDisplayRepIndex(for activityId: String) -> Int? {
+        guard let s = displaySessionState, s.activityId == activityId else { return nil }
+        return s.currentRepIndex
     }
 
     /// Partner display block size: uses ``displaySessionState`` when it matches this activity; otherwise `soloFallback` (manual / solo entry).
@@ -828,12 +1097,18 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
     /// so the next drill can reconnect without a new join code. Does **not** send `sessionEnded` to coach.
     func suspendPartnerSessionForBackground() {
         guard isPartnerTrainingSessionActive else { return }
+        partnerRelaySuspendedForBackground = true
         if interruptionBeganAt == nil {
             let start = Date()
             interruptionBeganAt = start
             RelaySoftResumeDebug.logInterruptionStart(at: start)
         }
         relaySessionIdSnapshotAtSuspend = relayDisplaySession.relaySessionId ?? relaySessionIdSnapshotAtSuspend
+        let jc = relayDisplaySession.joinCode?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let sid = relayDisplaySession.relaySessionId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !jc.isEmpty, !sid.isEmpty {
+            lastKnownValidRelaySessionId = sid
+        }
         #if DEBUG
         print("[Multipeer] TrainingPartnerSession: suspend for iOS background — keep pairing; relay soft disconnect (display + coach)")
         #endif

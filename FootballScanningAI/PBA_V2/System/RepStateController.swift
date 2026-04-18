@@ -38,6 +38,11 @@ final class RepStateController: ObservableObject {
         resetInputs()
     }
 
+    /// Clears rep UI state when the player starts a **new** relay session from mid-session disconnect recovery.
+    func resetForNewSession() {
+        reset()
+    }
+
     /// HARD gate for incoming `nextRep` transport messages (must align with engine `.waitingForNextRep`).
     func acceptIncomingNextRep() -> Bool {
         guard state == .idle else { return false }

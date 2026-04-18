@@ -50,7 +50,7 @@ enum PlayerFirstRunGuidanceToastAnimator {
         message.wrappedValue = nil
     }
 
-    /// ~0.2s fade in, ~1.6s readable, ~0.2s fade out (non-blocking).
+    /// Quick fade in, ~1.4s read, fade out (~1.8s total) — centered player guidance only.
     @MainActor
     static func schedule(
         text: String,
@@ -62,16 +62,16 @@ enum PlayerFirstRunGuidanceToastAnimator {
         message.wrappedValue = text
         opacity.wrappedValue = 0
         task = Task { @MainActor in
-            withAnimation(.easeIn(duration: 0.2)) {
+            withAnimation(.easeIn(duration: 0.15)) {
                 opacity.wrappedValue = 1
             }
-            try? await Task.sleep(nanoseconds: 200_000_000)
-            try? await Task.sleep(nanoseconds: 1_600_000_000)
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            try? await Task.sleep(nanoseconds: 1_400_000_000)
             guard !Task.isCancelled else { return }
-            withAnimation(.easeOut(duration: 0.2)) {
+            withAnimation(.easeOut(duration: 0.35)) {
                 opacity.wrappedValue = 0
             }
-            try? await Task.sleep(nanoseconds: 220_000_000)
+            try? await Task.sleep(nanoseconds: 360_000_000)
             guard !Task.isCancelled else { return }
             message.wrappedValue = nil
         }
@@ -85,25 +85,15 @@ struct PlayerFirstRunGuidanceToastOverlay: View {
     var body: some View {
         Group {
             if let message {
-                VStack {
-                    Spacer()
-                    Text(message)
-                        .font(.title3.weight(.semibold))
-                        .foregroundColor(.white)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 14)
-                        .background(Color.white.opacity(0.16))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14)
-                                .stroke(Color.white.opacity(0.28), lineWidth: 1)
-                        )
-                        .cornerRadius(14)
-                        .padding(.horizontal, 20)
-                        .padding(.bottom, 40)
-                }
-                .allowsHitTesting(false)
-                .opacity(opacity)
+                Text(message)
+                    .font(.system(size: 30, weight: .semibold))
+                    .foregroundColor(.white)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 36)
+                    .shadow(color: .black.opacity(0.55), radius: 10, y: 3)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                    .allowsHitTesting(false)
+                    .opacity(opacity)
             }
         }
     }

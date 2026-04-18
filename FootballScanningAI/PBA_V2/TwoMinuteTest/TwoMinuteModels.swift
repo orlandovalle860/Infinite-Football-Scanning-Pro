@@ -79,6 +79,8 @@ enum TwoMinuteMessage: Codable {
     case calibrationFinished(averageTravelTimeSeconds: Double?)
     /// Coach → display: open the partner display flow for this activity (relay / Multipeer). Wire kind: `sessionStarted`.
     case sessionStarted(activityId: String, totalReps: Int, timestamp: Date)
+    /// Coach → display: discard finished block, reset rep 0, dismiss results; same session / connection. Wire kind: `startNextBlock`.
+    case startNextBlock(timestamp: Date)
 
     enum CodingKeys: String, CodingKey {
         case kind
@@ -139,6 +141,8 @@ enum TwoMinuteMessage: Codable {
                 totalReps: try c.decode(Int.self, forKey: .totalReps),
                 timestamp: try c.decode(Date.self, forKey: .timestamp)
             )
+        case "startNextBlock":
+            self = .startNextBlock(timestamp: try c.decode(Date.self, forKey: .timestamp))
         default:
             throw DecodingError.dataCorruptedError(forKey: .kind, in: c, debugDescription: "Unknown kind: \(kind)")
         }
@@ -207,6 +211,9 @@ enum TwoMinuteMessage: Codable {
             try c.encode(activityId, forKey: .activityId)
             try c.encode(totalReps, forKey: .totalReps)
             try c.encode(timestamp, forKey: .timestamp)
+        case .startNextBlock(let timestamp):
+            try c.encode("startNextBlock", forKey: .kind)
+            try c.encode(timestamp, forKey: .timestamp)
         }
     }
 }
@@ -217,7 +224,7 @@ extension TwoMinuteMessage {
         switch self {
         case .nextRep, .passTriggered, .exitLogged, .firstTouchLogged, .incorrectDecision:
             return true
-        case .repStarted, .beepArmed, .coachPaired, .sessionEnded, .partnerTrainingEnded, .partnerSessionCheckpoint, .calibrationPassTapped, .calibrationArrivalTapped, .calibrationFinished, .sessionStarted:
+        case .repStarted, .beepArmed, .coachPaired, .sessionEnded, .partnerTrainingEnded, .partnerSessionCheckpoint, .calibrationPassTapped, .calibrationArrivalTapped, .calibrationFinished, .sessionStarted, .startNextBlock:
             return false
         }
     }

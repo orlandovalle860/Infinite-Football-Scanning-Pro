@@ -6,6 +6,7 @@
 //
 
 import Combine
+import Foundation
 import SwiftUI
 
 /// Route enum for path-based navigation. Clearing path returns to root.
@@ -112,6 +113,14 @@ final class AppRouter: ObservableObject {
                     self.path.removeAll(keepingCapacity: false)
                 }
             }
+        }
+    }
+
+    /// Player iPad: exit deep partner drill navigation (stack → Home) then broadcast to present ``CoachRemoteRequiredPromptView`` with the active relay join code. Does **not** end the partner training run.
+    func navigateToPlayerDisplayJoinPromptAfterPartnerSessionReset() {
+        popToRoot(endingPartnerSession: false)
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .presentPlayerDisplayJoinPromptAfterStartNewSession, object: nil)
         }
     }
 

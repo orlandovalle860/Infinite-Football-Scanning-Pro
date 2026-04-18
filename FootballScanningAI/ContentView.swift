@@ -804,16 +804,20 @@ struct MainAppView: View {
 
     @ViewBuilder
     private var playerHomeRoot: some View {
-        if iPadPlayerDisplayConnectedStandby {
-            IPadPlayerDisplayConnectedStandbyView(coachLinkActive: CoachRemoteSessionStartGate.iPadDisplayCoachRelayLinkIsLive())
-        } else {
-            HomeDashboardView(
-                profileManager: profileManager,
-                settingsViewModel: settingsViewModel,
-                showsTopToggle: $showsTopToggle,
-                showLoginSheet: $showLoginSheet,
-                signOutUXPhase: $signOutUXPhase
-            )
+        ZStack {
+            if iPadPlayerDisplayConnectedStandby {
+                IPadPlayerDisplayConnectedStandbyView(coachLinkActive: CoachRemoteSessionStartGate.iPadDisplayCoachRelayLinkIsLive())
+            } else {
+                HomeDashboardView(
+                    profileManager: profileManager,
+                    settingsViewModel: settingsViewModel,
+                    showsTopToggle: $showsTopToggle,
+                    showLoginSheet: $showLoginSheet,
+                    signOutUXPhase: $signOutUXPhase
+                )
+            }
+            PartnerMidSessionDisconnectRecoveryOverlay()
+                .zIndex(200)
         }
     }
 
@@ -930,6 +934,10 @@ struct MainAppView: View {
             NavigationStack(path: router.pathBinding) {
                 rootView
                     .onReceive(NotificationCenter.default.publisher(for: .twoMinuteMessageReceived)) { self.handleCoachSessionStartedNotification($0) }
+                    .onReceive(NotificationCenter.default.publisher(for: .presentPlayerDisplayJoinPromptAfterStartNewSession).receive(on: RunLoop.main)) { _ in
+                        guard CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
+                        coachRemoteRequiredPrompt.present(pendingRoute: nil)
+                    }
                     .navigationDestination(for: AppRoute.self) { route in
                         routeView(for: route)
                     }

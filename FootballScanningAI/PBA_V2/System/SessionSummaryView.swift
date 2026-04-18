@@ -52,7 +52,7 @@ struct SessionSummaryScreenView: View {
     @EnvironmentObject private var router: AppRouter
     @Environment(\.dismiss) private var dismiss
 
-    @State private var shareSheetPayload: ShareSheetPayload?
+    @State private var shareSheetPayload: BlockShareSheetPayload?
     @State private var showPlayerReport = false
     @State private var navigateToRoleSelection = false
     @State private var roleSelectionTarget: ActivityKind = .awayFromPressure
@@ -90,7 +90,8 @@ struct SessionSummaryScreenView: View {
             score: decisionScoreValue,
             accuracy: accuracy,
             decisionWindow: decisionWindow,
-            recentScores: recentRecommendationScores
+            recentScores: recentRecommendationScores,
+            totalReps: session.totalReps
         )
     }
 
@@ -412,12 +413,17 @@ struct SessionSummaryScreenView: View {
     }
 
     var body: some View {
-        if !profiles.contains(where: { $0.id == session.playerID }) {
-            deletedPlayerPlaceholder
-        } else if isPlayerIPadDisplayOnly {
-            playerIPadDisplayOnlyContent
-        } else {
-            sessionSummaryContent
+        Group {
+            if !profiles.contains(where: { $0.id == session.playerID }) {
+                deletedPlayerPlaceholder
+            } else if isPlayerIPadDisplayOnly {
+                playerIPadDisplayOnlyContent
+            } else {
+                sessionSummaryContent
+            }
+        }
+        .sheet(item: $shareSheetPayload) { payload in
+            ShareSheet(items: payload.items)
         }
     }
 
@@ -482,6 +488,21 @@ struct SessionSummaryScreenView: View {
                     .foregroundColor(.white.opacity(0.92))
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 8)
+
+                HStack {
+                    Spacer()
+                    Button {
+                        presentBlockShareSheet()
+                    } label: {
+                        Text("Share Result")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundColor(.white.opacity(0.88))
+                    }
+                    .buttonStyle(.plain)
+                    Spacer()
+                }
+                .padding(.top, 20)
+                .padding(.bottom, 8)
             }
             .padding(24)
         }
@@ -518,9 +539,6 @@ struct SessionSummaryScreenView: View {
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
             runFeedbackAnimations()
             evaluateAlmostTherePrompt()
-        }
-        .sheet(item: $shareSheetPayload) { payload in
-            ShareSheet(items: [payload.image])
         }
         .sheet(isPresented: $showPlayerReport) {
             SessionPlayerReportView(report: sessionPlayerReport)
@@ -805,19 +823,7 @@ struct SessionSummaryScreenView: View {
             .buttonStyle(PlainButtonStyle())
 
             Button {
-                let cardView = ShareCardView(
-                    activity: activityName,
-                    score: decisionScoreValue,
-                    level: playerRecommendation.level.rawValue,
-                    accuracy: accuracyPercentValue,
-                    avgTime: max(0, session.avgDecisionTime ?? 0),
-                    fast: session.speedCounts.fast,
-                    onTime: session.speedCounts.medium,
-                    late: session.speedCounts.slow
-                )
-
-                let image = cardView.asImage()
-                shareSheetPayload = ShareSheetPayload(image: image)
+                presentBlockShareSheet()
             } label: {
                 Text("Share Result")
                     .font(.subheadline.weight(.semibold))
@@ -928,31 +934,14 @@ struct SessionSummaryScreenView: View {
         navigateToRoleSelection = true
     }
 
-    private var shareText: String {
-        let avgTime = max(0, session.avgDecisionTime ?? 0)
-        let avgTimeText = String(format: "%.1f", avgTime)
-        let up = session.directionCounts[.up, default: 0]
-        let down = session.directionCounts[.down, default: 0]
-        let left = session.directionCounts[.left, default: 0]
-        let right = session.directionCounts[.right, default: 0]
-        let lines: [String] = [
-            "[\(activityName)]",
-            "",
-            "Score: \(decisionScoreValue)",
-            "Level: \(playerRecommendation.level.rawValue)",
-            "",
-            "🎯 Accuracy: \(accuracyPercentValue)%",
-            "Avg Decision Time: \(avgTimeText)s",
-            "",
-            "⚡ Fast: \(session.speedCounts.fast) | On-Time: \(session.speedCounts.medium) | Late: \(session.speedCounts.slow)",
-            "",
-            "Directions:",
-            "↑ \(up)   ↓ \(down)",
-            "← \(left)   → \(right)",
-            "",
-            "Can you beat this?"
-        ]
-        return lines.joined(separator: "\n")
+    private func presentBlockShareSheet() {
+        shareSheetPayload = BlockShareSheetPayload(
+            items: SessionBlockShare.activityItems(
+                session: session,
+                playerName: playerName,
+                playerRecommendation: playerRecommendation
+            )
+        )
     }
 
     @ViewBuilder
@@ -1022,84 +1011,6 @@ struct SessionSummaryScreenView: View {
         generator.prepare()
         generator.impactOccurred()
 #endif
-    }
-}
-
-private struct ShareSheetPayload: Identifiable {
-    let id = UUID()
-    let image: UIImage
-}
-
-struct ShareCardView: View {
-    let activity: String
-    let score: Int
-    let level: String
-    let accuracy: Int
-    let avgTime: Double
-    let fast: Int
-    let onTime: Int
-    let late: Int
-
-    var body: some View {
-        VStack(spacing: 20) {
-            Text(activity)
-                .font(.subheadline)
-                .foregroundColor(.gray)
-
-            Text("\(score)")
-                .font(.system(size: 72, weight: .bold))
-                .foregroundColor(.white)
-                .shadow(color: Color.white.opacity(0.2), radius: 10)
-
-            Text(level)
-                .font(.caption)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(Color.white.opacity(0.1))
-                .cornerRadius(10)
-                .foregroundColor(.white)
-
-            VStack(spacing: 12) {
-                HStack(spacing: 16) {
-                    Text("🎯 \(accuracy)%")
-                    Text(String(format: "⏱ %.1fs", avgTime))
-                }
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.95))
-
-                HStack(spacing: 16) {
-                    Text("⚡ \(fast)")
-                    Text("✓ \(onTime)")
-                    Text("• \(late)")
-                }
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.95))
-            }
-            .padding()
-            .background(Color.white.opacity(0.05))
-            .cornerRadius(16)
-
-            Text("Can you beat this?")
-                .font(.headline)
-                .foregroundColor(.yellow)
-
-            Text("PBA Training")
-                .font(.caption2)
-                .foregroundColor(.gray)
-        }
-        .frame(maxWidth: .infinity, alignment: .center)
-        .padding(28)
-        .frame(width: 320)
-        .background(
-            LinearGradient(
-                colors: [
-                    Color.black.opacity(0.9),
-                    Color.black.opacity(0.7)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
     }
 }
 

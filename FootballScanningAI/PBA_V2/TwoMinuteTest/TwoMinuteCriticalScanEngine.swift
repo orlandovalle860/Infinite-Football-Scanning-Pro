@@ -218,6 +218,10 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
                 bucket: DecisionTimingModel.speedBucket(forDecisionWindow: decisionWindowSeconds, activity: .twoMinuteTest, score: score)
             )
         )
+        CurrentSessionStore.shared.recordDecisionTimingCalibrationSample(
+            decisionWindowSeconds: decisionWindowSeconds,
+            activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId
+        )
         print("[DecisionWindowDebug] repIndex=\(repIndex) passTS=\(triggerTime.timeIntervalSince1970) expectedArrivalTS=\(expectedArrivalTime.timeIntervalSince1970) decisionTS=\(timestamp.timeIntervalSince1970) decisionWindowSeconds=\(decisionWindowSeconds)")
         let startedAt = startedAtForCurrentRep ?? Date()
         let infoShownAt = infoShownAtForCurrentRep ?? startedAt
@@ -308,6 +312,10 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
         let p = plan[repIndex]
         let expectedArrivalTime = triggerTime.addingTimeInterval(travelTimeSeconds)
         let decisionWindowSeconds = expectedArrivalTime.timeIntervalSince(timestamp)
+        CurrentSessionStore.shared.recordDecisionTimingCalibrationSample(
+            decisionWindowSeconds: decisionWindowSeconds,
+            activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId
+        )
         print("[DecisionWindowDebug] repIndex=\(repIndex) passTS=\(triggerTime.timeIntervalSince1970) expectedArrivalTS=\(expectedArrivalTime.timeIntervalSince1970) decisionTS=\(timestamp.timeIntervalSince1970) decisionWindowSeconds=\(decisionWindowSeconds)")
         let startedAt = startedAtForCurrentRep ?? Date()
         let infoShownAt = infoShownAtForCurrentRep ?? startedAt
@@ -374,7 +382,49 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
         directionLoggedByRep.removeAll()
         repLogs.removeAll()
         repDecisions.removeAll()
+        CurrentSessionStore.shared.resetDecisionTimingCalibrationForNewDrillBlock(
+            activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId
+        )
         commitPhase(.waitingForNextRep)
+    }
+
+    /// Partner transport restored without block reset: drop mid-rep timers/state; same `currentRepIndex`; coach sends `nextRep` again.
+    func partnerSoftAbandonCurrentRepAwaitCoachRedo(blockRepCount: Int) {
+        cancelTimers()
+        cueTimingDebugVisibleAt = nil
+        let safeRepIndex = max(0, min(currentRepIndex, blockRepCount - 1))
+        currentRepIndex = safeRepIndex
+        let k = safeRepIndex
+        passTriggeredAt = nil
+        passTriggeredByRep[k] = nil
+        directionLoggedByRep[k] = nil
+        startedAtForCurrentRep = nil
+        infoShownAtForCurrentRep = nil
+        infoHiddenAtForCurrentRep = nil
+        commitPhase(.waitingForNextRep)
+    }
+
+    /// After iOS background: align with coordinator snapshot so a fresh `StateObject` engine does not fall back to rep 0.
+    func partnerForegroundResumeAlignRepIndex(blockRepCount: Int, authoritativeRepIndex: Int) {
+        if case .complete = phase { return }
+        let safe = max(0, min(authoritativeRepIndex, blockRepCount - 1))
+        if currentRepIndex == safe, case .waitingForNextRep = phase { return }
+        cancelTimers()
+        cueTimingDebugVisibleAt = nil
+        currentRepIndex = safe
+        let k = safe
+        passTriggeredAt = nil
+        passTriggeredByRep[k] = nil
+        directionLoggedByRep[k] = nil
+        startedAtForCurrentRep = nil
+        infoShownAtForCurrentRep = nil
+        infoHiddenAtForCurrentRep = nil
+        commitPhase(.waitingForNextRep)
+    }
+
+    /// Cancels all scheduled timers (e.g. partner “Start New Session” / navigation away).
+    func invalidateAllTimers() {
+        cancelTimers()
     }
 
     /// Call when app enters background so timers don't fire late when returning.
@@ -421,8 +471,12 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
     }
 
     private var travelTimeSeconds: Double {
-        CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds
+        let base = CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds
             ?? config.difficulty.passTempo.expectedBallTravelTime(distanceMeters: 11.0)
+        return CurrentSessionStore.shared.calibratedBallTravelSeconds(
+            baseNominal: base,
+            activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId
+        )
     }
 
     private func adaptiveSessionScore(including newWindow: Double, isCorrect: Bool) -> Int {

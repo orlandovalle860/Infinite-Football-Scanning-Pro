@@ -11,7 +11,11 @@ import Combine
 struct OneTouchPassingBlockSummaryView: View {
     let results: [OneTouchRepResult]
     let config: OneTouchPassingConfig
+    var summaryCalibratedTravelSeconds: Double? = nil
+    var showTimingAdaptationFeedback: Bool = false
     let onRunItBack: () -> Void
+
+    private let timingCalibrationActivityId = ActivityKind.oneTouchPassing.sessionActivityActivityId
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
     @EnvironmentObject private var progressStore: ProgressStore
@@ -57,8 +61,13 @@ struct OneTouchPassingBlockSummaryView: View {
     }
 
     private var travelTimeSeconds: Double {
-        CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds
+        if let snap = summaryCalibratedTravelSeconds { return snap }
+        let base = CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds
             ?? config.difficulty.passTempo.expectedBallTravelTime(distanceMeters: 11.0)
+        return CurrentSessionStore.shared.calibratedBallTravelSeconds(
+            baseNominal: base,
+            activityId: timingCalibrationActivityId
+        )
     }
 
     private var decisionWindowSeconds: [Double] {
@@ -306,8 +315,6 @@ struct OneTouchPassingBlockSummaryView: View {
             }
             let playerId = record.playerId ?? playerStore.selectedPlayerId
             let activityName = record.activity.rawValue
-            let travelTimeSeconds = CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds
-                ?? config.difficulty.passTempo.expectedBallTravelTime(distanceMeters: 11.0)
             for r in results {
                 let reactionTimeMs = Int((travelTimeSeconds - r.decisionTime) * 1000)
                 if reactionTimeMs > SupabaseDecisionService.maxReactionTimeMs { continue }
@@ -389,6 +396,13 @@ struct OneTouchPassingBlockSummaryView: View {
                     Text("Bias: \(biasString)")
                         .font(.subheadline)
                         .foregroundColor(.white.opacity(0.7))
+                    if showTimingAdaptationFeedback {
+                        Text("Adapted to your pace")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.7))
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 4)
+                    }
                 }
                 .frame(maxWidth: .infinity)
 

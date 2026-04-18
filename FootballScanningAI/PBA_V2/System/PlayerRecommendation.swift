@@ -78,52 +78,86 @@ func generateRecommendation(
     score: Int,
     accuracy: Double,
     decisionWindow: Double,
-    recentScores: [Int] = []
+    recentScores: [Int] = [],
+    totalReps: Int
 ) -> PlayerRecommendation {
     let level = classifyPerformanceLevel(score: score)
-    let progressionSuggestion = progressionSuggestionText(level: level, recentScores: recentScores)
+    let baseProgression = progressionSuggestionText(level: level, recentScores: recentScores)
 
+    let baseRecommendation: PlayerRecommendation
     if decisionWindow <= 0 && accuracy >= 0.75 {
-        return PlayerRecommendation(
+        baseRecommendation = PlayerRecommendation(
             level: level,
             shortFeedback: level.shortFeedback,
             nextActivity: .awayFromPressure,
             nextFocusText: level.nextFocus,
             tempoGuidance: level.tempoGuidance,
-            progressionSuggestion: progressionSuggestion
+            progressionSuggestion: baseProgression
         )
-    }
-
-    if decisionWindow > 0 && accuracy < 0.75 {
-        return PlayerRecommendation(
+    } else if decisionWindow > 0 && accuracy < 0.75 {
+        baseRecommendation = PlayerRecommendation(
             level: level,
             shortFeedback: level.shortFeedback,
             nextActivity: .dribbleOrPass,
             nextFocusText: level.nextFocus,
             tempoGuidance: level.tempoGuidance,
-            progressionSuggestion: progressionSuggestion
+            progressionSuggestion: baseProgression
         )
-    }
-
-    if decisionWindow > 0 && accuracy >= 0.75 {
-        return PlayerRecommendation(
+    } else if decisionWindow > 0 && accuracy >= 0.75 {
+        baseRecommendation = PlayerRecommendation(
             level: level,
             shortFeedback: level.shortFeedback,
             nextActivity: .oneTouchPassing,
             nextFocusText: level.nextFocus,
             tempoGuidance: level.tempoGuidance,
-            progressionSuggestion: progressionSuggestion
+            progressionSuggestion: baseProgression
+        )
+    } else {
+        baseRecommendation = PlayerRecommendation(
+            level: level,
+            shortFeedback: level.shortFeedback,
+            nextActivity: .awayFromPressure,
+            nextFocusText: level.nextFocus,
+            tempoGuidance: level.tempoGuidance,
+            progressionSuggestion: baseProgression
         )
     }
 
+    guard totalReps >= 10 else { return baseRecommendation }
+
     return PlayerRecommendation(
-        level: level,
-        shortFeedback: level.shortFeedback,
-        nextActivity: .awayFromPressure,
-        nextFocusText: level.nextFocus,
-        tempoGuidance: level.tempoGuidance,
-        progressionSuggestion: progressionSuggestion
+        level: baseRecommendation.level,
+        shortFeedback: baseRecommendation.shortFeedback,
+        nextActivity: baseRecommendation.nextActivity,
+        nextFocusText: nextFocusWithAccuracyGuidance(base: baseRecommendation.nextFocusText, accuracy: accuracy),
+        tempoGuidance: baseRecommendation.tempoGuidance,
+        progressionSuggestion: mergedAccuracyProgressionHint(base: baseRecommendation.progressionSuggestion, accuracy: accuracy)
     )
+}
+
+private func nextFocusWithAccuracyGuidance(base: String, accuracy: Double) -> String {
+    switch SessionAccuracyBand.fromUnitAccuracy(accuracy) {
+    case .struggling:
+        return base + " Prioritize clean decisions over speed for this stretch."
+    case .developing:
+        return base
+    case .strong:
+        return base + " When it feels stable, add a little tempo or pressure."
+    }
+}
+
+private func mergedAccuracyProgressionHint(base: String?, accuracy: Double) -> String? {
+    switch SessionAccuracyBand.fromUnitAccuracy(accuracy) {
+    case .struggling:
+        let hint = "Repeated, simple blocks will lift accuracy fastest."
+        if let b = base, !b.isEmpty { return "\(b) \(hint)" }
+        return hint
+    case .developing:
+        return base
+    case .strong:
+        if let b = base, !b.isEmpty { return b }
+        return "Solid execution — keep stacking these blocks."
+    }
 }
 
 private func classifyPerformanceLevel(score: Int) -> SessionPerformanceLevel {

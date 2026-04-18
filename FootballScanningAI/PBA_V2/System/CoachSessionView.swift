@@ -78,6 +78,9 @@ struct CoachSessionView: View {
     let coachFirstRunActivityId: String
     /// Multipeer / relay link to the display — idle haptics only when connected.
     let coachTransportConnected: Bool
+    /// Evaluative copy for the coach while logging direction (player display intentionally stays clean).
+    let loggingPhaseEvaluativeTitle: String?
+    let loggingPhaseEvaluativeSubtitle: String?
 
     /// Read-only: cancel UI nudge if partner session ends or link drops (does not send relay traffic).
     @ObservedObject private var partnerSessionCoordinator = TrainingPartnerConnectionCoordinator.shared
@@ -110,7 +113,9 @@ struct CoachSessionView: View {
         onPassTriggered: ((Int) -> Bool)? = nil,
         onDirectionLogged: ((Int, SwipeDirection) -> Void)? = nil,
         coachFirstRunActivityId: String = "",
-        coachTransportConnected: Bool = true
+        coachTransportConnected: Bool = true,
+        loggingPhaseEvaluativeTitle: String? = nil,
+        loggingPhaseEvaluativeSubtitle: String? = nil
     ) {
         self.coachRemoteHeaderTitle = coachRemoteHeaderTitle
         self.totalReps = totalReps
@@ -123,6 +128,8 @@ struct CoachSessionView: View {
         self.onDirectionLogged = onDirectionLogged
         self.coachFirstRunActivityId = coachFirstRunActivityId
         self.coachTransportConnected = coachTransportConnected
+        self.loggingPhaseEvaluativeTitle = loggingPhaseEvaluativeTitle
+        self.loggingPhaseEvaluativeSubtitle = loggingPhaseEvaluativeSubtitle
     }
 
     /// Parent-owned 0-based rep index used for logging + callbacks.
@@ -185,9 +192,26 @@ struct CoachSessionView: View {
                         }
                         .allowsHitTesting(false)
                     } else {
-                        Text(statusText)
-                            .foregroundColor(.white.opacity(primaryActionTextOpacity))
-                            .font(.largeTitle.weight(.bold))
+                        VStack(spacing: 10) {
+                            Text(statusText)
+                                .foregroundColor(.white.opacity(primaryActionTextOpacity))
+                                .font(.largeTitle.weight(.bold))
+                            if phase == .logging {
+                                if let t = loggingPhaseEvaluativeTitle, !t.isEmpty {
+                                    Text(t)
+                                        .font(.title3.weight(.semibold))
+                                        .foregroundColor(.white.opacity(0.92))
+                                        .multilineTextAlignment(.center)
+                                }
+                                if let s = loggingPhaseEvaluativeSubtitle, !s.isEmpty {
+                                    Text(s)
+                                        .font(.subheadline.weight(.medium))
+                                        .foregroundColor(.white.opacity(0.78))
+                                        .multilineTextAlignment(.center)
+                                        .padding(.horizontal, 12)
+                                }
+                            }
+                        }
                     }
                 }
 

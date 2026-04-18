@@ -49,41 +49,28 @@ struct TwoMinuteCriticalScanSessionView: View {
     @State private var blockCoachDrillDuringSessionCountdown = false
     /// Latest coach `nextRep` deferred until countdown ends or engine reaches ``CriticalScanPhase/waitingForNextRep``.
     @State private var pendingNextRepIndex: Int?
+    @State private var isTearingDownForNewSession: Bool = false
     /// Tracks applied coach reps for stale detection (debug); coach index is authoritative when advancing.
     @State private var partnerCoachRepGate = PartnerCoachRepSequenceGate()
     @StateObject private var repController = RepStateController()
     /// Display-side relay (join code, WebSocket, coach paired). Used when `partnerTransportMode == .relayWebSocket`.
     /// Conforms to ``PartnerRelayDisplayControlling``; concrete type is ``PartnerRelayDisplaySession``.
     @ObservedObject private var partnerRelaySession = TrainingPartnerConnectionCoordinator.shared.relayDisplaySession
-    @State private var showPocketMomentToast = false
     @State private var hasCompletedPassTempoCalibration = false
     @State private var showPassTempoCalibration = false
     @State private var showCalibrationChoicePrompt = false
     @State private var partnerCalibration = PartnerPassTempoCalibrationTracker()
     @State private var showConnectedConfirmation = false
     @State private var hasStartedConnectedToCalibrationTransition = false
-    @State private var soloGetReadyVisible = false
-    @State private var soloRepFeedback: String?
-    @State private var soloCalibrationNudge: String?
     @State private var soloFirstRepScheduled = false
     @State private var startedWithoutSavedCalibration = false
     @State private var justCompletedCalibrationThisSession = false
-    @State private var pendingPostCalibrationReinforcementReps = 0
-    @State private var shouldShowNoticeDifference = false
-    @State private var recentTimingZones: [SoloTimingZone] = []
     @State private var soloGetReadyWorkItem: DispatchWorkItem?
     @State private var soloBeepRushWorkItem: DispatchWorkItem?
     @State private var soloAutoNextRepWorkItem: DispatchWorkItem?
-    private static let pocketMomentToastShownKey = "hasShownPocketMomentToast"
     @State private var playerFirstRunGuidanceText: String?
     @State private var playerFirstRunGuidanceOpacity = 0.0
     @State private var playerFirstRunGuidanceTask: Task<Void, Never>?
-
-    private enum SoloTimingZone {
-        case early
-        case onTime
-        case late
-    }
 
     init(config: TwoMinuteTestConfig, mode: TrainingMode, settingsViewModel: SettingsViewModel, profileManager: UserProfileManager) {
         self.config = config
@@ -142,54 +129,6 @@ struct TwoMinuteCriticalScanSessionView: View {
                 .zIndex(124)
             PartnerMidSessionDisconnectRecoveryOverlay()
                 .zIndex(125)
-            if showPocketMomentToast {
-                VStack {
-                    Spacer()
-                    Text("That was your pocket moment.")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 12)
-                        .background(Color.white.opacity(0.18))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(Color.white.opacity(0.28), lineWidth: 1)
-                        )
-                        .cornerRadius(12)
-                        .padding(.bottom, 36)
-                }
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
-                .animation(.easeInOut(duration: 0.25), value: showPocketMomentToast)
-                .allowsHitTesting(false)
-            }
-            if let soloRepFeedback {
-                VStack {
-                    Spacer()
-                    VStack(spacing: 8) {
-                        Text(soloRepFeedback)
-                            .font(.headline.weight(.semibold))
-                            .foregroundColor(.white)
-                        if let soloCalibrationNudge {
-                            Text(soloCalibrationNudge)
-                                .font(.caption.weight(.medium))
-                                .foregroundColor(.white.opacity(0.82))
-                        }
-                    }
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 12)
-                    .background(Color.white.opacity(0.2))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.white.opacity(0.28), lineWidth: 1)
-                    )
-                    .cornerRadius(12)
-                    .padding(.bottom, 36)
-                }
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
-                .animation(.easeInOut(duration: 0.2), value: soloRepFeedback)
-                .allowsHitTesting(false)
-                .zIndex(6)
-            }
         }
     }
 
@@ -214,7 +153,8 @@ struct TwoMinuteCriticalScanSessionView: View {
                             #endif
                             pendingTrainingRoute = route
                             testResultItem = nil
-                        }
+                        },
+                        showTimingAdaptationFeedback: item.showTimingAdaptationFeedback
                     )
                     .environmentObject(progressStore)
                     .environmentObject(playerStore)
@@ -236,6 +176,13 @@ struct TwoMinuteCriticalScanSessionView: View {
     private var sessionContentWithSessionModifiers: some View {
         sessionContentWithCover
             .onReceive(NotificationCenter.default.publisher(for: .twoMinuteMessageReceived).receive(on: RunLoop.main), perform: handleTwoMinuteMessage)
+            .onReceive(NotificationCenter.default.publisher(for: .partnerSoftReconnectRepRestart).receive(on: RunLoop.main)) { _ in
+                guard !TrainingPartnerConnectionCoordinator.shared.isPartnerSoftReconnectRepRestartSuppressed else { return }
+                applyPartnerSoftReconnectAfterTransportRestoreTwoMinute()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .partnerDisplayWillStartNewSessionFromDisconnect).receive(on: RunLoop.main)) { _ in
+                applyPartnerStartNewSessionLocalTeardownTwoMinute()
+            }
             .onChange(of: engine.currentRepIndex) { _, newValue in
                 if newValue >= 2 {
                     PlayerFirstRunGuidanceToastAnimator.cancel(
@@ -276,15 +223,6 @@ struct TwoMinuteCriticalScanSessionView: View {
                     showConnectedConfirmation = false
                     hasStartedConnectedToCalibrationTransition = false
                     showPassTempoCalibration = false
-                }
-            }
-            .onChange(of: engine.repLogs.count) { _, newCount in
-                guard newCount == 1,
-                      !UserDefaults.standard.bool(forKey: Self.pocketMomentToastShownKey) else { return }
-                UserDefaults.standard.set(true, forKey: Self.pocketMomentToastShownKey)
-                showPocketMomentToast = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
-                    showPocketMomentToast = false
                 }
             }
             .preferredColorScheme(.dark)
@@ -335,8 +273,6 @@ struct TwoMinuteCriticalScanSessionView: View {
                     if let calibrated {
                         PartnerPassTempoCalibrationStore.save(averageTravelTimeSeconds: calibrated, trainingMode: mode)
                         justCompletedCalibrationThisSession = true
-                        pendingPostCalibrationReinforcementReps = 2
-                        shouldShowNoticeDifference = startedWithoutSavedCalibration
                     }
                     hasCompletedPassTempoCalibration = true
                     showPassTempoCalibration = false
@@ -345,6 +281,7 @@ struct TwoMinuteCriticalScanSessionView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .relayForegroundReconnectCompleted)) { _ in
                 guard mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket else { return }
+                alignEngineRepWithCoordinatorSnapshotAfterRelayForegroundTwoMinute()
                 engine.synchronizeTimersAfterEnteringForeground()
                 PartnerRelayCheckpointDisplaySend.sendIfReady(
                     engine: engine,
@@ -368,6 +305,10 @@ struct TwoMinuteCriticalScanSessionView: View {
             return
         case .calibrationFinished(let averageTravelTimeSeconds):
             completePartnerCalibration(averageTravelTime: averageTravelTimeSeconds)
+            return
+        case .startNextBlock:
+            print("[DISPLAY] Received startNextBlock activity=twoMinuteTest")
+            twoMinuteApplyCoachStartNextBlock()
             return
         default:
             break
@@ -441,7 +382,74 @@ struct TwoMinuteCriticalScanSessionView: View {
             break
         case .calibrationPassTapped, .calibrationArrivalTapped, .calibrationFinished:
             break
+        case .startNextBlock:
+            break
         }
+    }
+
+    private func alignEngineRepWithCoordinatorSnapshotAfterRelayForegroundTwoMinute() {
+        guard mode.requiresPhoneDisplayRelay else { return }
+        let activityId = ActivityKind.twoMinuteTest.sessionActivityActivityId
+        guard let stored = TrainingPartnerConnectionCoordinator.shared.authoritativePartnerDisplayRepIndex(for: activityId) else { return }
+        engine.partnerForegroundResumeAlignRepIndex(blockRepCount: blockTotalReps, authoritativeRepIndex: stored)
+        let safeRepIndex = max(0, min(stored, blockTotalReps - 1))
+        var gate = partnerCoachRepGate
+        gate.alignExpectedNextForCoachSoftReconnectReplay(repIndex: safeRepIndex)
+        partnerCoachRepGate = gate
+        TrainingPartnerConnectionCoordinator.shared.syncDisplaySessionCurrentRepIndex(safeRepIndex, activityId: activityId)
+        repController.completeRepCycleEnd()
+        syncRepController(with: engine.phase)
+    }
+
+    private func applyPartnerSoftReconnectAfterTransportRestoreTwoMinute() {
+        guard mode.requiresPhoneDisplayRelay else { return }
+        pendingNextRepIndex = nil
+        engine.partnerSoftAbandonCurrentRepAwaitCoachRedo(blockRepCount: blockTotalReps)
+        let safeRepIndex = max(0, min(engine.currentRepIndex, blockTotalReps - 1))
+        var gate = partnerCoachRepGate
+        gate.alignExpectedNextForCoachSoftReconnectReplay(repIndex: safeRepIndex)
+        partnerCoachRepGate = gate
+        TrainingPartnerConnectionCoordinator.shared.syncDisplaySessionCurrentRepIndex(
+            safeRepIndex,
+            activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId
+        )
+        repController.completeRepCycleEnd()
+        syncRepController(with: engine.phase)
+    }
+
+    private func applyPartnerStartNewSessionLocalTeardownTwoMinute() {
+        guard !isTearingDownForNewSession else { return }
+        isTearingDownForNewSession = true
+        defer { isTearingDownForNewSession = false }
+        pendingNextRepIndex = nil
+        blockCoachDrillDuringSessionCountdown = false
+        soloGetReadyWorkItem?.cancel()
+        soloGetReadyWorkItem = nil
+        soloBeepRushWorkItem?.cancel()
+        soloBeepRushWorkItem = nil
+        soloAutoNextRepWorkItem?.cancel()
+        soloAutoNextRepWorkItem = nil
+        engine.invalidateAllTimers()
+        repController.resetForNewSession()
+        PlayerFirstRunGuidanceToastAnimator.cancel(
+            task: &playerFirstRunGuidanceTask,
+            message: $playerFirstRunGuidanceText,
+            opacity: $playerFirstRunGuidanceOpacity
+        )
+    }
+
+    /// Coach hub “Start Next Block”: leave results / complete phase and reset without dropping relay.
+    private func twoMinuteApplyCoachStartNextBlock() {
+        testResultItem = nil
+        nextRepIndex = 0
+        pendingNextRepIndex = nil
+        hasSentSessionEnded = false
+        repController.reset()
+        if mode.requiresPhoneDisplayRelay {
+            partnerCoachRepGate.reset()
+        }
+        engine.restartBlockFromBeginning()
+        syncRepController(with: engine.phase)
     }
 
     private func flushPendingCoachNextRepAfterCountdown() {
@@ -619,10 +627,19 @@ struct TwoMinuteCriticalScanSessionView: View {
         if case .complete = newPhase {
             PlayerFirstRunGuidanceStore.markCompletedFirstRun(activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId)
             pendingNextRepIndex = nil
+            if mode.requiresPhoneDisplayRelay {
+                TrainingPartnerConnectionCoordinator.shared.syncDisplaySessionCurrentRepIndex(
+                    blockTotalReps,
+                    activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId
+                )
+            }
             DispatchQueue.main.async {
+                let calId = ActivityKind.twoMinuteTest.sessionActivityActivityId
+                let adapted = abs(CurrentSessionStore.shared.calibrationFactor(for: calId) - 1.0) > 0.001
                 testResultItem = TwoMinuteResultItem(
                     result: TwoMinuteTestResult.from(logs: engine.repLogs, difficulty: config.difficulty),
-                    logs: engine.repLogs
+                    logs: engine.repLogs,
+                    showTimingAdaptationFeedback: adapted
                 )
                 AnalyticsManager.shared.track(.twoMinuteTestCompleted, playerId: playerStore.selectedPlayerId)
             }
@@ -680,8 +697,6 @@ struct TwoMinuteCriticalScanSessionView: View {
         showPassTempoCalibration = false
         startedWithoutSavedCalibration = !PartnerPassTempoCalibrationStore.hasSavedCalibration
         justCompletedCalibrationThisSession = false
-        pendingPostCalibrationReinforcementReps = 0
-        shouldShowNoticeDifference = false
         partnerCalibration.reset()
         showConnectedConfirmation = false
         hasStartedConnectedToCalibrationTransition = false
@@ -796,11 +811,9 @@ struct TwoMinuteCriticalScanSessionView: View {
               !showCalibrationChoicePrompt else { return }
         soloFirstRepScheduled = true
         let showGetReady = !justCompletedCalibrationThisSession
-        soloGetReadyVisible = showGetReady
         soloGetReadyWorkItem?.cancel()
         let work = DispatchWorkItem {
             guard engine.phase == .waitingForNextRep else { return }
-            soloGetReadyVisible = false
             repController.completeRepCycleEnd()
             repController.startRep()
             engine.onNextRep(repIndex: nextRepIndex)
@@ -976,12 +989,6 @@ struct TwoMinuteCriticalScanSessionView: View {
     private func twoMinuteExitLogOverlay(repIndex: Int) -> some View {
         VStack {
             Spacer()
-            Text(ActivityDisplaySessionCopy.tapTwoMinuteOrDOP)
-                .font(.subheadline.weight(.semibold))
-                .foregroundColor(.white.opacity(0.95))
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 16)
             HStack(spacing: 20) {
                 Button { logExit(repIndex: repIndex, gate: .up) } label: {
                     Image(systemName: "arrow.up")
@@ -1022,7 +1029,6 @@ struct TwoMinuteCriticalScanSessionView: View {
     private func logExit(repIndex: Int, gate: Gate) {
         guard twoMTAllowsExitLogged(repIndex: repIndex) else { return }
         guard !repController.hasLoggedSwipe else { return }
-        var savedLog: RepLog?
         #if DEBUG
         let soloExit = Date()
         DecisionSpeedDebugLog.logSoloDisplayExitTrigger(activity: .twoMinuteTest, repIndex: repIndex, gate: gate, displayWallExitTS: soloExit)
@@ -1030,19 +1036,14 @@ struct TwoMinuteCriticalScanSessionView: View {
             repController.registerSwipe()
             syncRepController(with: engine.phase)
             saveDecisionForRep(log: log)
-            savedLog = log
         }
         #else
         if engine.onExitLogged(repIndex: repIndex, gate: gate, timestamp: Date()) != nil, let log = engine.repLogs.last {
             repController.registerSwipe()
             syncRepController(with: engine.phase)
             saveDecisionForRep(log: log)
-            savedLog = log
         }
         #endif
-        if let savedLog {
-            showSoloRepFeedback(for: savedLog)
-        }
         nextRepIndex = repIndex + 1
     }
 
@@ -1063,98 +1064,6 @@ struct TwoMinuteCriticalScanSessionView: View {
         if mode.requiresPhoneDisplayRelay, case .waitingForNextRep = phase {
             flushPendingPartnerCoachNextRepIfNeeded()
         }
-    }
-
-    private func showSoloRepFeedback(for log: RepLog) {
-        guard mode == .solo else { return }
-        let timing = timingAssessment(for: log)
-        appendRecentTimingZone(timing.zone)
-        let feedback = soloRepFeedbackText(for: log, timing: timing)
-        soloRepFeedback = feedback
-        soloCalibrationNudge = postCalibrationReinforcementText(for: log)
-            ?? (shouldShowCalibrationNudgeThisRep() ? "Improve accuracy with quick calibration" : nil)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            if soloRepFeedback == feedback {
-                soloRepFeedback = nil
-                soloCalibrationNudge = nil
-            }
-        }
-    }
-
-    private func shouldShowCalibrationNudgeThisRep() -> Bool {
-        guard !PartnerPassTempoCalibrationStore.hasSavedCalibration else { return false }
-        // Keep this occasional: roughly 1 out of 4 reps once feedback is already shown.
-        return Int.random(in: 0..<4) == 0
-    }
-
-    private func postCalibrationReinforcementText(for log: RepLog) -> String? {
-        guard pendingPostCalibrationReinforcementReps > 0 else { return nil }
-        pendingPostCalibrationReinforcementReps -= 1
-        let travelTime = CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds
-            ?? config.difficulty.passTempo.expectedBallTravelTime(distanceMeters: 11.0)
-        let reactionTime = max(0, log.exitLoggedAt.timeIntervalSince(log.passTriggeredAt ?? log.infoShownAt))
-        let decisionWindowSeconds = travelTime - reactionTime
-        if shouldShowNoticeDifference {
-            shouldShowNoticeDifference = false
-            return "Notice the difference?"
-        }
-        if log.correct, decisionWindowSeconds >= 0 {
-            return "That’s it — right on time"
-        }
-        return "Close — that timing is now exact"
-    }
-
-    private func appendRecentTimingZone(_ zone: SoloTimingZone) {
-        recentTimingZones.append(zone)
-        if recentTimingZones.count > 3 {
-            recentTimingZones.removeFirst(recentTimingZones.count - 3)
-        }
-    }
-
-    private func timingAssessment(for log: RepLog) -> (zone: SoloTimingZone, ratio: Double, isBorderline: Bool) {
-        let travelTime = max(
-            0.01,
-            CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds
-                ?? config.difficulty.passTempo.expectedBallTravelTime(distanceMeters: 11.0)
-        )
-        let decisionTime = max(0, log.exitLoggedAt.timeIntervalSince(log.passTriggeredAt ?? log.infoShownAt))
-        let ratio = decisionTime / travelTime
-
-        let earlyThreshold = 0.75
-        let lateThreshold = PartnerPassTempoCalibrationStore.hasSavedCalibration ? 1.15 : 1.20
-        let borderlineLateSlack = 0.05
-
-        if ratio < earlyThreshold { return (.early, ratio, false) }
-        if ratio <= lateThreshold { return (.onTime, ratio, false) }
-        // Fairness: borderline reps are treated as on-time, not late.
-        if ratio <= lateThreshold + borderlineLateSlack { return (.onTime, ratio, true) }
-        return (.late, ratio, false)
-    }
-
-    private func soloRepFeedbackText(for log: RepLog, timing: (zone: SoloTimingZone, ratio: Double, isBorderline: Bool)) -> String {
-        if log.correct, timing.zone == .early {
-            return "Excellent — early and correct"
-        }
-        if !log.correct, timing.zone != .late {
-            return "Good early decision — now choose the right option"
-        }
-
-        let lateCountInRecent = recentTimingZones.filter { $0 == .late }.count
-        let hasMixedPattern = Set(recentTimingZones.map {
-            switch $0 {
-            case .early: return "early"
-            case .onTime: return "onTime"
-            case .late: return "late"
-            }
-        }).count >= 2
-
-        if timing.isBorderline || (hasMixedPattern && lateCountInRecent < 2) {
-            return "Close — decide a bit earlier"
-        }
-        if lateCountInRecent >= 2 {
-            return "Late — decide earlier"
-        }
-        return "Close — decide a bit earlier"
     }
 
     private func saveDecisionForRep(log: RepLog) {
@@ -1383,81 +1292,8 @@ struct TwoMinuteCriticalScanSessionView: View {
     }
 
     private var statusOverlay: some View {
-        VStack {
-            if !mode.requiresPhoneDisplayRelay {
-                Text("Tap screen to trigger")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.7))
-            }
-            Spacer()
-            TimelineView(.periodic(from: .now, by: 1)) { _ in
-                phaseStatusContent
-            }
-            .padding(.bottom, 32)
-        }
-        .padding(.top, 8)
-    }
-
-    @ViewBuilder
-    private var phaseStatusContent: some View {
-        if mode == .solo, soloGetReadyVisible {
-            phaseVStack(title: "Get ready...", subtitle: "Session starts now")
-        } else
-        if shouldShowWaitingForCoachOverlay {
-            EmptyView()
-        } else {
-            switch engine.phase {
-            case .waitingForNextRep:
-                if mode.requiresPhoneDisplayRelay {
-                    phaseVStack(
-                        title: "Scan",
-                        subtitle: "Waiting for coach..."
-                    )
-                } else {
-                    phaseVStack(title: "Waiting for coach…", subtitle: "Keep moving. Check both shoulders.")
-                }
-            case .armedScanning:
-                if mode.requiresPhoneDisplayRelay {
-                    phaseVStack(
-                        title: "Scan",
-                        subtitle: "Check surroundings early.\nRecognize the open gate."
-                    )
-                } else {
-                    phaseVStack(title: "Scan early", subtitle: "Know your decision.")
-                }
-            case .beepedAwaitingPass:
-                if mode.requiresPhoneDisplayRelay {
-                    phaseVStack(title: "Ball is coming", subtitle: "")
-                } else {
-                    phaseVStack(title: "Ball is coming", subtitle: "Swipe your decision as soon as the ball arrives.")
-                }
-            case .awaitingExitLog:
-                if mode.requiresPhoneDisplayRelay {
-                    phaseVStack(title: "Swipe now", subtitle: "Coach: log the swipe direction that matches the ball.")
-                } else {
-                    phaseVStack(title: "Swipe now", subtitle: "Waiting for coach swipe log…")
-                }
-            default:
-                Text(phaseStatusText)
-                    .font(.headline)
-                    .foregroundColor(.white.opacity(0.75))
-            }
-        }
-    }
-
-    private func phaseVStack(title: String, subtitle: String) -> some View {
-        VStack(spacing: 6) {
-            Text(title)
-                .font(.title2.weight(.semibold))
-                .foregroundColor(.white.opacity(0.9))
-            if !subtitle.isEmpty {
-                Text(subtitle)
-                    .font(.headline)
-                    .foregroundColor(.white.opacity(0.78))
-                    .multilineTextAlignment(.center)
-            }
-        }
-        .padding(.horizontal, 20)
+        Color.clear
+            .allowsHitTesting(false)
     }
 
     /// Rep count and timer visible only after connection event (State 2). Hidden in State 1 (waiting for pairing).
@@ -1487,20 +1323,6 @@ struct TwoMinuteCriticalScanSessionView: View {
             }
         }
         return "Rep \(rep) of \(blockTotalReps)"
-    }
-
-    private var phaseStatusText: String {
-        switch engine.phase {
-        case .waitingForNextRep: return "Waiting for coach…"
-        case .armedScanning(_, _, let endsAt):
-            let sec = max(0, Int(endsAt.timeIntervalSinceNow.rounded(.up)))
-            if sec > 0 { return "Scan freely — beep in \(sec)s" }
-            return "Scan freely"
-        case .beepedAwaitingPass: return "Ball is coming — swipe your decision as it arrives"
-        case .ballVisible: return ""
-        case .awaitingExitLog: return "Waiting for coach swipe log…"
-        case .complete: return ""
-        }
     }
 
     private func activateAudioSession() {

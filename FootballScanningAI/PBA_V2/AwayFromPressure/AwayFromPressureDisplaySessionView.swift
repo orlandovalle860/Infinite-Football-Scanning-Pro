@@ -25,6 +25,8 @@ struct AwayFromPressureDisplaySessionView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @State private var navigateToBlockSummary = false
+    @State private var blockSummaryCalibratedTravelSeconds: Double?
+    @State private var blockSummaryShowTimingAdaptationFeedback = false
     @State private var nextRepIndex = 0
     @State private var audioInterruptionObserver: NSObjectProtocol?
     @State private var wedgeStyle: WedgeCueStyle = WedgeCueStyle.style(for: 1)
@@ -38,6 +40,7 @@ struct AwayFromPressureDisplaySessionView: View {
     @State private var blockCoachDrillDuringSessionCountdown = false
     /// Latest coach `nextRep` deferred until countdown ends or engine reaches ``AwayFromPressurePhase/waitingForNextRep``.
     @State private var pendingNextRepIndex: Int?
+    @State private var isTearingDownForNewSession: Bool = false
     @State private var partnerCoachRepGate = PartnerCoachRepSequenceGate()
     @StateObject private var repController = RepStateController()
     @ObservedObject private var partnerRelaySession = TrainingPartnerConnectionCoordinator.shared.relayDisplaySession
@@ -98,6 +101,8 @@ struct AwayFromPressureDisplaySessionView: View {
             AwayFromPressureBlockSummaryView(
                 logs: engine.repLogs,
                 config: config,
+                summaryCalibratedTravelSeconds: blockSummaryCalibratedTravelSeconds,
+                showTimingAdaptationFeedback: blockSummaryShowTimingAdaptationFeedback,
                 onRunItBack: runItBackFromSummary,
                 settingsViewModel: settingsViewModel,
                 profileManager: profileManager
@@ -108,6 +113,13 @@ struct AwayFromPressureDisplaySessionView: View {
                 .environmentObject(router)
         }
         .onReceive(NotificationCenter.default.publisher(for: .twoMinuteMessageReceived).receive(on: RunLoop.main), perform: handleAwayFromPressureCoachRelayMessage)
+        .onReceive(NotificationCenter.default.publisher(for: .partnerSoftReconnectRepRestart).receive(on: RunLoop.main)) { _ in
+            guard !TrainingPartnerConnectionCoordinator.shared.isPartnerSoftReconnectRepRestartSuppressed else { return }
+            applyPartnerSoftReconnectAfterTransportRestoreAwayFromPressure()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .partnerDisplayWillStartNewSessionFromDisconnect).receive(on: RunLoop.main)) { _ in
+            applyPartnerStartNewSessionLocalTeardownAwayFromPressure()
+        }
         .onChange(of: engine.currentRepIndex) { _, newValue in
             if newValue >= 2 {
                 PlayerFirstRunGuidanceToastAnimator.cancel(
@@ -126,6 +138,21 @@ struct AwayFromPressureDisplaySessionView: View {
             if case .blockComplete = newPhase {
                 PlayerFirstRunGuidanceStore.markCompletedFirstRun(activityId: ActivityKind.awayFromPressure.sessionActivityActivityId)
                 pendingNextRepIndex = nil
+                if mode.requiresPhoneDisplayRelay {
+                    TrainingPartnerConnectionCoordinator.shared.syncDisplaySessionCurrentRepIndex(
+                        blockTotalReps,
+                        activityId: ActivityKind.awayFromPressure.sessionActivityActivityId
+                    )
+                }
+                let calId = ActivityKind.awayFromPressure.sessionActivityActivityId
+                let base = CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds
+                    ?? config.difficulty.passTempo.expectedBallTravelTime(distanceMeters: 11.0)
+                blockSummaryCalibratedTravelSeconds = CurrentSessionStore.shared.calibratedBallTravelSeconds(
+                    baseNominal: base,
+                    activityId: calId
+                )
+                blockSummaryShowTimingAdaptationFeedback =
+                    abs(CurrentSessionStore.shared.calibrationFactor(for: calId) - 1.0) > 0.001
                 DispatchQueue.main.async { navigateToBlockSummary = true }
             }
             syncRepController(with: newPhase)
@@ -233,6 +260,7 @@ struct AwayFromPressureDisplaySessionView: View {
         .sessionCountdown(waitForPartnerReady: mode.requiresPhoneDisplayRelay, partnerReady: partnerReadyForCountdown, suppressCoachMessagesDuringCountdown: $blockCoachDrillDuringSessionCountdown)
         .onReceive(NotificationCenter.default.publisher(for: .relayForegroundReconnectCompleted)) { _ in
             guard mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket else { return }
+            alignEngineRepWithCoordinatorSnapshotAfterRelayForegroundAwayFromPressure()
             engine.synchronizeTimersAfterEnteringForeground()
             PartnerRelayCheckpointDisplaySend.sendIfReady(
                 engine: engine,
@@ -300,6 +328,10 @@ struct AwayFromPressureDisplaySessionView: View {
             return
         case .calibrationFinished(let averageTravelTimeSeconds):
             completePartnerCalibration(averageTravelTime: averageTravelTimeSeconds)
+            return
+        case .startNextBlock:
+            print("[DISPLAY] Received startNextBlock activity=awayFromPressure")
+            runItBackFromSummary()
             return
         default:
             break
@@ -409,6 +441,8 @@ struct AwayFromPressureDisplaySessionView: View {
             // Display is the sender; ignore any echo that comes back.
             break
         case .calibrationPassTapped, .calibrationArrivalTapped, .calibrationFinished:
+            break
+        case .startNextBlock:
             break
         }
     }
@@ -544,12 +578,6 @@ struct AwayFromPressureDisplaySessionView: View {
             if let repIndex = repIndexForExit {
                 VStack {
                     Spacer()
-                    Text(ActivityDisplaySessionCopy.tapAwayFromPressure)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(.white.opacity(0.95))
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.horizontal, 16)
                     HStack(spacing: 20) {
                         Button { logExit(repIndex: repIndex, gate: .up) } label: {
                             Image(systemName: "arrow.up")
@@ -690,6 +718,9 @@ struct AwayFromPressureDisplaySessionView: View {
     }
 
     private func registerSupabaseAwayFromPressureBlockSession() {
+        CurrentSessionStore.shared.resetDecisionTimingCalibrationForNewDrillBlock(
+            activityId: ActivityKind.awayFromPressure.sessionActivityActivityId
+        )
         Task {
             guard let sessionId = await SupabaseSessionService.shared.createSessionForDrill(activity: .awayFromPressure, blockSize: blockTotalReps, playerId: playerStore.selectedPlayerId ?? profileManager.currentProfile?.id) else { return }
             let activityId = await SupabaseSessionService.shared.createSessionActivity(sessionId: sessionId, activityId: ActivityKind.awayFromPressure.sessionActivityActivityId, blockNumber: 1)
@@ -703,6 +734,8 @@ struct AwayFromPressureDisplaySessionView: View {
     /// Dismiss block summary and restart this drill from rep 0 (same display session; no role/setup routing).
     private func runItBackFromSummary() {
         navigateToBlockSummary = false
+        blockSummaryCalibratedTravelSeconds = nil
+        blockSummaryShowTimingAdaptationFeedback = false
         nextRepIndex = 0
         hasSentSessionEnded = false
         repController.reset()
@@ -720,8 +753,8 @@ struct AwayFromPressureDisplaySessionView: View {
         guard !PlayerFirstRunGuidanceStore.hasCompletedFirstRun(activityId: activityId) else { return }
         guard engine.currentRepIndex <= 1 else { return }
 
-        if case .markerVisible(let r, _) = newPhase, r == 0 {
-            if case .markerVisible(let rOld, _) = oldPhase, rOld == 0 { return }
+        if case .markerVisible(let r, _, _) = newPhase, r == 0 {
+            if case .markerVisible(let rOld, _, _) = oldPhase, rOld == 0 { return }
             guard let msg = PlayerFirstRunGuidanceCopy.message(for: .awayFromPressure, repIndexZeroBased: 0) else { return }
             PlayerFirstRunGuidanceToastAnimator.schedule(
                 text: msg,
@@ -730,8 +763,8 @@ struct AwayFromPressureDisplaySessionView: View {
                 opacity: $playerFirstRunGuidanceOpacity
             )
         }
-        if case .armedScanning(let r, _) = newPhase, r == 1 {
-            if case .armedScanning(let rOld, _) = oldPhase, rOld == 1 { return }
+        if case .armedScanning(let r, _, _) = newPhase, r == 1 {
+            if case .armedScanning(let rOld, _, _) = oldPhase, rOld == 1 { return }
             guard let msg = PlayerFirstRunGuidanceCopy.message(for: .awayFromPressure, repIndexZeroBased: 1) else { return }
             PlayerFirstRunGuidanceToastAnimator.schedule(
                 text: msg,
@@ -762,31 +795,8 @@ struct AwayFromPressureDisplaySessionView: View {
     }
 
     private var statusOverlay: some View {
-        VStack {
-            if !mode.requiresPhoneDisplayRelay {
-                Text("Tap screen to trigger")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.7))
-            }
-            Spacer()
-            instructionBlock
-                .padding(.bottom, 32)
-        }
-        .padding(.top, 8)
-    }
-
-    private var instructionBlock: some View {
-        VStack(spacing: 6) {
-            Text(engine.instructionTitle)
-                .font(.title2.weight(.semibold))
-                .foregroundColor(.white.opacity(0.9))
-            if !engine.instructionSubtitle.isEmpty {
-                Text(engine.instructionSubtitle)
-                    .font(.headline)
-                    .foregroundColor(.white.opacity(0.75))
-            }
-        }
-        .multilineTextAlignment(.center)
+        Color.clear
+            .allowsHitTesting(false)
     }
 
     @ViewBuilder
@@ -812,6 +822,51 @@ struct AwayFromPressureDisplaySessionView: View {
         guard let idx = pendingNextRepIndex else { return }
         pendingNextRepIndex = nil
         applyPartnerCoachNextRep(repIndex: idx)
+    }
+
+    private func alignEngineRepWithCoordinatorSnapshotAfterRelayForegroundAwayFromPressure() {
+        guard mode.requiresPhoneDisplayRelay else { return }
+        let activityId = ActivityKind.awayFromPressure.sessionActivityActivityId
+        guard let stored = TrainingPartnerConnectionCoordinator.shared.authoritativePartnerDisplayRepIndex(for: activityId) else { return }
+        engine.partnerForegroundResumeAlignRepIndex(blockRepCount: blockTotalReps, authoritativeRepIndex: stored)
+        let safeRepIndex = max(0, min(stored, blockTotalReps - 1))
+        var gate = partnerCoachRepGate
+        gate.alignExpectedNextForCoachSoftReconnectReplay(repIndex: safeRepIndex)
+        partnerCoachRepGate = gate
+        TrainingPartnerConnectionCoordinator.shared.syncDisplaySessionCurrentRepIndex(safeRepIndex, activityId: activityId)
+        repController.completeRepCycleEnd()
+        syncRepController(with: engine.phase)
+    }
+
+    private func applyPartnerSoftReconnectAfterTransportRestoreAwayFromPressure() {
+        guard mode.requiresPhoneDisplayRelay else { return }
+        pendingNextRepIndex = nil
+        engine.partnerSoftAbandonCurrentRepAwaitCoachRedo(blockRepCount: blockTotalReps)
+        let safeRepIndex = max(0, min(engine.currentRepIndex, blockTotalReps - 1))
+        var gate = partnerCoachRepGate
+        gate.alignExpectedNextForCoachSoftReconnectReplay(repIndex: safeRepIndex)
+        partnerCoachRepGate = gate
+        TrainingPartnerConnectionCoordinator.shared.syncDisplaySessionCurrentRepIndex(
+            safeRepIndex,
+            activityId: ActivityKind.awayFromPressure.sessionActivityActivityId
+        )
+        repController.completeRepCycleEnd()
+        syncRepController(with: engine.phase)
+    }
+
+    private func applyPartnerStartNewSessionLocalTeardownAwayFromPressure() {
+        guard !isTearingDownForNewSession else { return }
+        isTearingDownForNewSession = true
+        defer { isTearingDownForNewSession = false }
+        pendingNextRepIndex = nil
+        blockCoachDrillDuringSessionCountdown = false
+        engine.invalidateAllTimers()
+        repController.resetForNewSession()
+        PlayerFirstRunGuidanceToastAnimator.cancel(
+            task: &playerFirstRunGuidanceTask,
+            message: $playerFirstRunGuidanceText,
+            opacity: $playerFirstRunGuidanceOpacity
+        )
     }
 
     private func applyPartnerCoachNextRep(repIndex: Int) {

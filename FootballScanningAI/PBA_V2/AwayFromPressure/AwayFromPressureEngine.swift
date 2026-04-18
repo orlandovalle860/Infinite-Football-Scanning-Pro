@@ -256,6 +256,10 @@ final class AwayFromPressureEngine: ObservableObject {
             )
         )
         applyAdaptiveAfterRep(wasCorrect: gate == p.pressureGate.opposite, decisionWindow: decisionWindowSeconds)
+        CurrentSessionStore.shared.recordDecisionTimingCalibrationSample(
+            decisionWindowSeconds: decisionWindowSeconds,
+            activityId: ActivityKind.awayFromPressure.sessionActivityActivityId
+        )
         print("[DecisionWindowDebug] repIndex=\(repIndex) passTS=\(triggerTime.timeIntervalSince1970) expectedArrivalTS=\(expectedArrivalTime.timeIntervalSince1970) decisionTS=\(timestamp.timeIntervalSince1970) decisionWindowSeconds=\(decisionWindowSeconds)")
         let startedAt = startedAtForCurrentRep ?? Date()
         let markerShownAt = markerShownAtForCurrentRep ?? startedAt
@@ -342,6 +346,10 @@ final class AwayFromPressureEngine: ObservableObject {
         let expectedArrivalTimeIncorrect = triggerTime.addingTimeInterval(travelTimeSeconds)
         let decisionWindowSecondsIncorrect = expectedArrivalTimeIncorrect.timeIntervalSince(timestamp)
         applyAdaptiveAfterRep(wasCorrect: false, decisionWindow: decisionWindowSecondsIncorrect)
+        CurrentSessionStore.shared.recordDecisionTimingCalibrationSample(
+            decisionWindowSeconds: decisionWindowSecondsIncorrect,
+            activityId: ActivityKind.awayFromPressure.sessionActivityActivityId
+        )
         let startedAt = startedAtForCurrentRep ?? Date()
         let markerShownAt = markerShownAtForCurrentRep ?? startedAt
         let markerHiddenAt = markerHiddenAtForCurrentRep ?? Date()
@@ -418,7 +426,53 @@ final class AwayFromPressureEngine: ObservableObject {
         repDecisions.removeAll()
         adaptiveState = AdaptiveState()
         sessionAdaptiveDifficulty = DifficultySettings(cueDuration: 1.0, travelTime: 1.0, thresholdAdjustment: 0.0)
+        CurrentSessionStore.shared.resetDecisionTimingCalibrationForNewDrillBlock(
+            activityId: ActivityKind.awayFromPressure.sessionActivityActivityId
+        )
         commitPhase(.waitingForNextRep)
+    }
+
+    /// Partner transport restored without block reset: drop mid-rep timers/state; same `currentRepIndex`; coach sends `nextRep` again.
+    func partnerSoftAbandonCurrentRepAwaitCoachRedo(blockRepCount: Int) {
+        guard trainingMode == .partner else { return }
+        cancelTimers()
+        cueTimingDebugVisibleAt = nil
+        let safeRepIndex = max(0, min(currentRepIndex, blockRepCount - 1))
+        currentRepIndex = safeRepIndex
+        let k = safeRepIndex
+        passTriggeredAt = nil
+        passTriggeredByRep[k] = nil
+        directionLoggedByRep[k] = nil
+        pendingFirstTouchByRep.removeValue(forKey: k)
+        startedAtForCurrentRep = nil
+        markerShownAtForCurrentRep = nil
+        markerHiddenAtForCurrentRep = nil
+        commitPhase(.waitingForNextRep)
+    }
+
+    /// After iOS background: align with coordinator snapshot so a fresh `StateObject` engine does not fall back to rep 0.
+    func partnerForegroundResumeAlignRepIndex(blockRepCount: Int, authoritativeRepIndex: Int) {
+        guard trainingMode == .partner else { return }
+        if case .blockComplete = phase { return }
+        let safe = max(0, min(authoritativeRepIndex, blockRepCount - 1))
+        if currentRepIndex == safe, case .waitingForNextRep = phase { return }
+        cancelTimers()
+        cueTimingDebugVisibleAt = nil
+        currentRepIndex = safe
+        let k = safe
+        passTriggeredAt = nil
+        passTriggeredByRep[k] = nil
+        directionLoggedByRep[k] = nil
+        pendingFirstTouchByRep.removeValue(forKey: k)
+        startedAtForCurrentRep = nil
+        markerShownAtForCurrentRep = nil
+        markerHiddenAtForCurrentRep = nil
+        commitPhase(.waitingForNextRep)
+    }
+
+    /// Cancels all scheduled timers (e.g. partner “Start New Session” / navigation away).
+    func invalidateAllTimers() {
+        cancelTimers()
     }
 
     /// Call when app enters background so timers don't fire late when returning.
@@ -494,8 +548,12 @@ final class AwayFromPressureEngine: ObservableObject {
     }
 
     private var travelTimeSeconds: Double {
-        CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds
+        let base = CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds
             ?? config.difficulty.passTempo.expectedBallTravelTime(distanceMeters: 11.0)
+        return CurrentSessionStore.shared.calibratedBallTravelSeconds(
+            baseNominal: base,
+            activityId: ActivityKind.awayFromPressure.sessionActivityActivityId
+        )
     }
 
     private func applyAdaptiveAfterRep(wasCorrect: Bool, decisionWindow: Double) {

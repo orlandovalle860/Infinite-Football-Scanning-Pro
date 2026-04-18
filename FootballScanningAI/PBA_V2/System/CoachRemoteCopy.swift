@@ -34,6 +34,19 @@ enum CoachRemoteCopy {
 
     /// Legacy combined prompt (avoid for new layouts; prefer `playerDecisionQuestion` + `CoachRemoteIncorrectPadButton`).
     static let logPlayerDecisionPrompt = "Swipe the direction of their first decision, or mark Late decision / Missed scan."
+
+    // MARK: - Logging phase (evaluative / instructional for coach only; player display stays clean)
+
+    static let loggingAnticipationHeadline = "Great anticipation"
+
+    /// After PASS — player may have committed; coach logs direction for scoring.
+    static let dribbleOrPassLoggingEvaluativeDetail = "Waiting for your swipe log — match what the player showed."
+
+    static let awayFromPressureLoggingEvaluativeDetail = "Log their swipe away from pressure (opposite the red = correct)."
+
+    static let oneTouchPassingLoggingEvaluativeDetail = "Waiting for your swipe log — match the player’s first-touch direction."
+
+    static let twoMinuteLoggingEvaluativeDetail = "Log the swipe direction that matches the ball."
 }
 
 // MARK: - Subtle connection status (not the primary focus)

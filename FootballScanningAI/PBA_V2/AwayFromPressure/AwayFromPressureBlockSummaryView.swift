@@ -10,6 +10,12 @@ import SwiftUI
 struct AwayFromPressureBlockSummaryView: View {
     let logs: [AwayFromPressureRepLog]
     let config: AwayFromPressureConfig
+    /// Effective pass travel (seconds) used for decision-window math on this block; nil = derive from store/config.
+    var summaryCalibratedTravelSeconds: Double? = nil
+    /// Set from display at block complete when timing calibration ≠ 1.0 for this activity.
+    var showTimingAdaptationFeedback: Bool = false
+
+    private let timingCalibrationActivityId = ActivityKind.awayFromPressure.sessionActivityActivityId
     /// Pops summary and resets the display session (same activity; no role selection).
     let onRunItBack: () -> Void
     @ObservedObject var settingsViewModel: SettingsViewModel
@@ -56,8 +62,13 @@ struct AwayFromPressureBlockSummaryView: View {
     }
 
     private var travelTimeSeconds: Double {
-        CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds
+        if let snap = summaryCalibratedTravelSeconds { return snap }
+        let base = CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds
             ?? config.difficulty.passTempo.expectedBallTravelTime(distanceMeters: 11.0)
+        return CurrentSessionStore.shared.calibratedBallTravelSeconds(
+            baseNominal: base,
+            activityId: timingCalibrationActivityId
+        )
     }
 
     private var decisionWindowSeconds: [Double] {
@@ -467,6 +478,13 @@ struct AwayFromPressureBlockSummaryView: View {
                         )
                     }
                     .multilineTextAlignment(.center)
+                    if showTimingAdaptationFeedback {
+                        Text("Adapted to your pace")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.7))
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 4)
+                    }
                 }
                 .frame(maxWidth: .infinity)
 

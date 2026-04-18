@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import Combine
 import AVFoundation
 import MultipeerConnectivity
 
@@ -168,6 +169,10 @@ struct TwoMinuteCoachRemoteView: View {
                 coachSyncRepIndex: coachSyncRepIndexForCheckpoint()
             )
         }
+        .onReceive(NotificationCenter.default.publisher(for: .partnerSoftReconnectRepRestart).receive(on: RunLoop.main)) { _ in
+            guard !TrainingPartnerConnectionCoordinator.shared.isPartnerSoftReconnectRepRestartSuppressed else { return }
+            applyPartnerSoftReconnectFromCoordinatorNotificationTwoMinute()
+        }
         .onAppear {
             didNavigateBackToCoachHubAfterDisplayDisconnect = false
             didAttemptCoachRelayAutoReconnect = false
@@ -307,7 +312,9 @@ struct TwoMinuteCoachRemoteView: View {
                 logExit(repIndex: currentRepIndex, gate: swipe.gate)
             },
             coachFirstRunActivityId: ActivityKind.twoMinuteTest.sessionActivityActivityId,
-            coachTransportConnected: coachSessionConnected
+            coachTransportConnected: coachSessionConnected,
+            loggingPhaseEvaluativeTitle: CoachRemoteCopy.loggingAnticipationHeadline,
+            loggingPhaseEvaluativeSubtitle: CoachRemoteCopy.twoMinuteLoggingEvaluativeDetail
         )
         .id(coachSessionInputResetToken)
     }
@@ -586,6 +593,13 @@ struct TwoMinuteCoachRemoteView: View {
     }
 
     private func coachStartNextBlockTapped() {
+        if coachSessionConnected {
+            remoteService.send(.startNextBlock(timestamp: Date()))
+        }
+        currentRepIndex = 0
+        clearRepStartAckWaitState()
+        state = .ready
+        resetCoachSessionInput()
         didNavigateBackToCoachHubAfterDisplayDisconnect = false
         router.popCoachRemoteToStartSessionHub(dismiss: dismiss, expectingTopRoute: .twoMinuteCoachRemote)
     }
@@ -615,6 +629,15 @@ struct TwoMinuteCoachRemoteView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             showReconnectRestartOverlay = false
         }
+    }
+
+    private func applyPartnerSoftReconnectFromCoordinatorNotificationTwoMinute() {
+        guard TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive else { return }
+        guard state != .complete else { return }
+        clearRepStartAckWaitState()
+        state = .ready
+        resetCoachSessionInput()
+        triggerReconnectRestartOverlay()
     }
 
     private func coachSyncRepIndexForCheckpoint() -> Int {

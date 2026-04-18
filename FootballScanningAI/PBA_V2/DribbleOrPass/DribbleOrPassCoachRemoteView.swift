@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import Combine
 import AVFoundation
 import MultipeerConnectivity
 
@@ -169,6 +170,10 @@ struct DribbleOrPassCoachRemoteView: View {
                 coachSyncRepIndex: coachSyncRepIndexForCheckpoint()
             )
         }
+        .onReceive(NotificationCenter.default.publisher(for: .partnerSoftReconnectRepRestart).receive(on: RunLoop.main)) { _ in
+            guard !TrainingPartnerConnectionCoordinator.shared.isPartnerSoftReconnectRepRestartSuppressed else { return }
+            applyPartnerSoftReconnectFromCoordinatorNotificationDribbleOrPass()
+        }
         .onAppear {
             didNavigateBackToCoachHubAfterDisplayDisconnect = false
             didAttemptCoachRelayAutoReconnect = false
@@ -310,7 +315,9 @@ struct DribbleOrPassCoachRemoteView: View {
                 logDecision(repIndex: currentRepIndex, gate: swipe.gate)
             },
             coachFirstRunActivityId: ActivityKind.dribbleOrPass.sessionActivityActivityId,
-            coachTransportConnected: coachSessionConnected
+            coachTransportConnected: coachSessionConnected,
+            loggingPhaseEvaluativeTitle: CoachRemoteCopy.loggingAnticipationHeadline,
+            loggingPhaseEvaluativeSubtitle: CoachRemoteCopy.dribbleOrPassLoggingEvaluativeDetail
         )
         .id(coachSessionInputResetToken)
     }
@@ -577,6 +584,13 @@ struct DribbleOrPassCoachRemoteView: View {
 
     /// Return to Coach Remote **Start Session** (activity grid). Does not message the display or start a new drill.
     private func coachStartNextBlockTapped() {
+        if coachSessionConnected {
+            remoteService.send(.startNextBlock(timestamp: Date()))
+        }
+        currentRepIndex = 0
+        clearRepStartAckWaitState()
+        state = .ready
+        resetCoachSessionInput()
         didNavigateBackToCoachHubAfterDisplayDisconnect = false
         router.popCoachRemoteToStartSessionHub(dismiss: dismiss, expectingTopRoute: .dribbleOrPassCoachRemote)
     }
@@ -613,6 +627,15 @@ struct DribbleOrPassCoachRemoteView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             showReconnectRestartOverlay = false
         }
+    }
+
+    private func applyPartnerSoftReconnectFromCoordinatorNotificationDribbleOrPass() {
+        guard TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive else { return }
+        if case .blockComplete = state { return }
+        clearRepStartAckWaitState()
+        state = .ready
+        resetCoachSessionInput()
+        triggerReconnectRestartOverlay()
     }
 
     private func coachSyncRepIndexForCheckpoint() -> Int {

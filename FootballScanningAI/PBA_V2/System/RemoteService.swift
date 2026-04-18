@@ -69,6 +69,9 @@ final class RemoteService: ObservableObject {
 
     func sendNextRep(repIndex: Int) {
         send(.nextRep(repIndex: repIndex))
+        DispatchQueue.main.async {
+            TrainingPartnerConnectionCoordinator.shared.markPartnerDrillUnderwayForMidSessionRecovery()
+        }
     }
 
     func sendCalibrationPassTapped(timestamp: Date) {

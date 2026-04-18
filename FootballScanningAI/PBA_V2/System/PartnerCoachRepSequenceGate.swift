@@ -12,4 +12,9 @@ struct PartnerCoachRepSequenceGate: Equatable {
     mutating func recordNextRepSuccessfullyApplied(_ repIndex: Int) {
         expectedNextCoachRepIndex = repIndex + 1
     }
+
+    /// After partner soft reconnect, coach re-sends `nextRep` for the same rep; rewind the stale guard from `expected = rep+1` so the apply path runs again.
+    mutating func alignExpectedNextForCoachSoftReconnectReplay(repIndex: Int) {
+        expectedNextCoachRepIndex = repIndex
+    }
 }

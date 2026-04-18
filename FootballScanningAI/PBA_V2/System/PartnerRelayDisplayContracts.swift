@@ -122,6 +122,11 @@ struct PartnerRelayLifecycleBannerOverlay: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundColor(.white)
                 .multilineTextAlignment(.center)
+        case .reconnectedRestartingRep:
+            Text("Reconnected — restarting rep")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.white)
+                .multilineTextAlignment(.center)
         case .sessionRequiresRejoin:
             EmptyView()
         case .checkpointMismatch(let hint):
@@ -138,7 +143,7 @@ struct PartnerRelayLifecycleBannerOverlay: View {
             return Color.red.opacity(0.42)
         case .reconnecting, .restoringSession:
             return Color.blue.opacity(0.5)
-        case .connectionRestored, .sessionRestoredSoft:
+        case .connectionRestored, .sessionRestoredSoft, .reconnectedRestartingRep:
             return Color.green.opacity(0.4)
         case .hidden:
             return .clear
@@ -278,7 +283,7 @@ struct PartnerDisplaySessionTopChrome: View {
     }
 }
 
-/// Full-screen scrim mid-drill when the partner link drops; after ~10s offers **End Session** or **Reconnect** (no engine reset on reconnect).
+/// Full-screen scrim mid-drill when the partner link drops; either side can start fresh without ending the whole pairing run or restarting the app.
 struct PartnerMidSessionDisconnectRecoveryOverlay: View {
     @ObservedObject private var coordinator = TrainingPartnerConnectionCoordinator.shared
     @EnvironmentObject private var router: AppRouter
@@ -290,45 +295,39 @@ struct PartnerMidSessionDisconnectRecoveryOverlay: View {
                     Color.black.opacity(0.58)
                         .ignoresSafeArea()
                     VStack(spacing: 20) {
-                        Text(primaryMessage)
-                            .font(.headline.weight(.semibold))
-                            .foregroundColor(.white)
-                            .multilineTextAlignment(.center)
-                        Text("We’ll resume from the current rep when the link returns.")
+                        VStack(spacing: 6) {
+                            Text(primaryMessage)
+                                .font(.headline.weight(.semibold))
+                                .foregroundColor(.white)
+                                .multilineTextAlignment(.center)
+                            Text("Session ended")
+                                .font(.subheadline)
+                                .foregroundColor(.white.opacity(0.8))
+                                .multilineTextAlignment(.center)
+                        }
+                        Text(subtitleMessage)
                             .font(.subheadline)
                             .foregroundColor(.white.opacity(0.72))
                             .multilineTextAlignment(.center)
-                        if coordinator.showPartnerMidSessionRecoveryChoices {
-                            VStack(spacing: 12) {
-                                Button {
-                                    router.popToRoot(endingPartnerSession: true)
-                                } label: {
-                                    Text("End Session")
-                                        .font(.headline)
-                                        .foregroundColor(.white)
-                                        .frame(maxWidth: .infinity)
-                                        .padding(.vertical, 14)
-                                        .background(Color.red.opacity(0.55))
-                                        .cornerRadius(12)
+                        Button {
+                            if CoachRemoteSessionStartGate.isPadPlayerRole() {
+                                Task {
+                                    await coordinator.startNewPartnerSessionFromDisconnect(router: router)
                                 }
-                                .buttonStyle(.plain)
-                                Button {
-                                    Task {
-                                        await coordinator.attemptPartnerLinkReconnectFromUserChoice()
-                                    }
-                                } label: {
-                                    Text("Reconnect")
-                                        .font(.headline)
-                                        .foregroundColor(.black)
-                                        .frame(maxWidth: .infinity)
-                                        .padding(.vertical, 14)
-                                        .background(Color.yellow)
-                                        .cornerRadius(12)
-                                }
-                                .buttonStyle(.plain)
+                            } else {
+                                coordinator.handleCoachEnterCodeAfterDisplayUnavailable(router: router)
                             }
-                            .padding(.top, 8)
+                        } label: {
+                            Text(primaryActionTitle)
+                                .font(.headline)
+                                .foregroundColor(.black)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                                .background(Color.yellow)
+                                .cornerRadius(12)
                         }
+                        .buttonStyle(.plain)
+                        .padding(.top, 8)
                     }
                     .padding(.horizontal, 28)
                     .padding(.vertical, 32)
@@ -340,8 +339,20 @@ struct PartnerMidSessionDisconnectRecoveryOverlay: View {
 
     private var primaryMessage: String {
         CoachRemoteSessionStartGate.isPadPlayerRole()
-            ? "Connection lost — waiting for coach..."
-            : "Reconnecting..."
+            ? "Remote disconnected"
+            : "Display unavailable"
+    }
+
+    private var subtitleMessage: String {
+        CoachRemoteSessionStartGate.isPadPlayerRole()
+            ? "Start a new relay session on this iPad. The coach will need the new join code."
+            : "Return to the join screen and enter the code shown on the iPad."
+    }
+
+    private var primaryActionTitle: String {
+        CoachRemoteSessionStartGate.isPadPlayerRole()
+            ? "Start New Session"
+            : "Enter Code"
     }
 }
 

@@ -162,6 +162,35 @@ final class PartnerRelayDisplaySession: ObservableObject {
         await startDisplaySession()
     }
 
+    /// Stops the relay WebSocket and cancels deferred recycle work (display-side relay “host”).
+    /// Does **not** clear `joinCode` / `relaySessionId`; use ``resetSession()`` for a full new session.
+    func stopHosting() {
+        cancelRelayDisconnectRecycleTask()
+        lastSocketStateForRecycle = .disconnected
+        transport?.disconnect()
+        socketConnectionState = .disconnected
+        isCoachPaired = false
+        onCoachPairingChanged?(false)
+    }
+
+    /// Full relay reset: tear down local state and create a **new** HTTP session (new `relaySessionId` + join code).
+    @MainActor
+    func resetSession() async {
+        let previousJoin = joinCode
+        let previousSessionId = relaySessionId
+        cancelRelayDisconnectRecycleTask()
+        tearDown()
+        await startDisplaySession()
+        #if DEBUG
+        if let j = joinCode, let p = previousJoin, !p.isEmpty, j == p {
+            print("[RelayWS-DEBUG] resetSession: unexpected — join code unchanged after new POST (old=\(p) new=\(j))")
+        }
+        if let s = relaySessionId, let ps = previousSessionId, !ps.isEmpty, s == ps {
+            print("[RelayWS-DEBUG] resetSession: unexpected — relaySessionId unchanged after new POST (old=\(ps) new=\(s))")
+        }
+        #endif
+    }
+
     /// App moved to background (springboard / app switcher). Disconnect socket but **keep** `joinCode` and `transport`
     /// so ``startDisplaySessionIfNeeded()`` can reconnect without a new HTTP session.
     func suspendForAppBackground() {
@@ -192,9 +221,7 @@ final class PartnerRelayDisplaySession: ObservableObject {
     /// Tear down the expired relay and create a fresh display session (new join code).
     @MainActor
     func recycleRelaySessionForExpiredJoinCode() async {
-        cancelRelayDisconnectRecycleTask()
-        tearDown()
-        await startDisplaySession()
+        await resetSession()
     }
 
     /// Sends a message when display relay is active (e.g. session ended). Safe no-op if not connected.

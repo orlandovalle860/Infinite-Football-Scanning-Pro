@@ -17,6 +17,8 @@ struct TwoMinuteTestResultsView: View {
     var onDismissCover: (() -> Void)? = nil
     /// When set (e.g. from fullScreenCover), "Start Training" pushes the recommended activity's role selection onto the cover's path instead of using trainingTarget.
     var onStartTraining: ((ActivityKind) -> Void)? = nil
+    /// Display-only: pass-tempo calibration drifted from nominal during this run.
+    var showTimingAdaptationFeedback: Bool = false
     @EnvironmentObject private var progressStore: ProgressStore
     @EnvironmentObject private var playerStore: PlayerStore
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
@@ -32,6 +34,7 @@ struct TwoMinuteTestResultsView: View {
     @State private var navigateToCreateProfile = false
     @State private var navigateToPlayerReport = false
     @State private var showQuickCalibration = false
+    @State private var shareSheetPayload: BlockShareSheetPayload?
     private let plannedTestReps: Int = 10
     private var loggedReps: Int { result.totalReps }
 
@@ -188,6 +191,9 @@ struct TwoMinuteTestResultsView: View {
             }
             .interactiveDismissDisabled()
         }
+        .sheet(item: $shareSheetPayload) { payload in
+            ShareSheet(items: payload.items)
+        }
     }
 
     private func logResultsUIDebug() {
@@ -232,6 +238,12 @@ struct TwoMinuteTestResultsView: View {
                 Spacer()
                 Text(totalCount > 0 ? "\(lateCount)" : "—")
                     .foregroundColor(.white.opacity(0.9))
+            }
+            if showTimingAdaptationFeedback {
+                Text("Adapted to your pace")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.7))
+                    .padding(.top, 4)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -298,6 +310,19 @@ struct TwoMinuteTestResultsView: View {
                     .foregroundColor(.white.opacity(0.85))
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity)
+                HStack {
+                    Spacer()
+                    Button {
+                        presentTwoMinuteBlockShareSheet()
+                    } label: {
+                        Text("Share Result")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundColor(.white.opacity(0.88))
+                    }
+                    .buttonStyle(.plain)
+                    Spacer()
+                }
+                .padding(.top, 8)
             } else {
                 Button {
                     let route = PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest)
@@ -466,6 +491,56 @@ struct TwoMinuteTestResultsView: View {
             // For non-training routes that are not expected here, keep a safe empty fallback.
             EmptyView()
         }
+    }
+
+    /// Aligns with ``SessionSummaryScreenView`` / ``SessionBlockShare`` (same card + plain text).
+    private var twoMinuteSessionSnapshotForShare: SessionResult? {
+        guard let pid = profileManager.currentProfile?.id ?? playerStore.selectedPlayerId else { return nil }
+        return SessionResult(
+            playerID: pid,
+            activityType: .twoMinuteTest,
+            correctCount: result.correctCount,
+            totalReps: result.totalReps,
+            speedCounts: SessionSpeedCounts(fast: result.fastCount, medium: result.mediumCount, slow: result.slowCount),
+            avgDecisionTime: result.avgDecisionTime,
+            biasDirection: result.biasDirection,
+            directionCounts: result.directionCounts,
+            difficulty: result.difficulty,
+            forwardChoiceCount: result.forwardChoiceCount,
+            forwardOpportunityCount: result.forwardOpportunityCount
+        )
+    }
+
+    private func recentRecommendationScores(for playerId: UUID) -> [Int] {
+        let sessions = profileManager.profile(id: playerId)?.sessionResults ?? []
+        return sessions.sorted(by: { $0.date < $1.date }).map { r in
+            if let score = r.decisionTotalScore {
+                return max(0, min(100, Int(score.rounded())))
+            }
+            return r.estimatedDecisionSpeedScore ?? 0
+        }
+    }
+
+    private func playerRecommendationForTwoMinuteShare(session: SessionResult) -> PlayerRecommendation {
+        let score = SessionBlockShare.decisionScoreValue(session: session)
+        let accuracy = session.totalReps > 0 ? Double(session.correctCount) / Double(session.totalReps) : 0
+        let decisionWindow = session.avgDecisionWindowSeconds ?? 0
+        return generateRecommendation(
+            score: score,
+            accuracy: accuracy,
+            decisionWindow: decisionWindow,
+            recentScores: recentRecommendationScores(for: session.playerID),
+            totalReps: session.totalReps
+        )
+    }
+
+    private func presentTwoMinuteBlockShareSheet() {
+        guard let session = twoMinuteSessionSnapshotForShare else { return }
+        let name = profileManager.currentProfile?.name ?? "Player"
+        let rec = playerRecommendationForTwoMinuteShare(session: session)
+        shareSheetPayload = BlockShareSheetPayload(
+            items: SessionBlockShare.activityItems(session: session, playerName: name, playerRecommendation: rec)
+        )
     }
 
     private func saveProgressIfNeeded() {

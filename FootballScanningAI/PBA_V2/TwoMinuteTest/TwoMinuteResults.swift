@@ -131,6 +131,7 @@ struct TwoMinuteTestResult: Identifiable, Hashable {
 struct TwoMinuteResultItem: Identifiable, Equatable {
     let result: TwoMinuteTestResult
     let logs: [RepLog]
+    var showTimingAdaptationFeedback: Bool = false
     var id: UUID { result.id }
 
     static func == (lhs: TwoMinuteResultItem, rhs: TwoMinuteResultItem) -> Bool {

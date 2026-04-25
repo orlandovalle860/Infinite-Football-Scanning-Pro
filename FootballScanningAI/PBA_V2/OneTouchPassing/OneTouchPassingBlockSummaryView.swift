@@ -37,6 +37,17 @@ struct OneTouchPassingBlockSummaryView: View {
     @State private var previousSessionForComparison: SessionRecord?
     @State private var personalBestScore: Int?
     @State private var isNewPersonalBestForDecisionSpeed = false
+    @State private var earlySessionStreakForSummary: Int?
+    @State private var earlyRepBestStreakForSummary: Int?
+
+    private var endingEarlyRepStreak: Int {
+        EarlyDecisionStreak.endingEarlyRepCount(from: results.map { $0.decisionSpeed == .fast })
+    }
+
+    private var maxConsecutiveEarlyRepStreak: Int {
+        let flags = results.map { $0.decisionSpeed == .fast }
+        return EarlyDecisionStreak.maxConsecutiveEarlyDuringBlock(from: flags)
+    }
 
     private var blockResult: OneTouchBlockResult {
         OneTouchBlockResult.from(repResults: results)
@@ -220,6 +231,9 @@ struct OneTouchPassingBlockSummaryView: View {
                     xpEarned: xpEarnedFromBlock,
                     newlyUnlockedBadges: newlyUnlockedBadgesFromBlock,
                     onRunItBack: onRunItBack,
+                    earlyRepEndingStreak: endingEarlyRepStreak,
+                    earlyRepBestStreak: earlyRepBestStreakForSummary,
+                    earlySessionStreakDisplay: earlySessionStreakForSummary,
                     profileManager: profileManager,
                     settingsViewModel: settingsViewModel
                 )
@@ -336,6 +350,9 @@ struct OneTouchPassingBlockSummaryView: View {
                 newPersonalBestsFromBlock = rewards.newPersonalBests
                 xpEarnedFromBlock = rewards.xpEarned
                 newlyUnlockedBadgesFromBlock = rewards.newlyUnlockedBadges
+                earlySessionStreakForSummary = EarlySessionStreakStore.current(for: result.playerID)
+                let bestEarly = BestEarlyStreakStore.recordIfNewBest(maxConsecutiveEarlyRepStreak, playerId: result.playerID)
+                earlyRepBestStreakForSummary = bestEarly > 0 ? bestEarly : nil
                 sessionResultForSummary = result
             }
             didSave = true

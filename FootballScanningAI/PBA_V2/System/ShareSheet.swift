@@ -8,77 +8,158 @@
 import SwiftUI
 import UIKit
 
-/// Rasterized for `UIActivityViewController` via ``View/asImage()``.
+// MARK: - Share card timing (maps from dominant `SpeedBucket`; no scoring changes)
+
+fileprivate enum DecisionTimingCategory {
+    case early
+    case onTime
+    case late
+}
+
+private func decisionTimingCategory(from bucket: SpeedBucket) -> DecisionTimingCategory {
+    switch bucket {
+    case .fast: return .early
+    case .medium: return .onTime
+    case .slow: return .late
+    }
+}
+
+private func nextLevelText(timing: DecisionTimingCategory) -> String {
+    switch timing {
+    case .early:
+        return "Maintain early decisions to stay elite"
+    case .onTime:
+        return "Be earlier on more reps to reach 100"
+    case .late:
+        return "Decide before the ball arrives to increase your score"
+    }
+}
+
+// MARK: - Square share card (aligned with in-app session results)
+
+/// Rasterized for `UIActivityViewController` via ``View/asImage()`` — **1080×1080** for social feeds.
 struct ShareCardView: View {
-    let activity: String
+    let activityTitle: String
     let score: Int
-    let level: String
-    let accuracy: Int
-    let avgTime: Double
-    let fast: Int
-    let onTime: Int
-    let late: Int
+    /// Performance band from `playerRecommendation.level` (e.g. Reactive … Elite).
+    let scoreBandLabel: String
+    let correctCount: Int
+    let totalReps: Int
+    fileprivate let timingCategory: DecisionTimingCategory
+    let decisionQualityLine: String
+    let timingHeadline: String
+    let timingColor: Color
+    let coachingLine: String
+    private let footerLine = "Perception Before Action"
 
     var body: some View {
-        VStack(spacing: 20) {
-            Text(activity)
-                .font(.subheadline)
-                .foregroundColor(.gray)
+        ZStack {
+            Color(red: 0.08, green: 0.08, blue: 0.12)
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
 
-            Text("\(score)")
-                .font(.system(size: 72, weight: .bold))
-                .foregroundColor(.white)
-                .shadow(color: Color.white.opacity(0.2), radius: 10)
+                Text(activityTitle)
+                    .font(.system(size: 40, weight: .semibold))
+                    .foregroundColor(.white)
+                    .multilineTextAlignment(.center)
+                    .minimumScaleFactor(0.85)
+                    .padding(.horizontal, 56)
 
-            Text(level)
-                .font(.caption)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(Color.white.opacity(0.1))
-                .cornerRadius(10)
-                .foregroundColor(.white)
+                Spacer().frame(height: 44)
 
-            VStack(spacing: 12) {
-                HStack(spacing: 16) {
-                    Text("🎯 \(accuracy)%")
-                    Text(String(format: "⏱ %.1fs", avgTime))
+                VStack(spacing: 12) {
+                    Text("\(score)")
+                        .font(.system(size: 132, weight: .bold, design: .rounded))
+                        .foregroundColor(score == 100 ? .green : .white)
+                        .perfectScoreHighlight(score: score)
+
+                    if score < 100 {
+                        Text("\(100 - score) points left — earlier decisions unlock 100")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    Text(scoreBandLabel)
+                        .font(.headline)
+                        .foregroundColor(score == 100 ? .green : .secondary)
+
+                    if timingCategory != .early {
+                        Text("Earlier decisions unlock higher scores")
+                            .font(.system(size: 26, weight: .regular))
+                            .foregroundColor(.secondary)
+                    }
+
+                    VStack(spacing: 4) {
+                        Text("Driven by")
+                            .font(.system(size: 26, weight: .medium))
+                            .foregroundColor(.secondary)
+
+                        if totalReps > 0, correctCount == totalReps {
+                            Text("Perfect decisions")
+                        } else {
+                            Text("\(correctCount)/\(totalReps) correct decisions")
+                        }
+
+                        Text("Timing: \(timingHeadline)")
+                    }
+                    .font(.system(size: 30, weight: .regular))
+                    .foregroundColor(.white.opacity(0.9))
+                    .multilineTextAlignment(.center)
                 }
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.95))
 
-                HStack(spacing: 16) {
-                    Text("⚡ \(fast)")
-                    Text("✓ \(onTime)")
-                    Text("• \(late)")
+                Spacer().frame(height: 40)
+
+                VStack(spacing: 14) {
+                    Text("Decision Quality")
+                        .font(.system(size: 28, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.95))
+                    Text(decisionQualityLine)
+                        .font(.system(size: 32, weight: .medium, design: .rounded))
+                        .foregroundColor(.white)
+                        .multilineTextAlignment(.center)
                 }
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.95))
+
+                Spacer().frame(height: 40)
+
+                VStack(spacing: 14) {
+                    Text("Decision Timing")
+                        .font(.system(size: 28, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.95))
+                    Text(timingHeadline)
+                        .font(.system(size: 36, weight: .bold, design: .rounded))
+                        .foregroundColor(timingColor)
+                }
+
+                Spacer().frame(height: 36)
+
+                Text(coachingLine)
+                    .font(.system(size: 26, weight: .regular))
+                    .foregroundColor(.white.opacity(0.92))
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(6)
+                    .padding(.horizontal, 64)
+
+                Spacer().frame(height: 12)
+
+                Text(nextLevelText(timing: timingCategory))
+                    .font(.system(size: 30, weight: .regular))
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 56)
+
+                Spacer().frame(height: 40)
+
+                Text(footerLine)
+                    .font(.system(size: 24, weight: .medium))
+                    .foregroundColor(.white.opacity(0.55))
+                    .tracking(0.8)
+
+                Spacer(minLength: 0)
             }
-            .padding()
-            .background(Color.white.opacity(0.05))
-            .cornerRadius(16)
-
-            Text("Can you beat this?")
-                .font(.headline)
-                .foregroundColor(.yellow)
-
-            Text("PBA Training")
-                .font(.caption2)
-                .foregroundColor(.gray)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.vertical, 72)
         }
-        .frame(maxWidth: .infinity, alignment: .center)
-        .padding(28)
-        .frame(width: 320)
-        .background(
-            LinearGradient(
-                colors: [
-                    Color.black.opacity(0.9),
-                    Color.black.opacity(0.7)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
+        .frame(width: 1080, height: 1080)
     }
 }
 
@@ -122,19 +203,81 @@ enum SessionBlockShare {
     static func plainText(
         session: SessionResult,
         playerName _: String,
-        playerRecommendation _: PlayerRecommendation
+        playerRecommendation: PlayerRecommendation
     ) -> String {
-        let activityTitle = activityTitle(for: session.activityType)
         let score = decisionScoreValue(session: session)
-        let accPct = accuracyPercent(session: session)
-        let avgReaction = String(format: "%.2fs", session.avgDecisionTime ?? 0)
-        return [
-            activityTitle,
-            "",
-            "\(score) | \(accPct)% | \(avgReaction)",
-            "",
-            "Can you beat this?"
-        ].joined(separator: "\n")
+        let ratio = "\(session.correctCount)/\(session.totalReps)"
+        if score == 100 {
+            let activityName = activityTitle(for: session.activityType)
+            return """
+\(activityName)
+
+100 (Perfect) | \(ratio) | Early
+
+Can you match this?
+"""
+        }
+        let scoreBandLabel = playerRecommendation.level.rawValue
+        let timing = timingHeadlineLabel(dominantTimingBucket(session: session))
+        let line = "\(score) (\(scoreBandLabel)) | \(ratio) | \(timing)"
+        return "\(line)\n\nCan you beat this?"
+    }
+
+    /// Single stats line: `score (Band) | correct/total | Early|On Time|Late` (competitive, minimal).
+    static func shareCaptionLine(session: SessionResult, playerRecommendation: PlayerRecommendation) -> String {
+        let score = decisionScoreValue(session: session)
+        let ratio = "\(session.correctCount)/\(session.totalReps)"
+        if score == 100 {
+            return "100 (Perfect) | \(ratio) | Early"
+        }
+        let scoreBandLabel = playerRecommendation.level.rawValue
+        let timing = timingHeadlineLabel(dominantTimingBucket(session: session))
+        return "\(score) (\(scoreBandLabel)) | \(ratio) | \(timing)"
+    }
+
+    static func decisionQualityLine(session: SessionResult) -> String {
+        let correct = session.correctCount
+        let total = session.totalReps
+        if total > 0, correct == total {
+            return "Perfect decisions (\(correct) / \(total))"
+        }
+        return "\(correct) / \(total) correct"
+    }
+
+    static func dominantTimingBucket(session: SessionResult) -> SpeedBucket {
+        let c = session.speedCounts
+        return UniversalBlockSummaryHeadline.resolve(fast: c.fast, medium: c.medium, slow: c.slow).bucket
+    }
+
+    static func timingHeadlineLabel(_ bucket: SpeedBucket) -> String {
+        switch bucket {
+        case .fast: return "Early"
+        case .medium: return "On Time"
+        case .slow: return "Late"
+        }
+    }
+
+    static func timingShareColor(_ bucket: SpeedBucket) -> Color {
+        switch bucket {
+        case .fast: return .green
+        case .medium: return .yellow
+        case .slow: return .red
+        }
+    }
+
+    /// Share image only: honest coaching line (perfect score vs accuracy vs commit earlier).
+    static func shareCardCoachingLine(session: SessionResult) -> String {
+        let score = decisionScoreValue(session: session)
+        if score == 100 {
+            return "Perfect — early on every rep."
+        }
+        let correct = session.correctCount
+        let total = session.totalReps
+        if total > 0, correct == total {
+            return "Perfect decisions — decide earlier."
+        } else {
+            return "Decide earlier."
+        }
     }
 
     private static func activityTitle(for kind: ActivityKind) -> String {
@@ -146,21 +289,22 @@ enum SessionBlockShare {
         }
     }
 
-    private static func accuracyPercent(session: SessionResult) -> Int {
-        guard session.totalReps > 0 else { return 0 }
-        return Int(round(Double(session.correctCount) / Double(session.totalReps) * 100.0))
-    }
-
     private static func shareCardImage(session: SessionResult, playerRecommendation: PlayerRecommendation) -> UIImage {
-        ShareCardView(
-            activity: activityTitle(for: session.activityType),
+        let bucket = dominantTimingBucket(session: session)
+        let scoreBandLabel = playerRecommendation.level.rawValue
+        let timingCat = decisionTimingCategory(from: bucket)
+        let card = ShareCardView(
+            activityTitle: activityTitle(for: session.activityType),
             score: decisionScoreValue(session: session),
-            level: playerRecommendation.level.rawValue,
-            accuracy: accuracyPercent(session: session),
-            avgTime: max(0, session.avgDecisionTime ?? 0),
-            fast: session.speedCounts.fast,
-            onTime: session.speedCounts.medium,
-            late: session.speedCounts.slow
-        ).asImage()
+            scoreBandLabel: scoreBandLabel,
+            correctCount: session.correctCount,
+            totalReps: session.totalReps,
+            timingCategory: timingCat,
+            decisionQualityLine: decisionQualityLine(session: session),
+            timingHeadline: timingHeadlineLabel(bucket),
+            timingColor: timingShareColor(bucket),
+            coachingLine: shareCardCoachingLine(session: session)
+        )
+        return card.asImage()
     }
 }

@@ -40,6 +40,24 @@ struct AwayFromPressureBlockSummaryView: View {
     @State private var previousSessionForComparison: SessionRecord?
     @State private var personalBestScore: Int?
     @State private var isNewPersonalBestForDecisionSpeed = false
+    @State private var earlySessionStreakForSummary: Int?
+    @State private var earlyRepBestStreakForSummary: Int?
+
+    private var earlyRepFlagsForBestStreak: [Bool] {
+        logs.map { log -> Bool in
+            guard let t = log.decisionTimeSeconds else { return false }
+            return travelTimeSeconds - t > 0.25
+        }
+    }
+
+    /// Consecutive early reps at end of block (same threshold as `speedCounts`: window > 0.25s).
+    private var endingEarlyRepStreak: Int {
+        EarlyDecisionStreak.endingEarlyRepCount(from: earlyRepFlagsForBestStreak)
+    }
+
+    private var maxConsecutiveEarlyRepStreak: Int {
+        EarlyDecisionStreak.maxConsecutiveEarlyDuringBlock(from: earlyRepFlagsForBestStreak)
+    }
 
     private var correctCount: Int { logs.filter(\.correct).count }
 
@@ -272,6 +290,9 @@ struct AwayFromPressureBlockSummaryView: View {
                     xpEarned: xpEarnedFromBlock,
                     newlyUnlockedBadges: newlyUnlockedBadgesFromBlock,
                     onRunItBack: onRunItBack,
+                    earlyRepEndingStreak: endingEarlyRepStreak,
+                    earlyRepBestStreak: earlyRepBestStreakForSummary,
+                    earlySessionStreakDisplay: earlySessionStreakForSummary,
                     profileManager: profileManager,
                     settingsViewModel: settingsViewModel
                 )
@@ -411,6 +432,9 @@ struct AwayFromPressureBlockSummaryView: View {
                 newPersonalBestsFromBlock = rewards.newPersonalBests
                 xpEarnedFromBlock = rewards.xpEarned
                 newlyUnlockedBadgesFromBlock = rewards.newlyUnlockedBadges
+                earlySessionStreakForSummary = EarlySessionStreakStore.current(for: result.playerID)
+                let bestEarly = BestEarlyStreakStore.recordIfNewBest(maxConsecutiveEarlyRepStreak, playerId: result.playerID)
+                earlyRepBestStreakForSummary = bestEarly > 0 ? bestEarly : nil
                 sessionResultForSummary = result
             }
             didSave = true

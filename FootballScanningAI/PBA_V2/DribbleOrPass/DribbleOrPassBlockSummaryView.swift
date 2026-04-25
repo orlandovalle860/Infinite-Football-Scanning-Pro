@@ -12,6 +12,10 @@ struct DribbleOrPassBlockSummaryView: View {
     let config: DribbleOrPassConfig
     var summaryCalibratedTravelSeconds: Double? = nil
     var showTimingAdaptationFeedback: Bool = false
+    /// Live in-session streak from ``DribbleOrPassEngine.earlyStreak`` when available; otherwise derived from `results`.
+    var liveEarlyRepStreak: Int? = nil
+    /// Live all-time best from ``DribbleOrPassEngine.bestEarlyStreak`` when available (persisted during the block).
+    var liveBestEarlyRepStreak: Int? = nil
     let onRunItBack: () -> Void
 
     private let timingCalibrationActivityId = ActivityKind.dribbleOrPass.sessionActivityActivityId
@@ -36,6 +40,12 @@ struct DribbleOrPassBlockSummaryView: View {
     @State private var previousSessionForComparison: SessionRecord?
     @State private var personalBestScore: Int?
     @State private var isNewPersonalBestForDecisionSpeed = false
+    @State private var earlySessionStreakForSummary: Int?
+
+    private var endingEarlyRepStreak: Int {
+        if let live = liveEarlyRepStreak { return live }
+        return EarlyDecisionStreak.endingEarlyRepCount(from: results.map { $0.decisionSpeed == .fast })
+    }
 
     private var blockResult: DribbleOrPassBlockResult {
         DribbleOrPassBlockResult.from(repResults: results)
@@ -208,6 +218,9 @@ struct DribbleOrPassBlockSummaryView: View {
                     xpEarned: xpEarnedFromBlock,
                     newlyUnlockedBadges: newlyUnlockedBadgesFromBlock,
                     onRunItBack: onRunItBack,
+                    earlyRepEndingStreak: endingEarlyRepStreak,
+                    earlyRepBestStreak: liveBestEarlyRepStreak,
+                    earlySessionStreakDisplay: earlySessionStreakForSummary,
                     profileManager: profileManager,
                     settingsViewModel: settingsViewModel
                 )
@@ -330,6 +343,7 @@ struct DribbleOrPassBlockSummaryView: View {
                 newPersonalBestsFromBlock = rewards.newPersonalBests
                 xpEarnedFromBlock = rewards.xpEarned
                 newlyUnlockedBadgesFromBlock = rewards.newlyUnlockedBadges
+                earlySessionStreakForSummary = EarlySessionStreakStore.current(for: result.playerID)
                 sessionResultForSummary = result
             }
             didSave = true

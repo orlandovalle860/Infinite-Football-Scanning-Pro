@@ -65,7 +65,12 @@ struct DribbleOrPassDisplaySessionView: View {
             mode: mode
         )
         let plan = DribbleOrPassScenarioGenerator.generatePlan(forBlockSize: repCount)
-        _engine = StateObject(wrappedValue: DribbleOrPassEngine(config: config, trainingMode: mode, plan: plan))
+        _engine = StateObject(wrappedValue: DribbleOrPassEngine(
+            config: config,
+            trainingMode: mode,
+            plan: plan,
+            playerId: profileManager.currentProfile?.id
+        ))
     }
 
     private var blockTotalReps: Int {
@@ -83,6 +88,7 @@ struct DribbleOrPassDisplaySessionView: View {
             statusOverlay
                 .opacity(statusOverlayOpacity)
             repCountOverlay
+            clutchRepCueOverlay
             if showExitLogButtons, let repIndex = repIndexForExit {
                 exitLogOverlay(repIndex: repIndex)
                     .zIndex(2)
@@ -106,6 +112,8 @@ struct DribbleOrPassDisplaySessionView: View {
                 config: config,
                 summaryCalibratedTravelSeconds: blockSummaryCalibratedTravelSeconds,
                 showTimingAdaptationFeedback: blockSummaryShowTimingAdaptationFeedback,
+                liveEarlyRepStreak: engine.earlyStreak,
+                liveBestEarlyRepStreak: engine.bestEarlyStreak > 0 ? engine.bestEarlyStreak : nil,
                 onRunItBack: runItBackFromSummary,
                 settingsViewModel: settingsViewModel,
                 profileManager: profileManager
@@ -784,6 +792,29 @@ struct DribbleOrPassDisplaySessionView: View {
                 )
                 hasCompletedPassTempoCalibration = true
                 showPassTempoCalibration = false
+            }
+        }
+    }
+
+    /// Clutch = one early rep from tying best; hide on block complete to avoid flash before summary.
+    private var showClutchRepCue: Bool {
+        guard engine.isClutchRep else { return false }
+        if case .blockComplete = engine.phase { return false }
+        return true
+    }
+
+    private var clutchRepCueOverlay: some View {
+        Group {
+            if showClutchRepCue {
+                VStack {
+                    Text("🔥 One more for a new best")
+                        .font(.subheadline)
+                        .foregroundColor(.orange)
+                        .padding(.top, 56)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .allowsHitTesting(false)
             }
         }
     }

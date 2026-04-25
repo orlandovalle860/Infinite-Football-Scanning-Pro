@@ -7,6 +7,9 @@
 
 import Foundation
 import Combine
+#if canImport(UIKit)
+import UIKit
+#endif
 
 enum DribbleOrPassPhase: Equatable {
     case waitingForNextRep
@@ -25,6 +28,15 @@ final class DribbleOrPassEngine: ObservableObject {
         }
     }
     @Published private(set) var repResults: [DribbleOrPassRepResult] = []
+    /// Consecutive reps with fast (early) timing; reset on non-early rep (mirrors in-session streak rules).
+    @Published private(set) var earlyStreak: Int = 0
+    /// All-time best consecutive early reps for this player (persisted); updated when current streak exceeds it.
+    @Published private(set) var bestEarlyStreak: Int = 0
+
+    /// One early rep away from tying the stored best streak (tension moment).
+    var isClutchRep: Bool {
+        bestEarlyStreak >= 3 && earlyStreak == bestEarlyStreak - 1
+    }
     @Published var instructionTitle: String = ""
     @Published var instructionSubtitle: String = ""
     @Published private(set) var revealedGates: Set<Gate> = []
@@ -32,6 +44,7 @@ final class DribbleOrPassEngine: ObservableObject {
 
     private let config: DribbleOrPassConfig
     private let trainingMode: TrainingMode
+    private let playerId: UUID?
     private let plan: [DribbleOrPassRepPlan]
     private(set) var currentRepIndex: Int = 0
     private var passTriggeredAt: Date?
@@ -46,11 +59,26 @@ final class DribbleOrPassEngine: ObservableObject {
     private var directionLoggedByRep: [Int: Date] = [:]
     private var adaptiveState = AdaptiveState()
     private var sessionAdaptiveDifficulty = DifficultySettings(cueDuration: 1.0, travelTime: 1.0, thresholdAdjustment: 0.0)
+#if canImport(UIKit)
+    private let earlyStreakContinueHaptic = UIImpactFeedbackGenerator(style: .light)
+    private let earlyStreakLostHaptic = UINotificationFeedbackGenerator()
+    private let clutchPrepHaptic = UIImpactFeedbackGenerator(style: .light)
+    private let newBestEarlyStreakHaptic = UINotificationFeedbackGenerator()
+#endif
 
-    init(config: DribbleOrPassConfig, trainingMode: TrainingMode = .solo, plan: [DribbleOrPassRepPlan] = DribbleOrPassScenarioGenerator.generatePlan()) {
+    init(
+        config: DribbleOrPassConfig,
+        trainingMode: TrainingMode = .solo,
+        plan: [DribbleOrPassRepPlan] = DribbleOrPassScenarioGenerator.generatePlan(),
+        playerId: UUID? = nil
+    ) {
         self.config = config
         self.trainingMode = trainingMode
         self.plan = plan
+        self.playerId = playerId
+        if let id = playerId {
+            bestEarlyStreak = BestEarlyStreakStore.current(for: id)
+        }
         updateInstructions()
     }
 
@@ -132,6 +160,12 @@ final class DribbleOrPassEngine: ObservableObject {
         )
         #endif
         let endsAt = Date().addingTimeInterval(delay)
+#if canImport(UIKit)
+        if isClutchRep {
+            clutchPrepHaptic.prepare()
+            clutchPrepHaptic.impactOccurred(intensity: 0.5)
+        }
+#endif
         commitPhase(.armedScanning(repIndex: repIndex, endsAt: endsAt))
 
         scanTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
@@ -285,6 +319,7 @@ final class DribbleOrPassEngine: ObservableObject {
         directionLoggedByRep.removeAll()
         pendingFirstTouchByRep.removeAll()
         repResults.removeAll()
+        earlyStreak = 0
         repDecisions.removeAll()
         revealedGates = []
         adaptiveState = AdaptiveState()
@@ -465,6 +500,7 @@ final class DribbleOrPassEngine: ObservableObject {
             firstTouchGate: pending?.gate
         )
         repResults.append(result)
+        updateEarlyStreakAfterRep(speed: speed)
         passTriggeredAt = nil
 
         cancelTimers()
@@ -551,6 +587,7 @@ final class DribbleOrPassEngine: ObservableObject {
             firstTouchGate: nil
         )
         repResults.append(result)
+        updateEarlyStreakAfterRep(speed: speed)
         passTriggeredAt = nil
 
         cancelTimers()
@@ -561,6 +598,59 @@ final class DribbleOrPassEngine: ObservableObject {
         }
         return reactionTimeSeconds
     }
+
+    private func updateEarlyStreakAfterRep(speed: DecisionSpeed) {
+        let previousEarlyStreak = earlyStreak
+        let timingIsEarly = speed == .fast
+        if timingIsEarly {
+            let priorBest = bestEarlyStreak
+            earlyStreak += 1
+            if let id = playerId {
+                bestEarlyStreak = BestEarlyStreakStore.recordIfNewBest(earlyStreak, playerId: id)
+            } else {
+                bestEarlyStreak = max(bestEarlyStreak, earlyStreak)
+            }
+            let newBestThisRep = earlyStreak > priorBest
+            if newBestThisRep {
+                triggerNewBestEarlyStreakHaptic()
+            }
+            triggerEarlyStreakHapticsIfNeeded(
+                previousEarlyStreak: previousEarlyStreak,
+                timingIsEarly: true,
+                newBestThisRep: newBestThisRep
+            )
+        } else {
+            earlyStreak = 0
+            triggerEarlyStreakHapticsIfNeeded(
+                previousEarlyStreak: previousEarlyStreak,
+                timingIsEarly: false,
+                newBestThisRep: false
+            )
+        }
+    }
+
+#if canImport(UIKit)
+    private func triggerNewBestEarlyStreakHaptic() {
+        newBestEarlyStreakHaptic.prepare()
+        newBestEarlyStreakHaptic.notificationOccurred(.success)
+    }
+
+    /// Only when streak was already meaningful (≥3); light reward on continuation, warning on break. New-best rep uses success only.
+    private func triggerEarlyStreakHapticsIfNeeded(previousEarlyStreak: Int, timingIsEarly: Bool, newBestThisRep: Bool) {
+        guard previousEarlyStreak >= 3 else { return }
+        if timingIsEarly {
+            guard !newBestThisRep else { return }
+            earlyStreakContinueHaptic.prepare()
+            earlyStreakContinueHaptic.impactOccurred(intensity: 0.6)
+        } else {
+            earlyStreakLostHaptic.prepare()
+            earlyStreakLostHaptic.notificationOccurred(.warning)
+        }
+    }
+#else
+    private func triggerNewBestEarlyStreakHaptic() {}
+    private func triggerEarlyStreakHapticsIfNeeded(previousEarlyStreak: Int, timingIsEarly: Bool, newBestThisRep: Bool) {}
+#endif
 
     /// Wire: `firstTouchLogged` — optional early direction; merged into `DribbleOrPassRepResult` on exit. See `CoachRemoteDecisionModelMIGRATION.md`.
     func onFirstTouchLogged(repIndex: Int, gate: Gate, timestamp: Date) {

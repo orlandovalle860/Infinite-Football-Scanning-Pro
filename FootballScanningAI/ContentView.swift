@@ -1396,11 +1396,15 @@ struct MainAppView: View {
                     .environmentObject(playerStore)
                     .environmentObject(router)
             }
-#if DEBUG
         case .debugMenu:
+            #if DEBUG
             DebugMenuView(profileManager: profileManager, settingsViewModel: settingsViewModel)
                 .environmentObject(router)
-#endif
+            #else
+            Text("Tester tools are not available in this build.")
+                .foregroundStyle(.secondary)
+                .padding()
+            #endif
         }
     }
 }

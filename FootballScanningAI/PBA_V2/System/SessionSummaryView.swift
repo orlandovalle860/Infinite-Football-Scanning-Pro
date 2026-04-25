@@ -29,6 +29,38 @@ private func biasLabel(_ gate: Gate?) -> String {
     }
 }
 
+// MARK: - iPad results display (color — dominant timing + decision quality only)
+
+private enum DecisionTimingCategory {
+    case early
+    case onTime
+    case late
+}
+
+private func timingColor(_ category: DecisionTimingCategory) -> Color {
+    switch category {
+    case .early: return .green
+    case .onTime: return .yellow
+    case .late: return .red
+    }
+}
+
+private func decisionTimingCategory(from bucket: SpeedBucket) -> DecisionTimingCategory {
+    switch bucket {
+    case .fast: return .early
+    case .medium: return .onTime
+    case .slow: return .late
+    }
+}
+
+private func qualityColor(correct: Int, total: Int) -> Color {
+    guard total > 0 else { return Color.white.opacity(0.88) }
+    let ratio = Double(correct) / Double(total)
+    if ratio == 1.0 { return .green }
+    if ratio >= 0.8 { return .yellow }
+    return .red
+}
+
 struct SessionSummaryScreenView: View {
     let session: SessionResult
     let playerName: String
@@ -44,6 +76,12 @@ struct SessionSummaryScreenView: View {
     var onBackToHome: (() -> Void)? = nil
     /// When set (e.g. display session hands off), "Run It Back" restarts the drill without role/setup routing. If nil, falls back to `dismiss()`.
     var onRunItBack: (() -> Void)? = nil
+    /// Ending consecutive early reps this block; set from live block summary only (nil from Progress/history).
+    var earlyRepEndingStreak: Int? = nil
+    /// Persisted all-time best early-rep streak for this player after this block (nil from Progress/history).
+    var earlyRepBestStreak: Int? = nil
+    /// Multi-session early streak after this save; set only when presenting from a completed block (nil from Progress/history).
+    var earlySessionStreakDisplay: Int? = nil
     @ObservedObject var profileManager: UserProfileManager
     @ObservedObject var settingsViewModel: SettingsViewModel
     @EnvironmentObject private var progressStore: ProgressStore
@@ -61,6 +99,15 @@ struct SessionSummaryScreenView: View {
     @State private var showBadgeUnlockAnimation = false
     @State private var almostTherePrompt: SessionAlmostTherePrompt?
     @State private var showAlmostTherePrompt = false
+
+    /// iPad results screen: entrance fade + slide (partner display summary only).
+    @State private var ipadResultsAnimateIn = false
+    /// Staggered reveal for score → quality → timing (subtle delays, no bounce).
+    @State private var ipadResultsRevealScore = false
+    @State private var ipadResultsRevealQuality = false
+    @State private var ipadResultsRevealTiming = false
+    /// Subtle scale when this session’s score crosses a performance band vs the prior block (1.0 → ~1.04 → 1.0).
+    @State private var levelUpScale: CGFloat = 1.0
 
     typealias DecisionSummaryTuple = (
         total: Int,
@@ -197,6 +244,9 @@ struct SessionSummaryScreenView: View {
         newlyUnlockedBadges: [PlayerBadge] = [],
         onBackToHome: (() -> Void)? = nil,
         onRunItBack: (() -> Void)? = nil,
+        earlyRepEndingStreak: Int? = nil,
+        earlyRepBestStreak: Int? = nil,
+        earlySessionStreakDisplay: Int? = nil,
         profileManager: UserProfileManager,
         settingsViewModel: SettingsViewModel
     ) {
@@ -208,6 +258,9 @@ struct SessionSummaryScreenView: View {
         self.newlyUnlockedBadges = newlyUnlockedBadges
         self.onBackToHome = onBackToHome
         self.onRunItBack = onRunItBack
+        self.earlyRepEndingStreak = earlyRepEndingStreak
+        self.earlyRepBestStreak = earlyRepBestStreak
+        self.earlySessionStreakDisplay = earlySessionStreakDisplay
         self.profileManager = profileManager
         self.settingsViewModel = settingsViewModel
     }
@@ -338,6 +391,48 @@ struct SessionSummaryScreenView: View {
         }
     }
 
+    private var shouldShowEarlyDecisionStreakLines: Bool {
+        if (earlySessionStreakDisplay ?? 0) >= 2 { return true }
+        let best = earlyRepBestStreak ?? 0
+        if best > 0 { return true }
+        return (earlyRepEndingStreak ?? 0) >= 3
+    }
+
+    private var earlyDecisionStreakLines: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let best = earlyRepBestStreak, best > 0 {
+                EarlyRepStreakBestVsCurrentLines(rep: earlyRepEndingStreak ?? 0, best: best)
+            } else if let rep = earlyRepEndingStreak, rep >= 3 {
+                Text("Early streak: \(rep)")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+            if let sess = earlySessionStreakDisplay, sess >= 2 {
+                Text("\(sess) sessions in a row with early decisions")
+                    .font(.subheadline)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var ipadEarlyDecisionStreakLines: some View {
+        VStack(spacing: 6) {
+            if let best = earlyRepBestStreak, best > 0 {
+                EarlyRepStreakBestVsCurrentLines(rep: earlyRepEndingStreak ?? 0, best: best)
+            } else if let rep = earlyRepEndingStreak, rep >= 3 {
+                Text("Early streak: \(rep)")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+            if let sess = earlySessionStreakDisplay, sess >= 2 {
+                Text("\(sess) sessions in a row with early decisions")
+                    .font(.subheadline)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .multilineTextAlignment(.center)
+    }
+
     private var newPersonalBestBanner: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("New Personal Best!")
@@ -399,6 +494,31 @@ struct SessionSummaryScreenView: View {
         progressStore.previous(session.activityType, playerId: session.playerID)
     }
 
+    /// Prior block’s decision score (0–100) for level-band animation; if unknown, matches current so no false “level up.”
+    private var previousBlockScoreForLevelAnimation: Int {
+        guard let prev = previousSessionRecord else { return decisionScoreValue }
+        if let s = prev.decisionSpeedScore {
+            return max(0, min(100, s))
+        }
+        return decisionScoreValue
+    }
+
+    private var didCrossPerformanceLevelBand: Bool {
+        SessionScoreMilestone.levelLabel(for: decisionScoreValue) != SessionScoreMilestone.levelLabel(for: previousBlockScoreForLevelAnimation)
+    }
+
+    private func runLevelUpScaleIfNeeded() {
+        guard didCrossPerformanceLevelBand else { return }
+        withAnimation(.easeOut(duration: 0.25)) {
+            levelUpScale = 1.04
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            withAnimation(.easeOut(duration: 0.25)) {
+                levelUpScale = 1.0
+            }
+        }
+    }
+
     private var postSessionNarrative: PBAPostSessionNarrative {
         PBAPostSessionNarrativeBuilder.fromSessionResult(
             session,
@@ -422,6 +542,9 @@ struct SessionSummaryScreenView: View {
                 sessionSummaryContent
             }
         }
+        .onAppear {
+            runLevelUpScaleIfNeeded()
+        }
         .sheet(item: $shareSheetPayload) { payload in
             ShareSheet(items: payload.items)
         }
@@ -437,82 +560,216 @@ struct SessionSummaryScreenView: View {
         .background(Color(red: 0.08, green: 0.08, blue: 0.12))
     }
 
+    /// Dominant decision-speed bucket (fast / medium / slow) for display copy.
+    private var ipadDominantTimingBucket: SpeedBucket {
+        let c = session.speedCounts
+        return UniversalBlockSummaryHeadline.resolve(fast: c.fast, medium: c.medium, slow: c.slow).bucket
+    }
+
+    private func ipadTimingLabel(_ bucket: SpeedBucket) -> String {
+        switch bucket {
+        case .fast: return "Early"
+        case .medium: return "On Time"
+        case .slow: return "Late"
+        }
+    }
+
+    /// iPad results: decision quality line (copy only; no scoring changes).
+    private var ipadDecisionQualityLine: String {
+        let correct = session.correctCount
+        let total = session.totalReps
+        if total > 0, correct == total {
+            return "Perfect decisions (\(correct) / \(total))"
+        }
+        return "\(correct) / \(total) correct"
+    }
+
+    private func ipadActivityFeedback(activity: ActivityKind, timing: SpeedBucket) -> String {
+        let pocket = UniversalBlockSummaryHeadline.pocketMomentInterpretationLine(
+            fast: session.speedCounts.fast,
+            medium: session.speedCounts.medium,
+            slow: session.speedCounts.slow
+        )
+        switch activity {
+        case .twoMinuteTest:
+            return pocket
+        case .awayFromPressure:
+            return timing == .fast
+                ? "Away from pressure: you’re clearing space early."
+                : pocket
+        case .dribbleOrPass:
+            return timing == .fast
+                ? "Dribble or pass: decisions are ahead of the defender."
+                : pocket
+        case .oneTouchPassing:
+            return timing == .fast
+                ? "One-touch: you’re set before the ball arrives."
+                : pocket
+        }
+    }
+
+    private var ipadSummaryDivider: some View {
+        Divider()
+            .background(Color.white.opacity(0.22))
+    }
+
     /// Read-only results for partner display iPad: no actions, no navigation, no session start.
     private var playerIPadDisplayOnlyContent: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(activityName)
-                        .font(.title2.weight(.bold))
-                        .foregroundColor(.white)
-                    Text(playerName)
-                        .font(.subheadline)
-                        .foregroundColor(.white.opacity(0.72))
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Score")
-                        .font(.caption.weight(.semibold))
-                        .foregroundColor(.white.opacity(0.65))
-                    Text("\(decisionScoreValue)")
-                        .font(.system(size: 52, weight: .bold, design: .rounded))
-                        .foregroundColor(.yellow)
-                    Text("Accuracy: \(accuracyDisplayText)")
-                        .font(.subheadline)
-                        .foregroundColor(.white.opacity(0.88))
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Timing")
-                        .font(.caption.weight(.semibold))
-                        .foregroundColor(.white.opacity(0.65))
-                    Text("\(primaryMetricLabel): \(primaryMetricValue)")
-                        .font(.title3.weight(.semibold))
-                        .foregroundColor(.white)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text("Avg reaction: \(avgReactionTimeSecondsDisplay)")
-                        .font(.footnote)
-                        .foregroundColor(.white.opacity(0.72))
-                    if let windowText = session.avgDecisionWindowSeconds.map({ DecisionTimingModel.summaryText(windowSeconds: $0) }) {
-                        Text("Decision window: \(windowText)")
-                            .font(.footnote)
+        let dominant = ipadDominantTimingBucket
+        let c = session.speedCounts
+        return ScrollView {
+            VStack(alignment: .center, spacing: 20) {
+                Group {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(activityName)
+                            .font(.title2.weight(.bold))
+                            .foregroundColor(.white)
+                        Text(playerName)
+                            .font(.subheadline)
                             .foregroundColor(.white.opacity(0.72))
                     }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                Text("Use the coach remote to start the next block.")
-                    .font(.body.weight(.medium))
-                    .foregroundColor(.white.opacity(0.92))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 8)
-
-                HStack {
-                    Spacer()
-                    Button {
-                        presentBlockShareSheet()
-                    } label: {
-                        Text("Share Result")
-                            .font(.subheadline.weight(.medium))
-                            .foregroundColor(.white.opacity(0.88))
+                    VStack(spacing: 8) {
+                        SessionScoreAnimatedNumber.ipad(score: decisionScoreValue)
+                        Text(playerRecommendation.level.rawValue)
+                            .font(.headline)
+                            .foregroundColor(SessionScoreMilestone.scoreNumberForeground(score: decisionScoreValue))
+                        SessionNextLevelProgressBlock(
+                            score: decisionScoreValue,
+                            totalReps: session.totalReps,
+                            earlyCount: session.speedCounts.fast
+                        )
                     }
-                    .buttonStyle(.plain)
-                    Spacer()
+                    .scaleEffect(levelUpScale)
+                    .frame(maxWidth: .infinity)
+
+                    if shouldShowEarlyDecisionStreakLines {
+                        ipadEarlyDecisionStreakLines
+                    }
                 }
-                .padding(.top, 20)
-                .padding(.bottom, 8)
+                .opacity(ipadResultsRevealScore ? 1 : 0)
+                .animation(.easeOut(duration: 0.35), value: ipadResultsRevealScore)
+
+                Group {
+                    ipadSummaryDivider
+
+                    VStack(spacing: 8) {
+                        Text("Decision Quality")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                        Text(ipadDecisionQualityLine)
+                            .font(.title3)
+                            .foregroundColor(qualityColor(correct: session.correctCount, total: session.totalReps))
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .opacity(ipadResultsRevealQuality ? 1 : 0)
+                .animation(.easeOut(duration: 0.35), value: ipadResultsRevealQuality)
+
+                Group {
+                    ipadSummaryDivider
+
+                    VStack(spacing: 8) {
+                        Text("Decision Timing")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                        Text(ipadTimingLabel(dominant))
+                            .font(.title2)
+                            .fontWeight(.semibold)
+                            .foregroundColor(timingColor(decisionTimingCategory(from: dominant)))
+                        HStack(spacing: 12) {
+                            Text("Early: \(c.fast)")
+                            Text("On Time: \(c.medium)")
+                            Text("Late: \(c.slow)")
+                        }
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .opacity(ipadResultsRevealTiming ? 1 : 0)
+                .animation(.easeOut(duration: 0.35), value: ipadResultsRevealTiming)
+
+                Group {
+                    ipadSummaryDivider
+
+                    Text(ipadActivityFeedback(activity: session.activityType, timing: dominant))
+                        .font(.body)
+                        .foregroundColor(.white.opacity(0.92))
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Text(SessionScoreMilestone.levelFocusCue(score: decisionScoreValue))
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .multilineTextAlignment(.center)
+                        .padding(.top, 8)
+
+                    Text("Use the coach remote to start the next block.")
+                        .font(.body.weight(.medium))
+                        .foregroundColor(.white.opacity(0.92))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 12)
+
+                    HStack {
+                        Spacer()
+                        Button {
+                            presentBlockShareSheet()
+                        } label: {
+                            Text("Share Result")
+                                .font(.subheadline.weight(.medium))
+                                .foregroundColor(.white.opacity(0.88))
+                        }
+                        .buttonStyle(.plain)
+                        Spacer()
+                    }
+                    .padding(.top, 12)
+                    .padding(.bottom, 8)
+                }
+                .opacity(ipadResultsRevealTiming ? 1 : 0)
+                .animation(.easeOut(duration: 0.35), value: ipadResultsRevealTiming)
             }
             .padding(24)
+            .opacity(ipadResultsAnimateIn ? 1 : 0)
+            .offset(y: ipadResultsAnimateIn ? 0 : 10)
+            .animation(.easeOut(duration: 0.4), value: ipadResultsAnimateIn)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(red: 0.08, green: 0.08, blue: 0.12))
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
+            runIPadResultsEntranceAnimation()
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
             runFeedbackAnimations()
+        }
+        .onDisappear {
+            ipadResultsAnimateIn = false
+            ipadResultsRevealScore = false
+            ipadResultsRevealQuality = false
+            ipadResultsRevealTiming = false
+        }
+    }
+
+    /// Fade/slide the screen in, then lightly stagger score → quality → timing (under 0.5s total feel).
+    private func runIPadResultsEntranceAnimation() {
+        ipadResultsAnimateIn = true
+        let stagger: TimeInterval = 0.07
+        DispatchQueue.main.asyncAfter(deadline: .now() + stagger) {
+            withAnimation(.easeOut(duration: 0.35)) {
+                ipadResultsRevealScore = true
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + stagger * 2) {
+            withAnimation(.easeOut(duration: 0.35)) {
+                ipadResultsRevealQuality = true
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + stagger * 3) {
+            withAnimation(.easeOut(duration: 0.35)) {
+                ipadResultsRevealTiming = true
+            }
         }
     }
 
@@ -593,6 +850,10 @@ struct SessionSummaryScreenView: View {
                 sessionCelebrationStrip
             }
 
+            if shouldShowEarlyDecisionStreakLines {
+                earlyDecisionStreakLines
+            }
+
             SessionSummaryView(
                 score: decisionScoreValue,
                 visual: levelFeedbackVisual,
@@ -603,12 +864,14 @@ struct SessionSummaryScreenView: View {
                 level: playerRecommendation.level.rawValue,
                 shortFeedback: playerRecommendation.shortFeedback,
                 message: playerSessionFeedback.message,
-                nextFocus: playerRecommendation.nextFocusText,
+                nextFocus: SessionScoreMilestone.levelFocusCue(score: decisionScoreValue),
                 tempoGuidance: playerRecommendation.tempoGuidance,
                 progressionSuggestion: playerRecommendation.progressionSuggestion,
+                totalReps: session.totalReps,
                 earlyCount: session.speedCounts.fast,
                 onTimeCount: session.speedCounts.medium,
-                lateCount: session.speedCounts.slow
+                lateCount: session.speedCounts.slow,
+                levelUpScale: levelUpScale
             )
 
             if !recentProgressionSessions.isEmpty {
@@ -1011,6 +1274,38 @@ struct SessionSummaryScreenView: View {
         generator.prepare()
         generator.impactOccurred()
 #endif
+    }
+}
+
+/// Best vs current early-rep streak (results only); subtle scale when ending streak matches all-time best.
+private struct EarlyRepStreakBestVsCurrentLines: View {
+    let rep: Int
+    let best: Int
+    @State private var pulseScale: CGFloat = 1.0
+
+    private var isNewBestLine: Bool {
+        rep == best && rep > 0
+    }
+
+    var body: some View {
+        Group {
+            if isNewBestLine {
+                Text("Early streak: \(rep) (New Best)")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .scaleEffect(pulseScale)
+                    .onAppear {
+                        withAnimation(.easeOut(duration: 0.35)) { pulseScale = 1.04 }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                            withAnimation(.easeInOut(duration: 0.25)) { pulseScale = 1.0 }
+                        }
+                    }
+            } else {
+                Text("Early streak: \(rep) (Best: \(best))")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+        }
     }
 }
 

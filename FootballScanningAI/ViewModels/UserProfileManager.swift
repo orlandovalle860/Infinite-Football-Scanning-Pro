@@ -223,6 +223,7 @@ class UserProfileManager: ObservableObject {
         if currentProfile?.id == result.playerID {
             currentProfile = profiles[index]
         }
+        EarlySessionStreakStore.updateAfterSession(result)
         saveProfiles()
         DispatchQueue.main.async {
             NotificationCenter.default.post(name: .coachingTrainingNudgesShouldRefresh, object: nil)

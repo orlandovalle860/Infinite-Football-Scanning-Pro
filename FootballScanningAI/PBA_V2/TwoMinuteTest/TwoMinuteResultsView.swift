@@ -31,8 +31,29 @@ struct TwoMinuteResultsView: View {
     @State private var newlyUnlockedBadgesFromBlock: [PlayerBadge] = []
     @State private var baselineRecommendation: GuidedCurriculumProgress?
     @State private var showBaselineRecommendation = false
+    @State private var earlySessionStreakForSummary: Int?
+    @State private var earlyRepBestStreakForSummary: Int?
 
     private var earlyDecisions: Int { logs.filter(\.correct).count }
+
+    private var twoMinuteEarlyRepFlags: [Bool] {
+        let accuracy = logs.isEmpty ? 0 : Double(earlyDecisions) / Double(logs.count)
+        let windows = logs.compactMap { $0.decisionWindowSeconds(activity: .twoMinuteTest, difficulty: difficulty) }
+        let adaptiveScore = DecisionTimingModel.decisionScore(accuracy: accuracy, windows: windows, activity: .twoMinuteTest)
+        return logs.map { log -> Bool in
+            guard let w = log.decisionWindowSeconds(activity: .twoMinuteTest, difficulty: difficulty) else { return false }
+            return DecisionTimingModel.speedBucket(forDecisionWindow: w, activity: .twoMinuteTest, score: adaptiveScore) == .fast
+        }
+    }
+
+    /// Consecutive early (fast) reps at the end of the test (aligned with per-rep speed buckets).
+    private var endingEarlyRepStreakTwoMinute: Int {
+        EarlyDecisionStreak.endingEarlyRepCount(from: twoMinuteEarlyRepFlags)
+    }
+
+    private var maxConsecutiveEarlyRepStreakTwoMinute: Int {
+        EarlyDecisionStreak.maxConsecutiveEarlyDuringBlock(from: twoMinuteEarlyRepFlags)
+    }
     private var forwardCorrect: Int { logs.filter { $0.ballGate == .up && $0.correct }.count }
     private let forwardTotal = 4
     private var exitCounts: [Gate: Int] {
@@ -189,6 +210,9 @@ struct TwoMinuteResultsView: View {
                     xpEarned: xpEarnedFromBlock,
                     newlyUnlockedBadges: newlyUnlockedBadgesFromBlock,
                     onRunItBack: { sessionResultForSummary = nil },
+                    earlyRepEndingStreak: endingEarlyRepStreakTwoMinute,
+                    earlyRepBestStreak: earlyRepBestStreakForSummary,
+                    earlySessionStreakDisplay: earlySessionStreakForSummary,
                     profileManager: profileManager,
                     settingsViewModel: settingsViewModel
                 )
@@ -241,6 +265,9 @@ struct TwoMinuteResultsView: View {
                     newPersonalBestsFromBlock = rewards.newPersonalBests
                     xpEarnedFromBlock = rewards.xpEarned
                     newlyUnlockedBadgesFromBlock = rewards.newlyUnlockedBadges
+                    earlySessionStreakForSummary = EarlySessionStreakStore.current(for: result.playerID)
+                    let bestEarly = BestEarlyStreakStore.recordIfNewBest(maxConsecutiveEarlyRepStreakTwoMinute, playerId: result.playerID)
+                    earlyRepBestStreakForSummary = bestEarly > 0 ? bestEarly : nil
                     if wasNewPlayer {
                         let rec = GuidedCurriculumEngine.assignBaselineStage(playerId: result.playerID, baseline: result)
                         baselineRecommendation = rec
@@ -297,6 +324,9 @@ struct TwoMinuteResultsView: View {
                 newPersonalBestsFromBlock = rewards.newPersonalBests
                 xpEarnedFromBlock = rewards.xpEarned
                 newlyUnlockedBadgesFromBlock = rewards.newlyUnlockedBadges
+                earlySessionStreakForSummary = EarlySessionStreakStore.current(for: result.playerID)
+                let bestEarly = BestEarlyStreakStore.recordIfNewBest(maxConsecutiveEarlyRepStreakTwoMinute, playerId: result.playerID)
+                earlyRepBestStreakForSummary = bestEarly > 0 ? bestEarly : nil
                 if wasNewPlayer {
                     let rec = GuidedCurriculumEngine.assignBaselineStage(playerId: result.playerID, baseline: result)
                     baselineRecommendation = rec

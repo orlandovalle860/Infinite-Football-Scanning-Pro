@@ -99,7 +99,7 @@ enum UniversalBlockSummaryHeadline {
         case .fast:
             return "You're winning your pocket moments."
         case .medium:
-            return "You're seeing the pocket, but deciding late."
+            return "Perfect decisions — decide earlier."
         case .slow:
             return "You're reacting after the pocket moment."
         }

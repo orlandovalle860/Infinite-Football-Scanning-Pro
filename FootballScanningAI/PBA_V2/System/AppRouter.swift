@@ -35,10 +35,8 @@ enum AppRoute: Hashable {
     case oneTouchPassingRoleSelection
     case oneTouchPassingTrainingModeSelection
     case oneTouchPassingSetup(mode: TrainingMode)
-#if DEBUG
-    /// Tester Tools: debug menu from Home toolbar (not in Release).
+    /// Tester Tools entry route; UI is DEBUG-only in ``ContentView`` (toolbar still gated).
     case debugMenu
-#endif
 }
 
 @MainActor

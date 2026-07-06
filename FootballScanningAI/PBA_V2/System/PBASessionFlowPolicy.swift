@@ -41,8 +41,9 @@ enum PBASessionFlowPolicy {
     }
 
     /// Resolves the same persisted choice as the training-mode screen (`Partner` / `Wall` / `Solo`), used for route payloads and first-time flows.
-    static func lastSelectedTrainingMode() -> TrainingMode {
-        let keys = [pbaLastSelectedTrainingModeKey, AppStorageKeys.lastMode]
+    nonisolated static func lastSelectedTrainingMode() -> TrainingMode {
+        // String literals — safe to read from any isolation context (Swift 6).
+        let keys = ["pba.lastSelectedTrainingMode", "lastMode"]
         for key in keys {
             guard let raw = UserDefaults.standard.string(forKey: key)?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { continue }
             if let mode = TrainingMode(rawValue: raw) { return mode }

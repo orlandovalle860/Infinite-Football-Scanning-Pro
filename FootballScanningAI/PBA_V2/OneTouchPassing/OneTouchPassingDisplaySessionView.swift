@@ -949,7 +949,7 @@ struct OneTouchPassingDisplaySessionView: View {
         PBAFlowDebugLog.reveal(repId: repIndex, timestamp: Date())
     }
 
-    /// Drives `.id` so `DangerZoneOverlay` reveal animation replays each rep (same pattern as Away From Pressure).
+    /// Drives `.id` so gate lane reveal animation replays each rep (same pattern as DOP / Away From Pressure).
     private var oneTouchActiveCueRepIndex: Int {
         switch engine.phase {
         case .armedScanning(let r, _): return r
@@ -965,6 +965,7 @@ struct OneTouchPassingDisplaySessionView: View {
     private var layoutWithGates: some View {
         GeometryReader { geo in
             let center = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
+            let focalDownshift = PartnerDisplayLayout.drillFocalCenterYOffset
             ZStack {
                 VStack(spacing: 10) {
                     Text("X")
@@ -972,7 +973,7 @@ struct OneTouchPassingDisplaySessionView: View {
                         .foregroundColor(.white)
                         .shadow(radius: 5)
                 }
-                .position(x: center.x, y: center.y)
+                .position(x: center.x, y: center.y + focalDownshift)
 
                 if let plan = engine.currentPlan, otpShouldPreloadGateCueLayers {
                     ForEach(Gate.allCases, id: \.self) { gate in
@@ -990,8 +991,8 @@ struct OneTouchPassingDisplaySessionView: View {
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
-            .offset(y: PartnerDisplayLayout.drillFocalCenterYOffset)
         }
+        .ignoresSafeArea()
     }
 
     private var statusOverlay: some View {

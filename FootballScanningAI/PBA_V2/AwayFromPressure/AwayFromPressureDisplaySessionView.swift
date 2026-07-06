@@ -780,6 +780,7 @@ struct AwayFromPressureDisplaySessionView: View {
     private var dribbleOrPassLayout: some View {
         GeometryReader { geo in
             let center = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
+            let focalDownshift = PartnerDisplayLayout.drillFocalCenterYOffset
 
             ZStack {
                 VStack(spacing: 10) {
@@ -788,20 +789,24 @@ struct AwayFromPressureDisplaySessionView: View {
                         .foregroundColor(.white)
                         .shadow(radius: 5)
                 }
-                .position(x: center.x, y: center.y)
+                .position(x: center.x, y: center.y + focalDownshift)
 
                 if let ctx = afpPreparedPressureContext {
-                    DangerZoneOverlay(gate: ctx.pressureGate, style: wedgeStyle, isDecisionRevealActive: isMarkerVisible)
-                        .id("\(ctx.repIndex)-\(ctx.pressureGate)")
-                        .zIndex(1)
+                    AwayFromPressureGateOverlay(
+                        gate: ctx.pressureGate,
+                        wedgeStyle: wedgeStyle,
+                        isDecisionRevealActive: isMarkerVisible
+                    )
+                    .id("\(ctx.repIndex)-\(ctx.pressureGate)")
+                    .zIndex(1)
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
-            .offset(y: PartnerDisplayLayout.drillFocalCenterYOffset)
         }
+        .ignoresSafeArea()
     }
 
-    /// Pending cue: same gate as the upcoming marker, mounted from scan/beep through exit; `DangerZoneOverlay.isDecisionRevealActive` controls when the wedge is visible and replays the edge→center reveal (partner preload path).
+    /// Pending cue: same gate as the upcoming marker, mounted from scan/beep through exit; `isDecisionRevealActive` controls preload visibility and reveal-synced inward motion.
     private var afpPreparedPressureContext: (repIndex: Int, pressureGate: Gate)? {
         switch engine.phase {
         case .armedScanning(let r, let g, _), .beepedAwaitingPass(let r, let g), .markerVisible(let r, let g, _), .awaitingExitLog(let r, let g):

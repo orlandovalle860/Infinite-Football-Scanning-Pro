@@ -1751,6 +1751,7 @@ struct IntroView: View {
     @State private var homeTrainingModeSegment: HomeTrainingModeSegment = .solo
     @State private var highlightPrimaryAction: Bool = false
     @State private var isStartSessionPressed = false
+    @State private var homeLogoWatermark: UIImage?
 
     private enum ProgressModalType: Identifiable {
         case levelUp(previousTier: String, newTier: String, previousAvg: Double?, newAvg: Double?, previousAccuracy: Int?, newAccuracy: Int?)
@@ -2340,7 +2341,7 @@ struct IntroView: View {
     /// iPad in **player** role is usually a passive field display for Coach Remote, so local “Start” buttons are hidden. If the user chose **Solo** (or Wall), allow the same self-start flow as on iPhone. Partner mode still shows the passive “coach runs from the phone” copy when appropriate.
     private var canStartLocalTrainingFromHome: Bool {
         if !isPadPlayerPresentationMode { return true }
-        return !PBASessionFlowPolicy.lastSelectedTrainingMode().needsCoachRemoteJoinCodeFlow
+        return homeTrainingModeSegment == .solo
     }
 
     /// Encouragement message for Today's Goal based on blocks completed today.
@@ -2386,12 +2387,8 @@ struct IntroView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(homeScreenBackground)
-        .onAppear {
-            syncHomeTrainingModeSegmentFromDefaults()
-            highlightPrimaryAction = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                highlightPrimaryAction = true
-            }
+        .task(id: "home-launch-setup") {
+            await performHomeLaunchSetup()
         }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
@@ -3574,13 +3571,25 @@ struct IntroView: View {
         }
     }
 
-    private func syncHomeTrainingModeSegmentFromDefaults() {
-        switch PBASessionFlowPolicy.lastSelectedTrainingMode() {
+    private func performHomeLaunchSetup() async {
+        let logoName = Self.homeLogoWatermarkImageName
+        async let persistedMode = Task.detached(priority: .userInitiated) {
+            PBASessionFlowPolicy.lastSelectedTrainingMode()
+        }.value
+        async let logo = Task.detached(priority: .utility) {
+            UIImage(named: logoName)
+        }.value
+
+        switch await persistedMode {
         case .solo:
             homeTrainingModeSegment = .solo
         case .partner, .wall:
             homeTrainingModeSegment = .partner
         }
+        homeLogoWatermark = await logo
+        highlightPrimaryAction = false
+        try? await Task.sleep(for: .milliseconds(400))
+        highlightPrimaryAction = true
     }
 
     private func startPartnerSession() {
@@ -3610,15 +3619,17 @@ struct IntroView: View {
                 startPoint: .top,
                 endPoint: .bottom
             )
-            Image(Self.homeLogoWatermarkImageName)
-                .resizable()
-                .scaledToFit()
-                .blur(radius: 0.5)
-                .opacity(0.06)
-                .padding(.horizontal, 60)
-                .offset(y: -60)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
+            if let homeLogoWatermark {
+                Image(uiImage: homeLogoWatermark)
+                    .resizable()
+                    .scaledToFit()
+                    .blur(radius: 0.5)
+                    .opacity(0.06)
+                    .padding(.horizontal, 60)
+                    .offset(y: -60)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
         }
         .ignoresSafeArea()
     }

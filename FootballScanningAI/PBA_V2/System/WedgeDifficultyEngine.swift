@@ -1,6 +1,27 @@
 import Foundation
 import CoreGraphics
 
+/// Playable field as a square centered in the display rect — wedge sizing uses `squareSize` only.
+struct WedgeFieldGeometry {
+    let fieldWidth: CGFloat
+    let fieldHeight: CGFloat
+    let squareSize: CGFloat
+    let originX: CGFloat
+    let originY: CGFloat
+    let centerX: CGFloat
+    let centerY: CGFloat
+
+    init(fieldWidth w: CGFloat, fieldHeight h: CGFloat) {
+        fieldWidth = w
+        fieldHeight = h
+        squareSize = min(w, h)
+        originX = (w - squareSize) / 2
+        originY = (h - squareSize) / 2
+        centerX = w / 2
+        centerY = h / 2
+    }
+}
+
 struct WedgeCueStyle {
     /// Fraction of the active edge length for wedge / green-rectangle base (centered on that edge). Wider than a sliver, but clamped below full edge.
     let laneSpan: CGFloat
@@ -11,34 +32,95 @@ struct WedgeCueStyle {
     /// Slight inward offset from the field border so cues read from the field interior, not the bezel.
     static let edgeInsetFraction: CGFloat = 0.018
 
+    /// Top/bottom span along edge — narrower so horizontal bands don't dominate in landscape.
+    private static let horizontalEdgeSpanScale: CGFloat = 0.865
+    /// Left/right depth toward center — slightly thicker so vertical wedges aren't thin pillars.
+    private static let verticalEdgeDepthScale: CGFloat = 1.09
+
     static func style(for level: Int) -> WedgeCueStyle {
         switch max(1, min(3, level)) {
         case 1:
-            return WedgeCueStyle(laneSpan: 0.50, depthFraction: 0.24, centerGapFraction: 0.20, opacity: 0.86)
+            return WedgeCueStyle(laneSpan: 0.50, depthFraction: 0.24, centerGapFraction: 0.21, opacity: 0.86)
         case 2:
             // Subtle increase in challenge: slightly narrower + slightly farther from center.
-            return WedgeCueStyle(laneSpan: 0.46, depthFraction: 0.22, centerGapFraction: 0.23, opacity: 0.84)
+            return WedgeCueStyle(laneSpan: 0.46, depthFraction: 0.22, centerGapFraction: 0.242, opacity: 0.84)
         default:
-            return WedgeCueStyle(laneSpan: 0.42, depthFraction: 0.20, centerGapFraction: 0.26, opacity: 0.82)
+            return WedgeCueStyle(laneSpan: 0.42, depthFraction: 0.20, centerGapFraction: 0.273, opacity: 0.82)
         }
     }
 
-    /// Span along the edge the wedge sits on (horizontal length for top/bottom, vertical length for left/right), clamped to ~38–58% so bases are wide but never full edge.
+    /// Span along the edge the wedge sits on, based on centered square `min(w,h)`.
+    /// Top/bottom spans are reduced ~13.5% for balanced visual weight in landscape.
     func spanAlongEdge(for gate: Gate, fieldWidth w: CGFloat, fieldHeight h: CGFloat) -> CGFloat {
-        let edge: CGFloat
-        let raw: CGFloat
+        let s = min(w, h)
+        let raw = s * laneSpan * spanScale(for: gate)
+        return min(s * 0.58, max(s * 0.38, raw))
+    }
+
+    /// Depth from edge toward center. Left/right wedges use a ~9% boost so they read as thicker bars, not tall slivers.
+    func depthAlongCenter(for gate: Gate, fieldWidth w: CGFloat, fieldHeight h: CGFloat) -> CGFloat {
+        let s = min(w, h)
+        let depthScale: CGFloat = (gate == .left || gate == .right) ? Self.verticalEdgeDepthScale : 1
+        return s * depthFraction * depthScale
+    }
+
+    /// Left/right span along edge — slightly taller so vertical wedges balance narrowed top/bottom bands.
+    private static let verticalEdgeSpanScale: CGFloat = verticalEdgeDepthScale
+
+    func spanScale(for gate: Gate) -> CGFloat {
         switch gate {
-        case .up, .down:
-            edge = w
-            let base = w * laneSpan
-            let aspect = h / max(w, 1)
-            let reduction = max(0.78, min(1.0, aspect * 0.95))
-            raw = base * reduction
-        case .left, .right:
-            edge = h
-            raw = h * laneSpan
+        case .up, .down: return Self.horizontalEdgeSpanScale
+        case .left, .right: return Self.verticalEdgeSpanScale
         }
-        return min(edge * 0.58, max(edge * 0.38, raw))
+    }
+}
+
+/// Fixed snap points on the centered square — identical whether 1, 2, 3, or 4 wedges are visible.
+struct WedgeDirectionalAnchors {
+    let gate: Gate
+    let field: WedgeFieldGeometry
+    let style: WedgeCueStyle
+
+    var squareSize: CGFloat { field.squareSize }
+    var centerGap: CGFloat { squareSize * style.centerGapFraction }
+    var edgeInset: CGFloat { squareSize * WedgeCueStyle.edgeInsetFraction }
+    var span: CGFloat {
+        style.spanAlongEdge(for: gate, fieldWidth: field.fieldWidth, fieldHeight: field.fieldHeight)
+    }
+    var halfBase: CGFloat { span / 2 }
+
+    /// Outer base on the square edge (fixed inset from border).
+    var baseY: CGFloat {
+        switch gate {
+        case .up: return field.originY + edgeInset
+        case .down: return field.originY + squareSize - edgeInset
+        case .left, .right: return field.centerY
+        }
+    }
+
+    var baseX: CGFloat {
+        switch gate {
+        case .left: return field.originX + edgeInset
+        case .right: return field.originX + squareSize - edgeInset
+        case .up, .down: return field.centerX
+        }
+    }
+
+    /// Inner boundary — same radius from center on every axis (part of a 4-direction ring).
+    var innerTipY: CGFloat {
+        switch gate {
+        case .up: return field.centerY - centerGap
+        case .down: return field.centerY + centerGap
+        case .left, .right: return field.centerY
+        }
+    }
+
+    var innerTipX: CGFloat {
+        switch gate {
+        case .left: return field.centerX - centerGap
+        case .right: return field.centerX + centerGap
+        case .up, .down: return field.centerX
+        }
     }
 }
 

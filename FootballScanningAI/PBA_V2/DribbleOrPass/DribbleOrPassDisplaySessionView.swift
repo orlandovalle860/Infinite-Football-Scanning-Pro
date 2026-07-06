@@ -1141,6 +1141,7 @@ struct DribbleOrPassDisplaySessionView: View {
     private var layoutWithGates: some View {
         GeometryReader { geo in
             let center = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
+            let focalDownshift = PartnerDisplayLayout.drillFocalCenterYOffset
             ZStack {
                 VStack(spacing: 10) {
                     Text("X")
@@ -1148,7 +1149,7 @@ struct DribbleOrPassDisplaySessionView: View {
                         .foregroundColor(.white)
                         .shadow(radius: 5)
                 }
-                .position(x: center.x, y: center.y)
+                .position(x: center.x, y: center.y + focalDownshift)
 
                 if let plan = engine.currentPlan, dopShouldPreloadGateCueLayers {
                     ForEach(Gate.allCases, id: \.self) { gate in
@@ -1166,8 +1167,8 @@ struct DribbleOrPassDisplaySessionView: View {
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
-            .offset(y: PartnerDisplayLayout.drillFocalCenterYOffset)
         }
+        .ignoresSafeArea()
     }
 
     private var statusOverlay: some View {

@@ -5,6 +5,9 @@ import Foundation
 final class RemoteService: ObservableObject {
     @Published private(set) var connectionState: ConnectionState
 
+    /// Whether the active transport WebSocket (relay) is connected — used for partner UI and ``onChange`` (via ``connectionState``) without duplicating `ConnectionState` switches everywhere.
+    var isCoachConnected: Bool { connectionState == .connected }
+
     private var transport: RemoteTransport
 
     var onTwoMinuteMessageReceived: ((TwoMinuteMessage) -> Void)? {

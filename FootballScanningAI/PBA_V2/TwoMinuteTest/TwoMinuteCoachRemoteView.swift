@@ -58,7 +58,8 @@ struct TwoMinuteCoachRemoteView: View {
     @State private var hasChosenCalibrationAction = false
     @State private var shouldRunCalibration = true
     @State private var showCalibrationCompletionFeedback = false
-    @State private var repStartAckTimeoutWorkItem: DispatchWorkItem?
+    @State private var repStartAckTimeoutToken = UUID()
+    @State private var repStartHardResetToken = UUID()
     @State private var repStartTapSentTimestamp: TimeInterval = 0
     @State private var pendingRepStartHardResetRepIndex: Int?
     @State private var coachSessionInputResetToken = UUID()
@@ -66,6 +67,7 @@ struct TwoMinuteCoachRemoteView: View {
     /// the current rep. Updated on `.beepArmed` messages and passed to
     /// `CoachSessionView` so the PASS button only arms after the iPad's beep.
     @State private var externalBeepArmedRepIndex: Int? = nil
+    @State private var pendingDirectionLogRepZeroBased: Int? = nil
     @State private var didBroadcastCoachSessionStart = false
     @State private var showReconnectRestartOverlay = false
     @State private var coachRepIndexSnapshotAtDisconnect: Int?
@@ -302,14 +304,15 @@ struct TwoMinuteCoachRemoteView: View {
             preBeepDelayRange: 0.0...0.0,
             waitsForExternalBeepArm: true,
             externalBeepArmedRepIndex: $externalBeepArmedRepIndex,
+            pendingDirectionLogRepZeroBased: $pendingDirectionLogRepZeroBased,
             onRepStarted: { _ in
                 startNextRepIfReady()
             },
             onPassTriggered: { _ in
                 sendPassTrigger(repIndex: currentRepIndex)
             },
-            onDirectionLogged: { _, swipe in
-                logExit(repIndex: currentRepIndex, gate: swipe.gate)
+            onDirectionLogged: { repIndex, swipe in
+                logExit(repIndex: repIndex, gate: swipe.gate)
             },
             coachFirstRunActivityId: ActivityKind.twoMinuteTest.sessionActivityActivityId,
             coachTransportConnected: coachSessionConnected,
@@ -321,7 +324,9 @@ struct TwoMinuteCoachRemoteView: View {
 
     @discardableResult
     private func startNextRepIfReady() -> Bool {
-        guard case .ready = state, currentRepIndex < totalReps else { return false }
+        guard currentRepIndex < totalReps else { return false }
+        if case .complete = state { return false }
+        pendingDirectionLogRepZeroBased = nil
         let now = Date().timeIntervalSince1970
         repStartTapSentTimestamp = now
         pendingRepStartHardResetRepIndex = nil
@@ -337,7 +342,6 @@ struct TwoMinuteCoachRemoteView: View {
     private func sendPassTrigger(repIndex: Int) -> Bool {
         guard case .armedForPass(let armedRep) = state, armedRep == repIndex else { return false }
         clearRepStartAckWaitState()
-        state = .logging(repIndex: repIndex)
         #if DEBUG
         let t = Date()
         DecisionSpeedDebugLog.logCoachPassSend(activity: .twoMinuteTest, repIndex: repIndex, embeddedTimestamp: t)
@@ -345,6 +349,8 @@ struct TwoMinuteCoachRemoteView: View {
         #else
         remoteService.sendPassTriggered(repIndex: repIndex, timestamp: Date())
         #endif
+        pendingDirectionLogRepZeroBased = CoachRepFlowDecoupling.pendingLogRepIndex(afterPassFor: repIndex)
+        advanceCoachRepIndexAfterPass(completedRepIndex: repIndex)
         return true
     }
 
@@ -604,8 +610,17 @@ struct TwoMinuteCoachRemoteView: View {
         router.popCoachRemoteToStartSessionHub(dismiss: dismiss, expectingTopRoute: .twoMinuteCoachRemote)
     }
 
+    private func loggingRepIndexForOptionalSwipe() -> Int? {
+        if case .logging(let ri) = state { return ri }
+        return nil
+    }
+
     private func logExit(repIndex: Int, gate: Gate) {
-        guard case .logging(let ri) = state, ri == repIndex else { return }
+        guard CoachRepFlowDecoupling.mayLogDirectionForRep(
+            pendingLogRepIndex: pendingDirectionLogRepZeroBased,
+            loggingRepIndex: loggingRepIndexForOptionalSwipe(),
+            repIndex: repIndex
+        ) else { return }
         #if DEBUG
         let t = Date()
         DecisionSpeedDebugLog.logCoachExitSend(activity: .twoMinuteTest, repIndex: repIndex, gate: gate, embeddedTimestamp: t)
@@ -613,11 +628,19 @@ struct TwoMinuteCoachRemoteView: View {
         #else
         remoteService.sendExitLogged(repIndex: repIndex, gate: gate, timestamp: Date())
         #endif
-        currentRepIndex = repIndex + 1
+        pendingDirectionLogRepZeroBased = nil
+        if case .logging(let ri) = state, ri == repIndex, currentRepIndex == repIndex {
+            advanceCoachRepIndexAfterPass(completedRepIndex: repIndex)
+        }
+    }
+
+    private func advanceCoachRepIndexAfterPass(completedRepIndex: Int) {
+        currentRepIndex = completedRepIndex + 1
         clearRepStartAckWaitState()
         if currentRepIndex >= totalReps {
             CoachFirstRunGuidanceStore.markCompletedFirstRun(activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId)
             state = .complete
+            pendingDirectionLogRepZeroBased = nil
         } else {
             state = .ready
             resetCoachSessionInput()
@@ -705,27 +728,29 @@ struct TwoMinuteCoachRemoteView: View {
     }
 
     private func scheduleRepStartAckTimeout(for repIndex: Int) {
-        repStartAckTimeoutWorkItem?.cancel()
-        let work = DispatchWorkItem {
+        repStartAckTimeoutToken = UUID()
+        repStartHardResetToken = UUID()
+        let timeoutToken = repStartAckTimeoutToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + repStartAckTimeoutWindow) {
+            guard self.repStartAckTimeoutToken == timeoutToken else { return }
             guard case .waitingForRepStart(let waitingRep) = state, waitingRep == repIndex else { return }
             pendingRepStartHardResetRepIndex = repIndex
-            let hardReset = DispatchWorkItem {
+            self.repStartHardResetToken = UUID()
+            let hardResetToken = self.repStartHardResetToken
+            DispatchQueue.main.asyncAfter(deadline: .now() + repStartLateAckGraceWindow) {
+                guard self.repStartHardResetToken == hardResetToken else { return }
                 guard case .waitingForRepStart(let stillWaitingRep) = state, stillWaitingRep == repIndex else { return }
                 guard pendingRepStartHardResetRepIndex == repIndex else { return }
                 state = .ready
                 pendingRepStartHardResetRepIndex = nil
                 resetCoachSessionInput()
             }
-            repStartAckTimeoutWorkItem = hardReset
-            DispatchQueue.main.asyncAfter(deadline: .now() + repStartLateAckGraceWindow, execute: hardReset)
         }
-        repStartAckTimeoutWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + repStartAckTimeoutWindow, execute: work)
     }
 
     private func clearRepStartAckWaitState() {
-        repStartAckTimeoutWorkItem?.cancel()
-        repStartAckTimeoutWorkItem = nil
+        repStartAckTimeoutToken = UUID()
+        repStartHardResetToken = UUID()
         pendingRepStartHardResetRepIndex = nil
     }
 

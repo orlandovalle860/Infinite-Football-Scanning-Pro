@@ -51,8 +51,7 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
             case .armedScanning, .complete, .waitingForNextRep:
                 break
             default:
-                print("[INVALID TRANSITION] waitingForNextRep → \(newPhase)")
-                assertionFailure("[INVALID TRANSITION] waitingForNextRep → \(newPhase)")
+                print("[INVALID TRANSITION] waitingForNextRep → \(newPhase) — ignored (stale timer/work item)")
                 return
             }
         }
@@ -80,14 +79,10 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
         let endsAt = Date().addingTimeInterval(delay)
         commitPhase(.armedScanning(repIndex: repIndex, ballGate: p.ballGate, endsAt: endsAt))
 
-        // Single fire path (asyncAfter) to avoid Timer/asyncAfter race; Timer kept as backup.
         scanDelayTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
             DispatchQueue.main.async { self?.onBeepFire(repIndex: repIndex, ballGate: p.ballGate) }
         }
         RunLoop.main.add(scanDelayTimer!, forMode: .common)
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            self?.onBeepFire(repIndex: repIndex, ballGate: p.ballGate)
-        }
     }
 
     func onBeepFire(repIndex: Int, ballGate: Gate) {
@@ -142,11 +137,50 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
     /// Slightly wider in real coach-operated workflows to reduce false drops.
     private static let maxReactionTimeSeconds: TimeInterval = 3.5
 
+    private func recordExitLoggedWithoutBlockingRepFlow(repIndex: Int, gate: Gate, timestamp: Date) -> Double? {
+        guard directionLoggedByRep[repIndex] == nil else { return nil }
+        let triggerTime = passTriggeredAt ?? passTriggeredByRep[repIndex] ?? infoShownAtForCurrentRep ?? startedAtForCurrentRep
+        guard let triggerTime else { return nil }
+        let reactionTimeSeconds = timestamp.timeIntervalSince(triggerTime)
+        guard reactionTimeSeconds <= Self.maxReactionTimeSeconds else { return nil }
+
+        let p = plan[repIndex]
+        let expectedArrivalTime = triggerTime.addingTimeInterval(travelTimeSeconds)
+        let decisionWindowSeconds = expectedArrivalTime.timeIntervalSince(timestamp)
+        directionLoggedByRep[repIndex] = timestamp
+        repDecisions.append(
+            RepDecision(
+                repIndex: repIndex,
+                direction: gate,
+                isCorrect: gate == p.ballGate,
+                decisionWindowSeconds: decisionWindowSeconds,
+                bucket: DecisionTimingModel.speedBucket(forDecisionWindow: decisionWindowSeconds, activity: .twoMinuteTest, score: adaptiveSessionScore(including: decisionWindowSeconds, isCorrect: gate == p.ballGate))
+            )
+        )
+        let startedAt = startedAtForCurrentRep ?? Date()
+        let infoShownAt = infoShownAtForCurrentRep ?? startedAt
+        let infoHiddenAt = infoHiddenAtForCurrentRep ?? Date()
+        let log = RepLog.from(
+            repIndex: repIndex,
+            ballGate: p.ballGate,
+            exitedGate: gate,
+            startedAt: startedAt,
+            infoShownAt: infoShownAt,
+            infoHiddenAt: infoHiddenAt,
+            passTriggeredAt: passTriggeredAt,
+            exitLoggedAt: timestamp
+        )
+        repLogs.append(log)
+        passTriggeredAt = nil
+        passTriggeredByRep[repIndex] = nil
+        return reactionTimeSeconds
+    }
+
     /// Returns reaction time in seconds when rep was saved; nil when discarded.
     func onExitLogged(repIndex: Int, gate: Gate, timestamp: Date) -> Double? {
         guard repIndex == currentRepIndex else { return nil }
         if case .waitingForNextRep = phase {
-            return nil
+            return recordExitLoggedWithoutBlockingRepFlow(repIndex: repIndex, gate: gate, timestamp: timestamp)
         }
         var rIdx: Int?
         switch phase {
@@ -217,10 +251,6 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
                 decisionWindowSeconds: decisionWindowSeconds,
                 bucket: DecisionTimingModel.speedBucket(forDecisionWindow: decisionWindowSeconds, activity: .twoMinuteTest, score: score)
             )
-        )
-        CurrentSessionStore.shared.recordDecisionTimingCalibrationSample(
-            decisionWindowSeconds: decisionWindowSeconds,
-            activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId
         )
         print("[DecisionWindowDebug] repIndex=\(repIndex) passTS=\(triggerTime.timeIntervalSince1970) expectedArrivalTS=\(expectedArrivalTime.timeIntervalSince1970) decisionTS=\(timestamp.timeIntervalSince1970) decisionWindowSeconds=\(decisionWindowSeconds)")
         let startedAt = startedAtForCurrentRep ?? Date()
@@ -312,10 +342,6 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
         let p = plan[repIndex]
         let expectedArrivalTime = triggerTime.addingTimeInterval(travelTimeSeconds)
         let decisionWindowSeconds = expectedArrivalTime.timeIntervalSince(timestamp)
-        CurrentSessionStore.shared.recordDecisionTimingCalibrationSample(
-            decisionWindowSeconds: decisionWindowSeconds,
-            activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId
-        )
         print("[DecisionWindowDebug] repIndex=\(repIndex) passTS=\(triggerTime.timeIntervalSince1970) expectedArrivalTS=\(expectedArrivalTime.timeIntervalSince1970) decisionTS=\(timestamp.timeIntervalSince1970) decisionWindowSeconds=\(decisionWindowSeconds)")
         let startedAt = startedAtForCurrentRep ?? Date()
         let infoShownAt = infoShownAtForCurrentRep ?? startedAt
@@ -359,7 +385,13 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
         ballHideTimer?.invalidate()
         ballHideTimer = nil
         infoHiddenAtForCurrentRep = Date()
-        commitPhase(.awaitingExitLog(repIndex: repIndex, ballGate: ballGate))
+        commitPhase(.waitingForNextRep)
+    }
+
+    func forceReadyForIncomingCoachNextRep() {
+        cancelTimers()
+        cueTimingDebugVisibleAt = nil
+        commitPhase(.waitingForNextRep)
     }
 
     private func cancelTimers() {
@@ -446,9 +478,6 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
                     DispatchQueue.main.async { self?.onBeepFire(repIndex: repIndex, ballGate: ballGate) }
                 }
                 if let t = scanDelayTimer { RunLoop.main.add(t, forMode: .common) }
-                DispatchQueue.main.asyncAfter(deadline: .now() + remaining) { [weak self] in
-                    self?.onBeepFire(repIndex: repIndex, ballGate: ballGate)
-                }
             }
         case .ballVisible(let repIndex, let ballGate, let endsAt):
             if now >= endsAt {
@@ -470,13 +499,10 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
         cancelTimers()
     }
 
+    /// Solo 2MT uses shared wall travel (override / nominal) like other solo drills — not per-activity ``CurrentSessionStore/calibratedBallTravelSeconds``.
     private var travelTimeSeconds: Double {
-        let base = CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds
+        CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds
             ?? config.difficulty.passTempo.expectedBallTravelTime(distanceMeters: 11.0)
-        return CurrentSessionStore.shared.calibratedBallTravelSeconds(
-            baseNominal: base,
-            activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId
-        )
     }
 
     private func adaptiveSessionScore(including newWindow: Double, isCorrect: Bool) -> Int {

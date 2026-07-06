@@ -1,5 +1,9 @@
 # FootballScanningAI — Cursor rules
 
+## PBA V2 — Solo vs partner
+
+- **Default scope:** For training activities (Dribble or Pass, Away From Pressure, One Touch Passing, Two-Minute Test, etc.), implement **new** behavior, timing, and UI **only in solo mode** unless the user explicitly asks to change partner / relay / coach display behavior.
+
 ## PBA V2 — Two-Minute Critical Scan (Display)
 
 - **Overlay during ballVisible:** The overlay text (status/coaching copy at the bottom) must fade out or reduce opacity during `ballVisible` so the ball is the focus. Keep this behavior when changing the display view.

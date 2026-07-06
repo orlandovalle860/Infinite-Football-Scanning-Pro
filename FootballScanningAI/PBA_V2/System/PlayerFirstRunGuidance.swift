@@ -40,12 +40,11 @@ enum PlayerFirstRunGuidanceCopy {
 enum PlayerFirstRunGuidanceToastAnimator {
     @MainActor
     static func cancel(
-        task: inout Task<Void, Never>?,
+        token: Binding<UUID>,
         message: Binding<String?>,
         opacity: Binding<Double>
     ) {
-        task?.cancel()
-        task = nil
+        token.wrappedValue = UUID()
         opacity.wrappedValue = 0
         message.wrappedValue = nil
     }
@@ -54,25 +53,28 @@ enum PlayerFirstRunGuidanceToastAnimator {
     @MainActor
     static func schedule(
         text: String,
-        task: inout Task<Void, Never>?,
+        token: Binding<UUID>,
         message: Binding<String?>,
         opacity: Binding<Double>
     ) {
-        task?.cancel()
+        token.wrappedValue = UUID()
+        let scheduleToken = token.wrappedValue
         message.wrappedValue = text
         opacity.wrappedValue = 0
-        task = Task { @MainActor in
+        Task { @MainActor in
+            guard token.wrappedValue == scheduleToken else { return }
             withAnimation(.easeIn(duration: 0.15)) {
                 opacity.wrappedValue = 1
             }
             try? await Task.sleep(nanoseconds: 150_000_000)
+            guard token.wrappedValue == scheduleToken else { return }
             try? await Task.sleep(nanoseconds: 1_400_000_000)
-            guard !Task.isCancelled else { return }
+            guard token.wrappedValue == scheduleToken else { return }
             withAnimation(.easeOut(duration: 0.35)) {
                 opacity.wrappedValue = 0
             }
             try? await Task.sleep(nanoseconds: 360_000_000)
-            guard !Task.isCancelled else { return }
+            guard token.wrappedValue == scheduleToken else { return }
             message.wrappedValue = nil
         }
     }

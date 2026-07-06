@@ -89,8 +89,7 @@ final class DribbleOrPassEngine: ObservableObject {
             case .armedScanning, .blockComplete, .waitingForNextRep:
                 break
             default:
-                print("[INVALID TRANSITION] waitingForNextRep → \(newPhase)")
-                assertionFailure("[INVALID TRANSITION] waitingForNextRep → \(newPhase)")
+                print("[INVALID TRANSITION] waitingForNextRep → \(newPhase) — ignored (stale timer/work item)")
                 return
             }
         }
@@ -100,36 +99,11 @@ final class DribbleOrPassEngine: ObservableObject {
 
     private func updateInstructions() {
         switch phase {
-        case .waitingForNextRep:
-            instructionTitle = "Waiting for coach…"
-            if trainingMode == .partner {
-                instructionSubtitle = ""
-            } else {
-                instructionSubtitle = "Keep moving. Check both shoulders."
-            }
-        case .armedScanning:
-            instructionTitle = "Scan freely"
-            if trainingMode == .partner {
-                instructionSubtitle = ""
-            } else {
-                instructionSubtitle = "Scan before expected arrival."
-            }
-        case .beepedAwaitingPass:
-            instructionTitle = "Ball is coming"
-            instructionSubtitle = trainingMode == .partner
-                ? ""
-                : "Coach: press PASS at the strike."
-        case .cueRevealing:
-            instructionTitle = "Decide now"
-            instructionSubtitle = "If forward space is open → dribble.\nIf not → pass."
-        case .cueVisible:
-            instructionTitle = "Swipe now"
-            instructionSubtitle = "Swipe your decision as the ball arrives."
-        case .awaitingExitLog:
-            instructionTitle = "Great anticipation"
-            instructionSubtitle = "Waiting for coach swipe log…"
         case .blockComplete:
             instructionTitle = "Block complete."
+            instructionSubtitle = ""
+        default:
+            instructionTitle = ""
             instructionSubtitle = ""
         }
     }
@@ -293,7 +267,14 @@ final class DribbleOrPassEngine: ObservableObject {
         cueHideTimer?.invalidate()
         cueHideTimer = nil
         revealedGates = []
-        commitPhase(.awaitingExitLog(repIndex: repIndex))
+        commitPhase(.waitingForNextRep)
+    }
+
+    func forceReadyForIncomingCoachNextRep() {
+        cancelTimers()
+        cueTimingDebugVisibleAt = nil
+        revealedGates = []
+        commitPhase(.waitingForNextRep)
     }
 
     private func cancelRevealTimers() {
@@ -410,11 +391,60 @@ final class DribbleOrPassEngine: ObservableObject {
     /// Max reaction time (trigger → confirmation); reps above this are discarded.
     private static let maxReactionTimeSeconds: TimeInterval = 2.0
 
+    private func recordExitLoggedWithoutBlockingRepFlow(repIndex: Int, gate: Gate, timestamp: Date) -> Double? {
+        guard directionLoggedByRep[repIndex] == nil else { return nil }
+        guard let triggerTime = passTriggeredAt ?? passTriggeredByRep[repIndex] else { return nil }
+        let reactionTimeSeconds = timestamp.timeIntervalSince(triggerTime)
+        guard reactionTimeSeconds <= Self.maxReactionTimeSeconds else { return nil }
+
+        let p = plan[repIndex]
+        let decisionQuality = DribbleOrPassDecisionRules.quality(plan: p, chosen: gate)
+        let correct = DribbleOrPassDecisionRules.countsAsCorrect(decisionQuality)
+        let forwardLaneOpen = p.up == .open || p.up == .teammate
+        let pending = pendingFirstTouchByRep[repIndex]
+        pendingFirstTouchByRep[repIndex] = nil
+        let expectedArrivalTime = triggerTime.addingTimeInterval(travelTimeSeconds)
+        let decisionWindowSeconds = expectedArrivalTime.timeIntervalSince(timestamp)
+        let score = adaptiveSessionScore(including: decisionWindowSeconds, isCorrect: correct)
+        let speed = classifyDecisionSpeed(windowSeconds: decisionWindowSeconds, score: score)
+        directionLoggedByRep[repIndex] = timestamp
+        repDecisions.append(
+            RepDecision(
+                repIndex: repIndex,
+                direction: gate,
+                isCorrect: correct,
+                decisionWindowSeconds: decisionWindowSeconds,
+                bucket: DecisionTimingModel.speedBucket(forDecisionWindow: decisionWindowSeconds, activity: .dribbleOrPass, score: score)
+            )
+        )
+        applyAdaptiveAfterRep(wasCorrect: correct, decisionWindow: decisionWindowSeconds)
+        let decisionPoints = dribbleOrPassDecisionPoints(plan: p, chosenGate: gate)
+        let timingBonus = dribbleOrPassTimingBonus(speed)
+        let result = DribbleOrPassRepResult(
+            repIndex: repIndex,
+            correct: correct,
+            decisionQuality: decisionQuality,
+            forwardLaneOpen: forwardLaneOpen,
+            decisionTime: reactionTimeSeconds,
+            decisionSpeed: speed,
+            expectedGate: p.expectedCorrectGate,
+            chosenGate: gate,
+            decisionPoints: decisionPoints,
+            timingBonus: timingBonus,
+            firstTouchGate: pending?.gate
+        )
+        repResults.append(result)
+        updateEarlyStreakAfterRep(speed: speed)
+        passTriggeredAt = nil
+        passTriggeredByRep[repIndex] = nil
+        return reactionTimeSeconds
+    }
+
     /// Returns reaction time in seconds when rep was saved; nil when discarded.
     func onExitLogged(repIndex: Int, gate: Gate, timestamp: Date) -> Double? {
         guard repIndex == currentRepIndex else { return nil }
         if case .waitingForNextRep = phase {
-            return nil
+            return recordExitLoggedWithoutBlockingRepFlow(repIndex: repIndex, gate: gate, timestamp: timestamp)
         }
         var rIdx: Int?
         switch phase {

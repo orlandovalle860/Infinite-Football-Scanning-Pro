@@ -13,12 +13,15 @@ import SwiftUI
 enum AppRoute: Hashable {
     case twoMinuteRoleSelection
     case coachRemote
+    /// Player display: join code / relay pairing from Home (Partner segment) without first-launch-only flows.
+    case partnerPairing
     case twoMinuteCoachRemote
     case dribbleOrPassCoachRemote
     case awayFromPressureCoachRemote
     case oneTouchPassingCoachRemote
     case curriculum
     case progress
+    case profileInsights
     case achievements
     case warmupHub
     case warmup(DisplayMode)
@@ -35,12 +38,19 @@ enum AppRoute: Hashable {
     case oneTouchPassingRoleSelection
     case oneTouchPassingTrainingModeSelection
     case oneTouchPassingSetup(mode: TrainingMode)
+    /// Home: jump straight into a session with an explicit ``TrainingMode`` (same screens as the `*Setup` / ``twoMinuteGetReady`` routes).
+    case dribbleOrPass(mode: TrainingMode)
+    case oneTouchPassing(mode: TrainingMode)
+    case awayFromPressure(mode: TrainingMode)
+    case twoMinuteTest(mode: TrainingMode)
     /// Tester Tools entry route; UI is DEBUG-only in ``ContentView`` (toolbar still gated).
     case debugMenu
 }
 
 @MainActor
 final class AppRouter: ObservableObject {
+    private static var didResetPathOnFirstMainAppLaunch = false
+
     /// Typed stack (newest / deepest route is last). Prefer this over `NavigationPath` so
     /// `NavigationStack(path:)` updates stay stable and Xcode logs fewer
     /// “NavigationAuthority bound path tried to update multiple times per frame” warnings.
@@ -80,6 +90,34 @@ final class AppRouter: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Replace the whole navigation path with a single route (from Home, one pushed screen). Does not append on top of existing stack.
+    func replace(with route: AppRoute) {
+        if Thread.isMainThread {
+            withAnimation(.easeInOut(duration: 0.35)) {
+                path = [route]
+            }
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                withAnimation(.easeInOut(duration: 0.35)) {
+                    self.path = [route]
+                }
+            }
+        }
+    }
+
+    /// Clears the navigation stack so the root view (Home) is shown. Does not use last training mode.
+    func resetToHome(endingPartnerSession: Bool = false) {
+        popToRoot(endingPartnerSession: endingPartnerSession)
+    }
+
+    /// Once per app process, when the main shell first appears — ensures we are not restoring a stale path. Idempotent after the first call.
+    func resetNavigationToHomeOnFirstMainAppLaunch() {
+        guard !Self.didResetPathOnFirstMainAppLaunch else { return }
+        Self.didResetPathOnFirstMainAppLaunch = true
+        popToRoot(endingPartnerSession: false)
     }
 
     /// Clear the navigation path so the stack returns to root (Home). One tap from any deep screen.
@@ -137,6 +175,11 @@ final class AppRouter: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Alias for ``popLast()`` (single navigation level).
+    func pop() {
+        popLast()
     }
 
     /// Coach Remote: return to the hub **Start Session** activity grid. Does not end partner transport and does not auto-launch a drill.

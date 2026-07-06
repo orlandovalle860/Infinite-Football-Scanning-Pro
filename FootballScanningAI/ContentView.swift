@@ -111,6 +111,15 @@ struct ActivitiesButtonStyle: ButtonStyle {
     }
 }
 
+/// Home “Start Training” activity tiles — label supplies yellow fill; style adds press feedback only.
+struct HomeActivityLaunchButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
+            .animation(.easeInOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
 struct NumberColorButtonStyle: ButtonStyle {
     let isSelected: Bool
     let color: Color
@@ -285,31 +294,42 @@ struct SplashScreen: View {
     @EnvironmentObject private var multipeerManager: MultipeerManager
     @State private var isActive = false
 
-    var body: some View {
-        if isActive {
-            ContentView()
-                .environmentObject(connectionManager)
-                .environmentObject(multipeerManager)
-                .onAppear {
-                    AnalyticsManager.shared.track(.appOpened)
-                    AnalyticsManager.shared.flushIfNeeded()
-                }
-        } else {
-            ZStack {
-                Color.white
-                    .ignoresSafeArea()
+    #if DEBUG
+    private let splashDuration: TimeInterval = 0.35
+    #else
+    private let splashDuration: TimeInterval = 2.0
+    #endif
 
-                Image("SplashLogo")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 300)
-                    .padding()
-            }
-            .onAppear {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    isActive = true
+    var body: some View {
+        Group {
+            if isActive {
+                ContentView()
+                    .environmentObject(connectionManager)
+                    .environmentObject(multipeerManager)
+                    .onAppear {
+                        PBABeepSoundManager.shared.preloadCurrent()
+                        AnalyticsManager.shared.track(.appOpened)
+                        AnalyticsManager.shared.flushIfNeeded()
+                    }
+            } else {
+                ZStack {
+                    Color.white
+                        .ignoresSafeArea()
+
+                    Image("SplashLogo")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 300)
+                        .padding()
                 }
             }
+        }
+        .task(id: isActive) {
+            guard !isActive else { return }
+            let ns = UInt64(max(0.05, splashDuration) * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: ns)
+            guard !Task.isCancelled else { return }
+            isActive = true
         }
     }
 }
@@ -649,14 +669,21 @@ struct MainAppView: View {
     @State private var signOutUXPhase: SignOutUXPhase = .idle
     @State private var showDashboardAudienceRolePrompt = false
     @State private var showWhatsNewControlsPrompt = false
-    /// Limits automatic Coach Remote join prompt to once per app foreground session (avoids repeated presentation on re-render).
-    @State private var didAutoPresentCoachRemoteJoinPromptThisForeground = false
+    /// One-time Solo vs Coach Remote (partner) choice; skipped when a stored training mode already exists (see ``PBASessionFlowPolicy.migrateTrainingModeOnboardingIfNeeded()``).
+    @AppStorage(AppStorageKeys.hasLaunchedBefore) private var hasLaunchedBefore = false
 
     private var resolvedAppRole: AppRole { AppRole.resolved(from: appRoleRaw) }
 
-    /// iPhone fresh install: skip the marketing intro and open the Coach Remote hub so the join phase matches the iPad display (join code ↔ code entry). Role and intro flags sync in ``coachRemoteRootView``.
+    private var showFirstLaunchTrainingModeSelection: Binding<Bool> {
+        Binding(
+            get: { !hasLaunchedBefore && resolvedAppRole != .coachRemote },
+            set: { _ in }
+        )
+    }
+
+    /// iPhone: after first-launch training mode is chosen (``hasLaunchedBefore``), optional one-time Coach Remote hub for join alignment. Must **not** run before mode selection or it steals root and blocks ``FirstLaunchModeSelectionView``.
     private var iPhoneFirstLaunchUseCoachHubForConnection: Bool {
-        UIDevice.current.userInterfaceIdiom == .phone && !hasSeenIntro
+        UIDevice.current.userInterfaceIdiom == .phone && !hasSeenIntro && hasLaunchedBefore
     }
     private var shouldShowAudiencePrompt: Bool {
         resolvedAppRole != .coachRemote
@@ -873,20 +900,9 @@ struct MainAppView: View {
             .id(partnerTrainingCoordinator.partnerDisplaySurfaceId)
     }
 
-    /// Player iPad: show join-code prompt once per foreground if disconnected (including first launch).
-    private func evaluateAutoPresentCoachRemoteJoinPrompt() {
-        guard CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
-        guard !authManager.isRestoring else { return }
-        guard resolvedAppRole != .coachRemote else { return }
-        guard !shouldWaitForRemoteHydration else { return }
-        guard !CoachRemoteSessionStartGate.iPadDisplayCoachRelayLinkIsLive() else { return }
-        guard !coachRemoteRequiredPrompt.isPresented else { return }
-        guard !didAutoPresentCoachRemoteJoinPromptThisForeground else { return }
-        coachRemoteRequiredPrompt.present(pendingRoute: nil)
-        didAutoPresentCoachRemoteJoinPromptThisForeground = true
-    }
-
     private func mainAppOnAppear() {
+        router.resetNavigationToHomeOnFirstMainAppLaunch()
+        PBASessionFlowPolicy.migrateTrainingModeOnboardingIfNeeded()
 #if DEBUG
         print("DEBUG SUPABASE_URL:", Bundle.main.object(forInfoDictionaryKey: "SUPABASE_URL") ?? "nil")
         print("DEBUG SUPABASE_ANON_KEY:", Bundle.main.object(forInfoDictionaryKey: "SUPABASE_ANON_KEY") ?? "nil")
@@ -925,7 +941,6 @@ struct MainAppView: View {
         refreshCoachingTrainingNudgesIfNeeded()
         showDashboardAudienceRolePrompt = false
         showWhatsNewControlsPrompt = false
-        evaluateAutoPresentCoachRemoteJoinPrompt()
     }
 
     /// Split from `body` so the SwiftUI type checker can finish in reasonable time.
@@ -935,6 +950,8 @@ struct MainAppView: View {
                 rootView
                     .onReceive(NotificationCenter.default.publisher(for: .twoMinuteMessageReceived)) { self.handleCoachSessionStartedNotification($0) }
                     .onReceive(NotificationCenter.default.publisher(for: .presentPlayerDisplayJoinPromptAfterStartNewSession).receive(on: RunLoop.main)) { _ in
+                        guard hasLaunchedBefore else { return }
+                        guard PBASessionFlowPolicy.lastSelectedTrainingMode().needsCoachRemoteJoinCodeFlow else { return }
                         guard CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
                         coachRemoteRequiredPrompt.present(pendingRoute: nil)
                     }
@@ -955,7 +972,6 @@ struct MainAppView: View {
             guard UIDevice.current.userInterfaceIdiom == .pad else { return }
             guard AppRole.resolved(from: appRoleRaw) == .player else { return }
             await TrainingPartnerConnectionCoordinator.shared.warmUpCoachLinkSurfaceOnPlayerDisplayIfNeeded()
-            evaluateAutoPresentCoachRemoteJoinPrompt()
         }
         .onChange(of: coachRelayRemoteService.connectionState) { _, _ in
             markIntroSeenForIPadPlayerIfCoachLinked()
@@ -1068,18 +1084,15 @@ struct MainAppView: View {
                     showWhatsNewControlsPrompt = false
                 }
             }
+            .fullScreenCover(isPresented: showFirstLaunchTrainingModeSelection) {
+                FirstLaunchModeSelectionView(onComplete: {})
+                    .interactiveDismissDisabled()
+            }
     }
 
     private var mainAppSceneAndAuthObservers: some View {
         mainAppSheets
             .onAppear(perform: mainAppOnAppear)
-            .onChange(of: scenePhase) { _, phase in
-                if phase == .background || phase == .inactive {
-                    didAutoPresentCoachRemoteJoinPromptThisForeground = false
-                } else if phase == .active {
-                    evaluateAutoPresentCoachRemoteJoinPrompt()
-                }
-            }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                 refreshCoachingTrainingNudgesIfNeeded()
             }
@@ -1090,7 +1103,6 @@ struct MainAppView: View {
                 if !restoring {
                     logLaunchRouting(reason: "auth_isRestoring_false")
                     hydratePlayersIfNeeded()
-                    evaluateAutoPresentCoachRemoteJoinPrompt()
                 }
             }
             .onChange(of: authManager.currentSession != nil) { _, hasSession in
@@ -1106,23 +1118,17 @@ struct MainAppView: View {
         mainAppSceneAndAuthObservers
             .onChange(of: hasHydratedPlayersForSession) { _, v in
                 logLaunchRouting(reason: "hasHydratedPlayersForSession=\(v)")
-                evaluateAutoPresentCoachRemoteJoinPrompt()
             }
             .onChange(of: hasCompletedInitialTest) { _, v in
                 logLaunchRouting(reason: "hasCompletedInitialTest=\(v)")
             }
             .onChange(of: hasSeenIntro) { _, v in
                 logLaunchRouting(reason: "hasSeenIntro=\(v)")
-                evaluateAutoPresentCoachRemoteJoinPrompt()
             }
             .onChange(of: appRoleRaw) { oldValue, newValue in
                 AppRoleDebug.log("role_change old=\(oldValue) new=\(newValue) routing=\(AppRole.resolved(from: newValue) == .coachRemote ? "coach_remote_root" : "player_flow")")
                 router.popToRoot()
                 logLaunchRouting(reason: "app_role_storage_changed")
-                if AppRole.resolved(from: newValue) == .player {
-                    didAutoPresentCoachRemoteJoinPromptThisForeground = false
-                }
-                evaluateAutoPresentCoachRemoteJoinPrompt()
             }
             .onChange(of: hasCompletedInitialTest) { _, _ in
                 showDashboardAudienceRolePrompt = false
@@ -1188,6 +1194,9 @@ struct MainAppView: View {
         }
     }
 
+    /// Same persistence as ``TrainingModeSelectionView`` / ``PBASessionFlowPolicy.routeForActivityLaunch`` (not a hardcoded `.partner`).
+    private var persistedTrainingMode: TrainingMode { PBASessionFlowPolicy.lastSelectedTrainingMode() }
+
     @ViewBuilder
     private func routeView(for route: AppRoute) -> some View {
         switch route {
@@ -1200,6 +1209,9 @@ struct MainAppView: View {
         case .coachRemote:
             CoachRemoteHubView(settingsViewModel: settingsViewModel, profileManager: profileManager)
                 .environmentObject(popToRootTrigger)
+                .environmentObject(router)
+        case .partnerPairing:
+            PartnerSessionStartView()
                 .environmentObject(router)
         case .twoMinuteCoachRemote:
             CoachRemoteActivityConnectionGate {
@@ -1255,6 +1267,11 @@ struct MainAppView: View {
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
+        case .profileInsights:
+            PlayerProfileProgressInsightsView(profileManager: profileManager, settingsViewModel: settingsViewModel)
+                .environmentObject(progressStore)
+                .environmentObject(playerStore)
+                .environmentObject(router)
         case .achievements:
             AchievementsView(profileManager: profileManager)
                 .environmentObject(playerStore)
@@ -1266,23 +1283,23 @@ struct MainAppView: View {
             MainView(settingsViewModel: settingsViewModel, profileManager: profileManager, displayMode: mode, showModeSelection: false)
         case .trainingModeSelection:
             partnerDisplaySurface {
-                TwoMinuteCriticalScanSessionView(config: TwoMinuteTestConfig.baseline, mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                TwoMinuteCriticalScanSessionView(config: TwoMinuteTestConfig.baseline, mode: persistedTrainingMode, settingsViewModel: settingsViewModel, profileManager: profileManager)
                     .environmentObject(progressStore)
                     .environmentObject(playerStore)
                     .environmentObject(popToRootTrigger)
                     .environmentObject(router)
             }
-        case .twoMinuteSetup:
+        case .twoMinuteSetup(let mode):
             partnerDisplaySurface {
-                TwoMinuteCriticalScanSessionView(config: TwoMinuteTestConfig.baseline, mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                TwoMinuteCriticalScanSessionView(config: TwoMinuteTestConfig.baseline, mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
                     .environmentObject(progressStore)
                     .environmentObject(playerStore)
                     .environmentObject(popToRootTrigger)
                     .environmentObject(router)
             }
-        case .twoMinuteGetReady:
+        case .twoMinuteGetReady(let mode):
             partnerDisplaySurface {
-                TwoMinuteCriticalScanSessionView(config: TwoMinuteTestConfig.baseline, mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                TwoMinuteCriticalScanSessionView(config: TwoMinuteTestConfig.baseline, mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
                     .environmentObject(progressStore)
                     .environmentObject(playerStore)
                     .environmentObject(popToRootTrigger)
@@ -1290,7 +1307,7 @@ struct MainAppView: View {
             }
         case .awayFromPressureRoleSelection:
             partnerDisplaySurface {
-                AwayFromPressureDisplaySessionView(config: AwayFromPressureConfig.config(for: .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                AwayFromPressureDisplaySessionView(config: AwayFromPressureConfig.config(for: .standard), mode: persistedTrainingMode, settingsViewModel: settingsViewModel, profileManager: profileManager)
                     .environmentObject(progressStore)
                     .environmentObject(playerStore)
                     .environmentObject(popToRootTrigger)
@@ -1298,15 +1315,15 @@ struct MainAppView: View {
             }
         case .awayFromPressureTrainingModeSelection:
             partnerDisplaySurface {
-                AwayFromPressureDisplaySessionView(config: AwayFromPressureConfig.config(for: .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                AwayFromPressureDisplaySessionView(config: AwayFromPressureConfig.config(for: .standard), mode: persistedTrainingMode, settingsViewModel: settingsViewModel, profileManager: profileManager)
                     .environmentObject(progressStore)
                     .environmentObject(playerStore)
                     .environmentObject(popToRootTrigger)
                     .environmentObject(router)
             }
-        case .awayFromPressureSetup:
+        case .awayFromPressureSetup(let mode):
             partnerDisplaySurface {
-                AwayFromPressureDisplaySessionView(config: AwayFromPressureConfig.config(for: .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                AwayFromPressureDisplaySessionView(config: AwayFromPressureConfig.config(for: .standard), mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
                     .environmentObject(progressStore)
                     .environmentObject(playerStore)
                     .environmentObject(popToRootTrigger)
@@ -1315,7 +1332,7 @@ struct MainAppView: View {
         case .dribbleOrPassRoleSelection:
             if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
                 partnerDisplaySurface {
-                    DribbleOrPassDisplaySessionView(config: DribbleOrPassConfig.defaultConfig(for: .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                    DribbleOrPassDisplaySessionView(config: DribbleOrPassConfig.defaultConfig(for: .standard), mode: persistedTrainingMode, settingsViewModel: settingsViewModel, profileManager: profileManager)
                         .environmentObject(progressStore)
                         .environmentObject(playerStore)
                         .environmentObject(popToRootTrigger)
@@ -1329,7 +1346,7 @@ struct MainAppView: View {
         case .dribbleOrPassTrainingModeSelection:
             if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
                 partnerDisplaySurface {
-                    DribbleOrPassDisplaySessionView(config: DribbleOrPassConfig.defaultConfig(for: .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                    DribbleOrPassDisplaySessionView(config: DribbleOrPassConfig.defaultConfig(for: .standard), mode: persistedTrainingMode, settingsViewModel: settingsViewModel, profileManager: profileManager)
                         .environmentObject(progressStore)
                         .environmentObject(playerStore)
                         .environmentObject(popToRootTrigger)
@@ -1340,10 +1357,10 @@ struct MainAppView: View {
                     .environmentObject(playerStore)
                     .environmentObject(router)
             }
-        case .dribbleOrPassSetup:
+        case .dribbleOrPassSetup(let mode):
             if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
                 partnerDisplaySurface {
-                    DribbleOrPassDisplaySessionView(config: DribbleOrPassConfig.defaultConfig(for: .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                    DribbleOrPassDisplaySessionView(config: DribbleOrPassConfig.defaultConfig(for: .standard), mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
                         .environmentObject(progressStore)
                         .environmentObject(playerStore)
                         .environmentObject(popToRootTrigger)
@@ -1357,7 +1374,7 @@ struct MainAppView: View {
         case .oneTouchPassingRoleSelection:
             if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
                 partnerDisplaySurface {
-                    OneTouchPassingDisplaySessionView(config: OneTouchPassingConfig.defaultConfig(for: .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                    OneTouchPassingDisplaySessionView(config: OneTouchPassingConfig.defaultConfig(for: .standard), mode: persistedTrainingMode, settingsViewModel: settingsViewModel, profileManager: profileManager)
                         .environmentObject(progressStore)
                         .environmentObject(playerStore)
                         .environmentObject(popToRootTrigger)
@@ -1371,7 +1388,7 @@ struct MainAppView: View {
         case .oneTouchPassingTrainingModeSelection:
             if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
                 partnerDisplaySurface {
-                    OneTouchPassingDisplaySessionView(config: OneTouchPassingConfig.defaultConfig(for: .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                    OneTouchPassingDisplaySessionView(config: OneTouchPassingConfig.defaultConfig(for: .standard), mode: persistedTrainingMode, settingsViewModel: settingsViewModel, profileManager: profileManager)
                         .environmentObject(progressStore)
                         .environmentObject(playerStore)
                         .environmentObject(popToRootTrigger)
@@ -1382,10 +1399,10 @@ struct MainAppView: View {
                     .environmentObject(playerStore)
                     .environmentObject(router)
             }
-        case .oneTouchPassingSetup:
+        case .oneTouchPassingSetup(let mode):
             if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
                 partnerDisplaySurface {
-                    OneTouchPassingDisplaySessionView(config: OneTouchPassingConfig.defaultConfig(for: .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                    OneTouchPassingDisplaySessionView(config: OneTouchPassingConfig.defaultConfig(for: .standard), mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
                         .environmentObject(progressStore)
                         .environmentObject(playerStore)
                         .environmentObject(popToRootTrigger)
@@ -1394,6 +1411,50 @@ struct MainAppView: View {
             } else {
                 PremiumPaywallView(profileManager: profileManager)
                     .environmentObject(playerStore)
+                    .environmentObject(router)
+            }
+        case .dribbleOrPass(let mode):
+            if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
+                partnerDisplaySurface {
+                    DribbleOrPassDisplaySessionView(config: DribbleOrPassConfig.defaultConfig(for: .standard), mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                        .environmentObject(progressStore)
+                        .environmentObject(playerStore)
+                        .environmentObject(popToRootTrigger)
+                        .environmentObject(router)
+                }
+            } else {
+                PremiumPaywallView(profileManager: profileManager)
+                    .environmentObject(playerStore)
+                    .environmentObject(router)
+            }
+        case .oneTouchPassing(let mode):
+            if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
+                partnerDisplaySurface {
+                    OneTouchPassingDisplaySessionView(config: OneTouchPassingConfig.defaultConfig(for: .standard), mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                        .environmentObject(progressStore)
+                        .environmentObject(playerStore)
+                        .environmentObject(popToRootTrigger)
+                        .environmentObject(router)
+                }
+            } else {
+                PremiumPaywallView(profileManager: profileManager)
+                    .environmentObject(playerStore)
+                    .environmentObject(router)
+            }
+        case .awayFromPressure(let mode):
+            partnerDisplaySurface {
+                AwayFromPressureDisplaySessionView(config: AwayFromPressureConfig.config(for: .standard), mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                    .environmentObject(progressStore)
+                    .environmentObject(playerStore)
+                    .environmentObject(popToRootTrigger)
+                    .environmentObject(router)
+            }
+        case .twoMinuteTest(let mode):
+            partnerDisplaySurface {
+                TwoMinuteCriticalScanSessionView(config: TwoMinuteTestConfig.baseline, mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                    .environmentObject(progressStore)
+                    .environmentObject(playerStore)
+                    .environmentObject(popToRootTrigger)
                     .environmentObject(router)
             }
         case .debugMenu:
@@ -1680,6 +1741,16 @@ struct IntroView: View {
     @State private var trendingIdentity: PlayerIdentity?
     @State private var showSignOutConfirmation = false
     @State private var showSwitchPlayerConfirmation = false
+
+    /// Home segmented control: Solo vs Coach Remote path (``TrainingMode.partner``). Wall maps to the Partner segment for display.
+    private enum HomeTrainingModeSegment: String, Hashable {
+        case solo
+        case partner
+    }
+
+    @State private var homeTrainingModeSegment: HomeTrainingModeSegment = .solo
+    @State private var highlightPrimaryAction: Bool = false
+    @State private var isStartSessionPressed = false
 
     private enum ProgressModalType: Identifiable {
         case levelUp(previousTier: String, newTier: String, previousAvg: Double?, newAvg: Double?, previousAccuracy: Int?, newAccuracy: Int?)
@@ -2147,6 +2218,71 @@ struct IntroView: View {
         PBASessionFlowPolicy.routeForActivityLaunch(activity)
     }
 
+    /// Home segmented control: Solo vs Partner (``HomeTrainingModeSegment``).
+    private var selectedMode: TrainingMode {
+        homeTrainingModeSegment == .solo ? .solo : .partner
+    }
+
+    private func startActivity(_ activity: ActivityKind) {
+        navigateToActivity(activity, mode: selectedMode)
+    }
+
+    @ViewBuilder
+    private func homeActivityButton(_ title: String, activity: ActivityKind) -> some View {
+        Button {
+            startActivity(activity)
+        } label: {
+            Text(title)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(.black)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 18)
+                .background(Color.yellow)
+                .cornerRadius(14)
+        }
+        .buttonStyle(HomeActivityLaunchButtonStyle())
+    }
+
+    private func navigateToActivity(_ activity: ActivityKind, mode: TrainingMode) {
+        print("Starting activity with mode:", mode)
+        PBASessionFlowPolicy.persistTrainingMode(mode)
+        let route: AppRoute
+        switch activity {
+        case .dribbleOrPass:
+            route = .dribbleOrPass(mode: mode)
+        case .oneTouchPassing:
+            route = .oneTouchPassing(mode: mode)
+        case .awayFromPressure:
+            route = .awayFromPressure(mode: mode)
+        case .twoMinuteTest:
+            route = .twoMinuteTest(mode: mode)
+        }
+        router.pushRespectingCoachRemotePadGate(route, coachRemotePrompt: coachRemoteRequiredPrompt)
+    }
+
+    /// Quick entry: open a full session using the current Home training mode.
+    private var homeActivityLaunchSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Start Training")
+                .font(.headline)
+                .foregroundColor(.white.opacity(0.8))
+            LazyVGrid(
+                columns: [
+                    GridItem(.flexible(), spacing: 16),
+                    GridItem(.flexible(), spacing: 16)
+                ],
+                spacing: 16
+            ) {
+                homeActivityButton("Dribble or Pass", activity: .dribbleOrPass)
+                homeActivityButton("One-Touch Passing", activity: .oneTouchPassing)
+                homeActivityButton("Away From Pressure", activity: .awayFromPressure)
+                homeActivityButton("2-Minute Test", activity: .twoMinuteTest)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     /// Ordered list of 3 activities for Recommended Daily Training (guided activity first).
     private var dailyPlanBlocks: [ActivityKind] {
         let trainingActivities: [ActivityKind] = [.awayFromPressure, .dribbleOrPass, .oneTouchPassing]
@@ -2201,6 +2337,12 @@ struct IntroView: View {
         CoachRemoteSessionStartGate.isPadPlayerRole()
     }
 
+    /// iPad in **player** role is usually a passive field display for Coach Remote, so local “Start” buttons are hidden. If the user chose **Solo** (or Wall), allow the same self-start flow as on iPhone. Partner mode still shows the passive “coach runs from the phone” copy when appropriate.
+    private var canStartLocalTrainingFromHome: Bool {
+        if !isPadPlayerPresentationMode { return true }
+        return !PBASessionFlowPolicy.lastSelectedTrainingMode().needsCoachRemoteJoinCodeFlow
+    }
+
     /// Encouragement message for Today's Goal based on blocks completed today.
     private var todayGoalEncouragement: String {
         switch dailyCompleted {
@@ -2219,7 +2361,7 @@ struct IntroView: View {
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "icloud")
-                        Text("Sign in to sync your data.")
+                        Text("Sign in")
                             .font(.subheadline.weight(.medium))
                     }
                     .foregroundColor(.white.opacity(0.9))
@@ -2229,54 +2371,29 @@ struct IntroView: View {
                 }
                 .buttonStyle(.plain)
             }
-            homeTopSection
+            homePlayerBar
                 .padding(.horizontal, 20)
                 .padding(.top, 10)
-                .padding(.bottom, 10)
-                .background(.ultraThinMaterial)
-                .background(Rectangle().fill(.black.opacity(0.4)))
-                .shadow(color: .black.opacity(0.3), radius: 12, y: 6)
+                .padding(.bottom, 12)
 
-            ScrollView(.vertical, showsIndicators: true) {
-                VStack(spacing: 16) {
-                    Color.clear.frame(height: 12)
+            Spacer()
 
-                    dailyGoalCard
-                        .modifier(StartPageCardStyle())
+            homeMainTrainingSection
+                .padding(.horizontal, 28)
+                .offset(y: 40)
 
-                    quickPerformanceSnapshotSection
-                        .modifier(StartPageCardStyle())
-
-                    coachInsightSection
-                        .modifier(StartPageCardStyle())
-
-                    stageProgressSection
-                        .modifier(StartPageCardStyle())
-
-                    secondaryActionsSection
-                        .modifier(StartPageCardStyle())
-
-                    Spacer(minLength: 40)
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 12)
-                .padding(.bottom, 24)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(
-            LinearGradient(
-                gradient: Gradient(colors: [
-                    Color(red: 0.05, green: 0.05, blue: 0.1),
-                    Color(red: 0.1, green: 0.1, blue: 0.15)
-                ]),
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-        )
-        .navigationTitle("Home")
+        .background(homeScreenBackground)
+        .onAppear {
+            syncHomeTrainingModeSegmentFromDefaults()
+            highlightPrimaryAction = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                highlightPrimaryAction = true
+            }
+        }
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
 #if DEBUG
@@ -2300,20 +2417,31 @@ struct IntroView: View {
                         }
                     } label: {
                         Image(systemName: "arrow.left.arrow.right.circle")
-                            .foregroundColor(.white.opacity(0.9))
+                            .font(.body)
+                            .foregroundColor(.white.opacity(0.75))
                     }
                     .accessibilityLabel("Switch device role")
                 }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    router.push(.profileInsights)
+                } label: {
+                    Image(systemName: "chart.line.uptrend.xyaxis")
+                        .font(.body)
+                        .foregroundColor(.white.opacity(0.75))
+                }
+                .accessibilityLabel("Profile, progress and insights")
             }
             if Config.isSupabaseConfigured, authManager.currentSession != nil {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showSwitchPlayerConfirmation = true
                     } label: {
-                        Label("Switch Player", systemImage: "person.2")
+                        Image(systemName: "person.2")
+                            .font(.body)
+                            .foregroundColor(.white.opacity(0.75))
                     }
-                    .labelStyle(.titleAndIcon)
-                    .foregroundColor(.white.opacity(0.9))
                     .accessibilityLabel("Switch Player")
                     .disabled(signOutUXPhase != .idle)
                 }
@@ -2321,10 +2449,10 @@ struct IntroView: View {
                     Button {
                         showSignOutConfirmation = true
                     } label: {
-                        Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+                        Image(systemName: "rectangle.portrait.and.arrow.right")
+                            .font(.body)
+                            .foregroundColor(.white.opacity(0.75))
                     }
-                    .labelStyle(.titleAndIcon)
-                    .foregroundColor(.white.opacity(0.9))
                     .accessibilityLabel("Use a Different Account")
                     .disabled(signOutUXPhase != .idle)
                 }
@@ -2601,7 +2729,7 @@ struct IntroView: View {
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.9))
                     .multilineTextAlignment(.center)
-                if isPadPlayerPresentationMode {
+                if !canStartLocalTrainingFromHome {
                     Button("OK") {
                         dismissProgressModal()
                     }
@@ -2644,7 +2772,7 @@ struct IntroView: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(.white)
                     .multilineTextAlignment(.center)
-                if isPadPlayerPresentationMode {
+                if !canStartLocalTrainingFromHome {
                     Button("OK") {
                         dismissProgressModal()
                     }
@@ -2843,7 +2971,7 @@ struct IntroView: View {
                             .foregroundColor(.white.opacity(0.85))
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    if isPadPlayerPresentationMode {
+                    if !canStartLocalTrainingFromHome {
                         Text("Your coach runs the 2-minute assessment from Coach Remote on a phone.")
                             .font(.subheadline)
                             .foregroundColor(.white.opacity(0.8))
@@ -2899,7 +3027,7 @@ struct IntroView: View {
                     Text("Focus: \(focusText)")
                         .font(.caption)
                         .foregroundColor(.white.opacity(0.85))
-                    if isPadPlayerPresentationMode {
+                    if !canStartLocalTrainingFromHome {
                         Text("Training is started from Coach Remote on your coach’s phone.")
                             .font(.subheadline)
                             .foregroundColor(.white.opacity(0.8))
@@ -3446,76 +3574,178 @@ struct IntroView: View {
         }
     }
 
-    /// Top bar: left player selector, right home icon.
-    private var homeTopSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Button {
-                    hasSeenPlayerSwitcherTooltip = true
-                    showPlayersSheet = true
-                } label: {
-                    HStack(spacing: 6) {
-                        Text(playerStore.selectedPlayer?.name ?? "Player")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundColor(.white)
-                        Text("▼")
-                            .font(.caption.weight(.semibold))
-                            .foregroundColor(.white.opacity(0.8))
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color.white.opacity(0.12))
-                    .cornerRadius(10)
-                }
-                .buttonStyle(PlainButtonStyle())
-                .accessibilityLabel("Selected player profile")
-                Spacer()
-            }
-            /// Distinct from profile name: this device is in **player training** mode until user switches to Coach Remote.
-            HStack(alignment: .center, spacing: 10) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("This device")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundColor(.white.opacity(0.55))
-                    Text("Player mode")
-                        .font(.caption.weight(.medium))
-                        .foregroundColor(.white.opacity(0.9))
-                }
-                Spacer(minLength: 8)
-                if !isPadPlayerPresentationMode {
-                    Button {
-                        let old = appRoleRaw
-                        appRoleRaw = AppRole.coachRemote.rawValue
-                        router.popToRoot()
-                        AppRoleDebug.log("role_change reason=home_device_role_coach old=\(old) new=\(AppRole.coachRemote.rawValue) routing=coach_remote_root")
-                    } label: {
-                        Text("Use as Coach Remote")
-                            .font(.caption.weight(.semibold))
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.yellow)
-                    .foregroundStyle(.black)
-                    .accessibilityLabel("Switch to Coach Remote mode")
-                }
-            }
-            if let identity = currentPlayerIdentity {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Current training profile: \(identity.profileLabel)")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(.yellow)
-                    Text(identity.shortDescription)
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.78))
-                    if let trendingIdentity {
-                        Text("Emerging strength: \(trendingIdentity.title)")
-                            .font(.caption2)
-                            .foregroundColor(.white.opacity(0.6))
-                    }
-                }
-            }
+    private func syncHomeTrainingModeSegmentFromDefaults() {
+        switch PBASessionFlowPolicy.lastSelectedTrainingMode() {
+        case .solo:
+            homeTrainingModeSegment = .solo
+        case .partner, .wall:
+            homeTrainingModeSegment = .partner
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 8)
+    }
+
+    private func startPartnerSession() {
+        let coordinator = TrainingPartnerConnectionCoordinator.shared
+        if coordinator.isPartnerTrainingSessionActive {
+            return
+        }
+        let mode: TrainingMode = .partner
+        PBASessionFlowPolicy.persistTrainingMode(mode)
+        router.push(.partnerPairing)
+    }
+
+    private var showsHomeStartSession: Bool {
+        homeTrainingModeSegment == .partner || canStartLocalTrainingFromHome
+    }
+
+    private static let homeLogoWatermarkImageName = "pba_logo"
+
+    /// Gradient + subtle brand watermark behind all home UI (non-interactive).
+    private var homeScreenBackground: some View {
+        ZStack {
+            LinearGradient(
+                gradient: Gradient(colors: [
+                    Color(red: 0.05, green: 0.05, blue: 0.1),
+                    Color(red: 0.1, green: 0.1, blue: 0.15)
+                ]),
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            Image(Self.homeLogoWatermarkImageName)
+                .resizable()
+                .scaledToFit()
+                .blur(radius: 0.5)
+                .opacity(0.06)
+                .padding(.horizontal, 60)
+                .offset(y: -60)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+        .ignoresSafeArea()
+    }
+
+    private var homeStartSessionTitle: String {
+        "Start Session"
+    }
+
+    private var homeStartSessionScale: CGFloat {
+        if isStartSessionPressed { return 0.97 }
+        return highlightPrimaryAction ? 1.02 : 1.0
+    }
+
+    /// Top: player selector only (toolbar holds small utility icons).
+    private var homePlayerBar: some View {
+        HStack {
+            Button {
+                hasSeenPlayerSwitcherTooltip = true
+                showPlayersSheet = true
+            } label: {
+                HStack(spacing: 6) {
+                    Text(playerStore.selectedPlayer?.name ?? "Player")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white)
+                    Text("▼")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.white.opacity(0.8))
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color.white.opacity(0.12))
+                .cornerRadius(10)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Selected player profile")
+            Spacer()
+        }
+    }
+
+    /// Main training controls: mode toggle, primary start, secondary warmup.
+    private var homeMainTrainingSection: some View {
+        VStack(spacing: 20) {
+            Picker("", selection: $homeTrainingModeSegment) {
+                Text("Solo").tag(HomeTrainingModeSegment.solo)
+                Text("Partner").tag(HomeTrainingModeSegment.partner)
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: homeTrainingModeSegment) { _, new in
+                let mode: TrainingMode = (new == .solo) ? .solo : .partner
+                PBASessionFlowPolicy.persistTrainingMode(mode)
+                #if DEBUG
+                print("[Home] Training mode (persisted):", mode)
+                #endif
+            }
+
+            if showsHomeStartSession {
+                Button {
+                    performStartSession()
+                } label: {
+                    Text(homeStartSessionTitle)
+                        .font(.title3.weight(.bold))
+                        .foregroundColor(.black)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 22)
+                        .background(Color.yellow)
+                        .cornerRadius(16)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(homeTrainingModeSegment == .partner ? "Start partner session" : "Start solo session")
+                .scaleEffect(homeStartSessionScale)
+                .animation(.easeOut(duration: 0.1), value: isStartSessionPressed)
+                .animation(.easeOut(duration: 0.25), value: highlightPrimaryAction)
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { _ in isStartSessionPressed = true }
+                        .onEnded { _ in isStartSessionPressed = false }
+                )
+            }
+
+            Button {
+                router.push(.warmupHub)
+            } label: {
+                Text("Quick Warmup")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.85))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .background(Color.white.opacity(0.08))
+                    .cornerRadius(10)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.white.opacity(0.08))
+                    )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Quick warmup")
+        }
+        .frame(maxWidth: 420)
+        .frame(maxWidth: .infinity)
+    }
+
+    private func performStartSession() {
+        switch homeTrainingModeSegment {
+        case .partner:
+            startPartnerSession()
+        case .solo:
+            startSoloSession()
+        }
+    }
+
+    private var homeTopSection: some View {
+        homePlayerBar
+    }
+
+    private func startSoloSession() {
+        guard canStartLocalTrainingFromHome else { return }
+        guard !isNavigatingToTraining else { return }
+        isNavigatingToTraining = true
+        PBASessionFlowPolicy.persistTrainingMode(.solo)
+        let route: AppRoute
+        if needsBaselineAssessment {
+            route = PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest)
+        } else {
+            route = routeForTrainNowActivity(continueTrainingCardActivity)
+        }
+        router.pushRespectingCoachRemotePadGate(route, coachRemotePrompt: coachRemoteRequiredPrompt)
+        isNavigatingToTraining = false
     }
 
     private var quickPerformanceSnapshotSection: some View {
@@ -3652,7 +3882,10 @@ struct IntroView: View {
         }
     }
 
-    private var secondaryActionsSection: some View {
+    private var secondaryActionsSection: some View { homeSecondaryActionsForCurrentMode }
+
+    /// Partner: full shortcuts including progress and benchmarks. Solo: navigation only (no score surfaces).
+    private var homeSecondaryActionsForCurrentMode: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("More")
                 .font(.subheadline.weight(.semibold))
@@ -3660,15 +3893,17 @@ struct IntroView: View {
             otherActivityRow(title: "View Path", subtitle: "See curriculum stages") {
                 router.push(.curriculum)
             }
-            otherActivityRow(title: "View Progress", subtitle: "Check trends and report card") {
-                router.push(.progress)
-            }
-            otherActivityRow(title: "Achievements", subtitle: "See earned and locked badges") {
-                router.push(.achievements)
-            }
-            if !isPadPlayerPresentationMode {
-                otherActivityRow(title: "Run 2-Minute Test", subtitle: "Re-test baseline and benchmark progress") {
-                    router.pushRespectingCoachRemotePadGate(PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest), coachRemotePrompt: coachRemoteRequiredPrompt)
+            if homeTrainingModeSegment == .partner {
+                otherActivityRow(title: "View Progress", subtitle: "Check trends and report card") {
+                    router.push(.progress)
+                }
+                otherActivityRow(title: "Achievements", subtitle: "See earned and locked badges") {
+                    router.push(.achievements)
+                }
+                if canStartLocalTrainingFromHome {
+                    otherActivityRow(title: "Run 2-Minute Test", subtitle: "Re-test baseline and benchmark progress") {
+                        router.pushRespectingCoachRemotePadGate(PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest), coachRemotePrompt: coachRemoteRequiredPrompt)
+                    }
                 }
             }
             if !isPadPlayerPresentationMode {
@@ -4288,7 +4523,7 @@ struct TwoMinuteRoleSelectionView: View {
             showFullRoleSelection = false
         }
         .navigationDestination(isPresented: $showTrainingModeSelection) {
-            TwoMinuteCriticalScanSessionView(config: TwoMinuteTestConfig.baseline, mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+            TwoMinuteCriticalScanSessionView(config: TwoMinuteTestConfig.baseline, mode: PBASessionFlowPolicy.lastSelectedTrainingMode(), settingsViewModel: settingsViewModel, profileManager: profileManager)
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
@@ -4766,13 +5001,13 @@ struct MainView: View {
     init(settingsViewModel: SettingsViewModel, profileManager: UserProfileManager, selectedColors: [Color] = [], displayMode: DisplayMode = .colors, changeInterval: Double = 1.5, selectedNumbers: Set<Int> = [], showModeSelection: Bool = true) {
         self.settingsViewModel = settingsViewModel
         self.profileManager = profileManager
+        _currentColor = State(initialValue: selectedColors.first ?? selectedColors.randomElement() ?? .red)
+        _currentNumberColor = State(initialValue: selectedColors.first ?? selectedColors.randomElement() ?? .red)
         self.showModeSelection = showModeSelection
         self.selectedColors = selectedColors
         self.displayMode = displayMode
         self.changeInterval = changeInterval
         self.selectedNumbers = selectedNumbers
-        _currentColor = State(initialValue: selectedColors.first ?? selectedColors.randomElement() ?? .red)
-        _currentNumberColor = State(initialValue: selectedColors.first ?? selectedColors.randomElement() ?? .red)
     }
     
     var body: some View {
@@ -6590,7 +6825,7 @@ struct DisplayView: View {
     @State private var beepTimer: Timer?
     @State private var isBeepScheduled: Bool = false // Prevent multiple concurrent beep schedules
     @State private var isBeepLockActive: Bool = false
-    @State private var resumeColorTimerWorkItem: DispatchWorkItem?
+    @State private var resumeColorTimerWorkToken = UUID()
     private let beepLockDuration: TimeInterval = 0.20
     private let cueVisibleDuration: TimeInterval = 1.40
         
@@ -6650,7 +6885,7 @@ struct DisplayView: View {
     @State private var pressureResponseDefenderAction: PressureResponseDefenderAction?
     /// For "fake step then drop": show defender at this X during fake, then animate to real side.
     @State private var pressureResponseFakeStepX: CGFloat?
-    @State private var pressureResponseNoPressEndWorkItem: DispatchWorkItem?
+    @State private var pressureResponseNoPressEndWorkToken = UUID()
     
     // One-Touch Passing state variables
     @State private var currentPassDirection: PassDirection?
@@ -7526,13 +7761,13 @@ struct DisplayView: View {
         guard displayMode == .colorsNumbers || displayMode == .colorsArrows else { return }
         timer?.invalidate()
         timer = nil
-        resumeColorTimerWorkItem?.cancel()
-        let work = DispatchWorkItem {
+        resumeColorTimerWorkToken = UUID()
+        let token = resumeColorTimerWorkToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + cueVisibleDuration) {
+            guard self.resumeColorTimerWorkToken == token else { return }
             guard isActive else { return }
             self.startTimer()
         }
-        resumeColorTimerWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + cueVisibleDuration, execute: work)
     }
     
     private func scheduleRandomBeep() {
@@ -7551,8 +7786,7 @@ struct DisplayView: View {
     }
     
     private func stopTimer() {
-        resumeColorTimerWorkItem?.cancel()
-        resumeColorTimerWorkItem = nil
+        resumeColorTimerWorkToken = UUID()
         countdownTimer?.invalidate()
         countdownTimer = nil
         timer?.invalidate()
@@ -8289,7 +8523,7 @@ extension DisplayView {
         opponentPositionX = screenWidth * pressureResponseDefenderWanderX
         opponentPositionY = screenHeight * pressureResponseDefenderWanderY
         pressureResponseFakeStepX = nil
-        pressureResponseNoPressEndWorkItem?.cancel()
+        pressureResponseNoPressEndWorkToken = UUID()
 
         switch action {
         case .fastPressOneSide:
@@ -8322,12 +8556,12 @@ extension DisplayView {
             }
         case .noPress:
             currentPressureDirection = nil
-            let work = DispatchWorkItem { [self] in
+            let token = pressureResponseNoPressEndWorkToken
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                guard self.pressureResponseNoPressEndWorkToken == token else { return }
                 guard isActive else { return }
                 startPressureResponseResetPhase()
             }
-            pressureResponseNoPressEndWorkItem = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: work)
         }
 
         if action != .fakeStepThenDrop && action != .noPress {
@@ -8377,8 +8611,7 @@ extension DisplayView {
     
     private func startPressureResponseResetPhase() {
         guard isActive else { return }
-        pressureResponseNoPressEndWorkItem?.cancel()
-        pressureResponseNoPressEndWorkItem = nil
+        pressureResponseNoPressEndWorkToken = UUID()
         print("🔵 Starting Pressure Response Reset Phase")
         criticalScanPhase = "RESET"
         currentPressureDirection = nil

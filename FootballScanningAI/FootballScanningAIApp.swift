@@ -13,18 +13,17 @@ struct FootballScanningAIApp: App {
     @UIApplicationDelegateAdaptor(CoachingNotificationsAppDelegate.self) private var coachingNotificationsAppDelegate
     @StateObject private var router = AppRouter()
     @StateObject private var coachRemoteRequiredPrompt = CoachRemoteRequiredPromptController()
+    @StateObject private var multipeerManager = MultipeerManager()
 
     init() {
+        PBASessionFlowPolicy.migrateTrainingModeOnboardingIfNeeded()
         // Prevent screen from dimming and lock screen from appearing while app is running
         UIApplication.shared.isIdleTimerDisabled = true
-        
-        // Preload PBA training beep for low-latency playback
-        PBABeepSoundManager.shared.preloadCurrent()
 
         #if DEBUG
         ThresholdAuditDebug.logAuditSummaryOnce()
         #endif
-        
+
         // Additional protection for outdoor use
         setupScreenProtection()
     }
@@ -52,7 +51,7 @@ struct FootballScanningAIApp: App {
         WindowGroup {
             SplashScreen()
                 .environmentObject(ConnectionManager.shared)
-                .environmentObject(MultipeerManager())
+                .environmentObject(multipeerManager)
                 .environmentObject(router)
                 .environmentObject(coachRemoteRequiredPrompt)
                 .preferredColorScheme(.dark)

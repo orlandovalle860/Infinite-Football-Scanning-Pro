@@ -60,8 +60,7 @@ final class AwayFromPressureEngine: ObservableObject {
             case .armedScanning, .blockComplete, .waitingForNextRep:
                 break
             default:
-                print("[INVALID TRANSITION] waitingForNextRep → \(newPhase)")
-                assertionFailure("[INVALID TRANSITION] waitingForNextRep → \(newPhase)")
+                print("[INVALID TRANSITION] waitingForNextRep → \(newPhase) — ignored (stale timer/work item)")
                 return
             }
         }
@@ -71,33 +70,11 @@ final class AwayFromPressureEngine: ObservableObject {
 
     private func updateInstructions() {
         switch phase {
-        case .waitingForNextRep:
-            instructionTitle = "Waiting for coach…"
-            if trainingMode == .partner {
-                instructionSubtitle = ""
-            } else {
-                instructionSubtitle = "Keep moving. Check both shoulders."
-            }
-        case .armedScanning:
-            instructionTitle = "Scan"
-            if trainingMode == .partner {
-                instructionSubtitle = ""
-            } else {
-                instructionSubtitle = "Scan for pressure.\nIdentify the safest space."
-            }
-        case .beepedAwaitingPass:
-            instructionTitle = "Ball is coming"
-            instructionSubtitle = trainingMode == .partner
-                ? ""
-                : "Coach: press PASS at the strike."
-        case .markerVisible:
-            instructionTitle = "Swipe now"
-            instructionSubtitle = "Swipe away from pressure as the ball arrives."
-        case .awaitingExitLog:
-            instructionTitle = "Great anticipation"
-            instructionSubtitle = "Coach logs your swipe direction (opposite the red = correct)."
         case .blockComplete:
             instructionTitle = "Block complete."
+            instructionSubtitle = ""
+        default:
+            instructionTitle = ""
             instructionSubtitle = ""
         }
     }
@@ -188,11 +165,55 @@ final class AwayFromPressureEngine: ObservableObject {
     /// Max reaction time (trigger → confirmation); reps above this are discarded.
     private static let maxReactionTimeSeconds: TimeInterval = 2.0
 
+    private func recordExitLoggedWithoutBlockingRepFlow(repIndex: Int, gate: Gate, timestamp: Date) -> Double? {
+        guard directionLoggedByRep[repIndex] == nil else { return nil }
+        guard let triggerTime = passTriggeredAt ?? passTriggeredByRep[repIndex] else { return nil }
+        let reactionTimeSeconds = timestamp.timeIntervalSince(triggerTime)
+        guard reactionTimeSeconds <= Self.maxReactionTimeSeconds else { return nil }
+
+        let p = plan[repIndex]
+        let expectedArrivalTime = triggerTime.addingTimeInterval(travelTimeSeconds)
+        let decisionWindowSeconds = expectedArrivalTime.timeIntervalSince(timestamp)
+        let score = adaptiveSessionScore(including: decisionWindowSeconds, isCorrect: gate == p.pressureGate.opposite)
+        directionLoggedByRep[repIndex] = timestamp
+        repDecisions.append(
+            RepDecision(
+                repIndex: repIndex,
+                direction: gate,
+                isCorrect: gate == p.pressureGate.opposite,
+                decisionWindowSeconds: decisionWindowSeconds,
+                bucket: Self.bucket(for: decisionWindowSeconds, score: score)
+            )
+        )
+        applyAdaptiveAfterRep(wasCorrect: gate == p.pressureGate.opposite, decisionWindow: decisionWindowSeconds)
+        let startedAt = startedAtForCurrentRep ?? Date()
+        let markerShownAt = markerShownAtForCurrentRep ?? startedAt
+        let markerHiddenAt = markerHiddenAtForCurrentRep ?? Date()
+        let pending = pendingFirstTouchByRep[repIndex]
+        let log = AwayFromPressureRepLog(
+            repIndex: repIndex,
+            pressureGate: p.pressureGate,
+            exitedGate: gate,
+            startedAt: startedAt,
+            markerShownAt: markerShownAt,
+            markerHiddenAt: markerHiddenAt,
+            passTriggeredAt: passTriggeredAt,
+            exitLoggedAt: timestamp,
+            firstTouchGate: pending?.gate,
+            firstTouchLoggedAt: pending?.timestamp
+        )
+        repLogs.append(log)
+        pendingFirstTouchByRep[repIndex] = nil
+        passTriggeredAt = nil
+        passTriggeredByRep[repIndex] = nil
+        return reactionTimeSeconds
+    }
+
     /// Returns reaction time in seconds when rep was saved; nil when discarded.
     func onExitLogged(repIndex: Int, gate: Gate, timestamp: Date) -> Double? {
         guard repIndex == currentRepIndex else { return nil }
         if case .waitingForNextRep = phase {
-            return nil
+            return recordExitLoggedWithoutBlockingRepFlow(repIndex: repIndex, gate: gate, timestamp: timestamp)
         }
         var rIdx: Int?
         switch phase {
@@ -400,7 +421,13 @@ final class AwayFromPressureEngine: ObservableObject {
         markerHideTimer?.invalidate()
         markerHideTimer = nil
         markerHiddenAtForCurrentRep = Date()
-        commitPhase(.awaitingExitLog(repIndex: repIndex, pressureGate: pressureGate))
+        commitPhase(.waitingForNextRep)
+    }
+
+    func forceReadyForIncomingCoachNextRep() {
+        cancelTimers()
+        cueTimingDebugVisibleAt = nil
+        commitPhase(.waitingForNextRep)
     }
 
     private func cancelTimers() {

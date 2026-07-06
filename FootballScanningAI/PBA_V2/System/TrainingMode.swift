@@ -36,3 +36,20 @@ enum TrainingMode: String, CaseIterable, Hashable {
         }
     }
 }
+
+extension TrainingMode {
+    /// Non-solo modes use coach/relay pathing; solo is local-only on the display.
+    var requiresRelay: Bool {
+        self != .solo
+    }
+
+    /// Solo flows can auto-advance reps without remote coach input.
+    var usesAutoLoop: Bool {
+        self == .solo
+    }
+
+    /// Join code / “enter code on phone” coach link UI is only for **Coach Remote** (partner). Solo must never open that flow; Wall/Solo navigate into local training instead.
+    var needsCoachRemoteJoinCodeFlow: Bool {
+        self == .partner
+    }
+}

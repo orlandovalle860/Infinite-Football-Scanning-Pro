@@ -20,6 +20,14 @@ struct CoachRemoteRequiredPromptView: View {
     }
 
     var body: some View {
+        Group {
+            if !PBASessionFlowPolicy.lastSelectedTrainingMode().needsCoachRemoteJoinCodeFlow {
+                Color.clear
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .onAppear {
+                        coachRemoteRequiredPrompt.dismiss()
+                    }
+            } else {
         ZStack {
             Color(red: 0.05, green: 0.05, blue: 0.1)
                 .ignoresSafeArea()
@@ -86,6 +94,8 @@ struct CoachRemoteRequiredPromptView: View {
         .onChange(of: coachRemoteRequiredPrompt.pendingSessionRoute) { _, _ in
             tryDismissWhenCoachLinkedOnPlayerPad()
             tryAutoEnterSessionIfNeeded()
+        }
+            }
         }
     }
 

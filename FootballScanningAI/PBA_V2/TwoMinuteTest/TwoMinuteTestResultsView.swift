@@ -19,6 +19,8 @@ struct TwoMinuteTestResultsView: View {
     var onStartTraining: ((ActivityKind) -> Void)? = nil
     /// Display-only: pass-tempo calibration drifted from nominal during this run.
     var showTimingAdaptationFeedback: Bool = false
+    /// `.solo` hides charts, accuracy-style breakdowns, and report-style actions.
+    var trainingMode: TrainingMode = .partner
     @EnvironmentObject private var progressStore: ProgressStore
     @EnvironmentObject private var playerStore: PlayerStore
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
@@ -59,24 +61,32 @@ struct TwoMinuteTestResultsView: View {
         ScrollView {
             VStack(spacing: 24) {
                 if isOnboarding {
-                    onboardingResultSummary
+                    if trainingMode == .solo {
+                        soloOnboardingSummary
+                    } else {
+                        onboardingResultSummary
+                    }
                     onboardingAccountCTA
                 }
 
                 // 1. Header
                 headerSection
 
-                // 2. Visual chart
-                DecisionTimingDonutChart(
-                    earlyCount: earlyCount,
-                    idealCount: idealCount,
-                    lateCount: lateCount,
-                    totalCount: totalCount
-                )
-                .frame(maxWidth: .infinity)
+                if trainingMode != .solo {
+                    // 2. Visual chart
+                    DecisionTimingDonutChart(
+                        earlyCount: earlyCount,
+                        idealCount: idealCount,
+                        lateCount: lateCount,
+                        totalCount: totalCount
+                    )
+                    .frame(maxWidth: .infinity)
 
-                // 3. Breakdown
-                breakdownSection
+                    // 3. Breakdown
+                    breakdownSection
+                } else {
+                    soloSessionCoachingCuesSection
+                }
 
                 // 4. Action buttons + existing nav
                 actionButtonsSection
@@ -204,13 +214,40 @@ struct TwoMinuteTestResultsView: View {
 
     private var headerSection: some View {
         VStack(spacing: 8) {
-            Text("Decision Timing Summary")
+            Text(trainingMode == .solo ? "2-Minute test complete" : "Decision Timing Summary")
                 .font(.title2)
                 .fontWeight(.semibold)
                 .foregroundColor(.white.opacity(0.95))
         }
         .frame(maxWidth: .infinity)
         .multilineTextAlignment(.center)
+    }
+
+    private var soloOnboardingSummary: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("You finished the assessment.")
+                .font(.title3.weight(.semibold))
+                .foregroundColor(.white)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .background(Color.white.opacity(0.08))
+        .cornerRadius(16)
+    }
+
+    private var soloSessionCoachingCuesSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(SoloTrainingSummaryCopy.staticCoachingLines(for: .twoMinuteTest), id: \.self) { line in
+                Text(line)
+                    .font(.body)
+                    .foregroundColor(.white.opacity(0.9))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(Color.white.opacity(0.06))
+        .cornerRadius(14)
     }
 
     private var breakdownSection: some View {
@@ -310,19 +347,21 @@ struct TwoMinuteTestResultsView: View {
                     .foregroundColor(.white.opacity(0.85))
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity)
-                HStack {
-                    Spacer()
-                    Button {
-                        presentTwoMinuteBlockShareSheet()
-                    } label: {
-                        Text("Share Result")
-                            .font(.subheadline.weight(.medium))
-                            .foregroundColor(.white.opacity(0.88))
+                if trainingMode != .solo {
+                    HStack {
+                        Spacer()
+                        Button {
+                            presentTwoMinuteBlockShareSheet()
+                        } label: {
+                            Text("Share Result")
+                                .font(.subheadline.weight(.medium))
+                                .foregroundColor(.white.opacity(0.88))
+                        }
+                        .buttonStyle(.plain)
+                        Spacer()
                     }
-                    .buttonStyle(.plain)
-                    Spacer()
+                    .padding(.top, 8)
                 }
-                .padding(.top, 8)
             } else {
                 Button {
                     let route = PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest)
@@ -364,14 +403,16 @@ struct TwoMinuteTestResultsView: View {
                 .tint(.white)
             }
 
-            Button {
-                navigateToPlayerReport = true
-            } label: {
-                Text("View Player Report")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.9))
+            if trainingMode != .solo {
+                Button {
+                    navigateToPlayerReport = true
+                } label: {
+                    Text("View Player Report")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.9))
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
 
             Button {
                 popToRootTrigger.request = true

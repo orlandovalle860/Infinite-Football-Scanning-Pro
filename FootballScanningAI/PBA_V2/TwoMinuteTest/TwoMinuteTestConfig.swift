@@ -17,11 +17,14 @@ enum TestDifficulty: String, CaseIterable, Hashable, Codable {
 
 struct TwoMinuteTestConfig {
     let difficulty: TestDifficulty
-    /// Documentary range matching unified beep timing; actual per-rep delay uses `randomTwoMinuteBeepDelaySeconds`.
+    /// Documentary range; per-rep pre-beep delay for 2MT uses `preBeepDelayRange`.
     let scanDelayRange: ClosedRange<Double>
     let ballVisibleSeconds: Double
 
-    /// Same base range as all PBA scan→beep timing (`UnifiedScanToBeepTiming`).
+    /// Per-rep random wait before the tempo beep (seconds). Kept in a clear band for predictable structure.
+    static let preBeepDelayRange: ClosedRange<Double> = 1.5...3.0
+
+    /// Same base range as all PBA scan→beep timing (`UnifiedScanToBeepTiming`) — used where legacy timing is needed.
     static let twoMinuteUnifiedBeepDelayRange: ClosedRange<Double> = UnifiedScanToBeepTiming.delayRangeSeconds
 
     /// Random delay (seconds) after next rep before beep: mostly unified 2–4 s; occasionally a shorter burst for variety (not tied to difficulty).

@@ -53,10 +53,11 @@ extension AppRoute {
              .awayFromPressureRoleSelection, .awayFromPressureTrainingModeSelection, .awayFromPressureSetup,
              .dribbleOrPassRoleSelection, .dribbleOrPassTrainingModeSelection, .dribbleOrPassSetup,
              .oneTouchPassingRoleSelection, .oneTouchPassingTrainingModeSelection, .oneTouchPassingSetup,
+             .dribbleOrPass, .oneTouchPassing, .awayFromPressure, .twoMinuteTest,
              .trainingModeSelection:
             return true
-        case .coachRemote, .twoMinuteCoachRemote, .dribbleOrPassCoachRemote, .awayFromPressureCoachRemote, .oneTouchPassingCoachRemote,
-             .curriculum, .progress, .achievements, .warmupHub, .warmup, .debugMenu:
+        case .coachRemote, .partnerPairing, .twoMinuteCoachRemote, .dribbleOrPassCoachRemote, .awayFromPressureCoachRemote, .oneTouchPassingCoachRemote,
+             .curriculum, .progress, .profileInsights, .achievements, .warmupHub, .warmup, .debugMenu:
             return false
         }
     }
@@ -68,6 +69,15 @@ extension AppRouter {
     func pushRespectingCoachRemotePadGate(_ route: AppRoute, coachRemotePrompt: CoachRemoteRequiredPromptController) {
         if CoachRemoteSessionStartGate.shouldBlock(route) {
             if CoachRemoteSessionStartGate.iPadDisplayCoachRelayLinkIsLive() {
+                return
+            }
+            let mode = PBASessionFlowPolicy.lastSelectedTrainingMode()
+            #if DEBUG
+            print("NAV MODE (pad gate):", mode)
+            #endif
+            // Solo (and non–Coach Remote modes): open local training — never the join-code sheet.
+            if !mode.needsCoachRemoteJoinCodeFlow {
+                push(route)
                 return
             }
             coachRemotePrompt.present(pendingRoute: nil)

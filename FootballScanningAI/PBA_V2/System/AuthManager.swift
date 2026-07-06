@@ -62,18 +62,32 @@ final class AuthManager: ObservableObject {
             return
         }
         let client = SupabaseClientManager.client
-        do {
-            let session = try await client.auth.session
-            await MainActor.run {
-                currentSession = session
-                lastError = nil
+        enum RestoreOutcome {
+            case finished
+            case timedOut
+        }
+        let outcome = await withTaskGroup(of: RestoreOutcome.self) { group in
+            group.addTask { @MainActor in
+                do {
+                    let session = try await client.auth.session
+                    self.currentSession = session
+                    self.lastError = nil
+                } catch {
+                    self.currentSession = nil
+                    self.lastError = nil
+                }
+                return .finished
             }
-        } catch {
-            await MainActor.run {
-                currentSession = nil
-                // Do not set lastError: no session on restore is normal (user not logged in).
-                lastError = nil
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                return .timedOut
             }
+            let first = await group.next() ?? .timedOut
+            group.cancelAll()
+            return first
+        }
+        if outcome == .timedOut {
+            await MainActor.run { currentSession = nil }
         }
         await MainActor.run { isRestoring = false }
     }

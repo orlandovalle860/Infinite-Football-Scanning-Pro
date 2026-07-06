@@ -84,6 +84,8 @@ struct SessionSummaryScreenView: View {
     var earlySessionStreakDisplay: Int? = nil
     @ObservedObject var profileManager: UserProfileManager
     @ObservedObject var settingsViewModel: SettingsViewModel
+    /// When `.solo`, hide scores, accuracy, timing breakdowns, and charts — static guidance only.
+    var trainingMode: TrainingMode = .partner
     @EnvironmentObject private var progressStore: ProgressStore
     @EnvironmentObject private var playerStore: PlayerStore
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
@@ -227,12 +229,14 @@ struct SessionSummaryScreenView: View {
         session: SessionResult,
         playerName: String,
         profileManager: UserProfileManager,
-        settingsViewModel: SettingsViewModel
+        settingsViewModel: SettingsViewModel,
+        trainingMode: TrainingMode = .partner
     ) {
         self.session = session
         self.playerName = playerName
         self.profileManager = profileManager
         self.settingsViewModel = settingsViewModel
+        self.trainingMode = trainingMode
     }
 
     init(
@@ -248,7 +252,8 @@ struct SessionSummaryScreenView: View {
         earlyRepBestStreak: Int? = nil,
         earlySessionStreakDisplay: Int? = nil,
         profileManager: UserProfileManager,
-        settingsViewModel: SettingsViewModel
+        settingsViewModel: SettingsViewModel,
+        trainingMode: TrainingMode = .partner
     ) {
         self.session = session
         self.playerName = playerName
@@ -263,6 +268,7 @@ struct SessionSummaryScreenView: View {
         self.earlySessionStreakDisplay = earlySessionStreakDisplay
         self.profileManager = profileManager
         self.settingsViewModel = settingsViewModel
+        self.trainingMode = trainingMode
     }
 
     init(
@@ -289,6 +295,7 @@ struct SessionSummaryScreenView: View {
         self.playerName = playerName
         self.profileManager = profileManager
         self.settingsViewModel = settingsViewModel
+        self.trainingMode = .partner
     }
 
     private var activityName: String { activityDisplayName(session.activityType) }
@@ -536,6 +543,8 @@ struct SessionSummaryScreenView: View {
         Group {
             if !profiles.contains(where: { $0.id == session.playerID }) {
                 deletedPlayerPlaceholder
+            } else if trainingMode == .solo {
+                soloSessionSummaryContent
             } else if isPlayerIPadDisplayOnly {
                 playerIPadDisplayOnlyContent
             } else {
@@ -543,7 +552,9 @@ struct SessionSummaryScreenView: View {
             }
         }
         .onAppear {
-            runLevelUpScaleIfNeeded()
+            if trainingMode != .solo {
+                runLevelUpScaleIfNeeded()
+            }
         }
         .sheet(item: $shareSheetPayload) { payload in
             ShareSheet(items: payload.items)
@@ -771,6 +782,78 @@ struct SessionSummaryScreenView: View {
                 ipadResultsRevealTiming = true
             }
         }
+    }
+
+    private var soloSessionSummaryContent: some View {
+        ZStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(activityName)
+                            .font(.title2.weight(.bold))
+                            .foregroundColor(.white)
+                        Text(SoloTrainingSummaryCopy.endTitle(for: session.activityType))
+                            .font(.subheadline)
+                            .foregroundColor(.white.opacity(0.78))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(SoloTrainingSummaryCopy.staticCoachingLines(for: session.activityType), id: \.self) { line in
+                            Text(line)
+                                .font(.body)
+                                .foregroundColor(.white.opacity(0.9))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+                    .background(Color.white.opacity(0.06))
+                    .cornerRadius(14)
+
+                    soloSummaryButtonsSection
+                }
+                .padding(24)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(red: 0.08, green: 0.08, blue: 0.12))
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
+        }
+    }
+
+    private var soloSummaryButtonsSection: some View {
+        VStack(spacing: 12) {
+            Button {
+                runItBack()
+            } label: {
+                Text("Run It Back")
+                    .font(.headline)
+                    .foregroundColor(.yellow)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                    .background(Color.yellow.opacity(0.18))
+                    .cornerRadius(14)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14)
+                            .stroke(Color.yellow.opacity(0.55), lineWidth: 1)
+                    )
+            }
+            .buttonStyle(PlainButtonStyle())
+
+            Button {
+                router.popToRoot()
+            } label: {
+                Text("Back to Home")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.9))
+            }
+            .buttonStyle(PlainButtonStyle())
+        }
+        .padding(.top, 8)
     }
 
     private var sessionSummaryContent: some View {
@@ -1166,6 +1249,11 @@ struct SessionSummaryScreenView: View {
     }
 
     private func evaluateAlmostTherePrompt() {
+        if trainingMode == .solo {
+            almostTherePrompt = nil
+            showAlmostTherePrompt = false
+            return
+        }
         let completedReps = max(1, session.totalReps)
         let earlyCount = session.speedCounts.fast
         let score = decisionScoreValue

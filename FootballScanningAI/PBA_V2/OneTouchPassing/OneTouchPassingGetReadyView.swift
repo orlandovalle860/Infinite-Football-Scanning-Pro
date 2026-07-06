@@ -21,7 +21,8 @@ struct OneTouchPassingGetReadyView: View {
     @State private var countdown: Int? = nil
     @State private var showInstruction = false
     @State private var navigateToSession = false
-    @State private var countdownTimer: Timer?
+    /// Cancels scheduled countdown ticks — never store `Timer` in `@State` (dispatch corruption on beta iPadOS).
+    @State private var countdownScheduleToken = UUID()
 
     private var activity: ActivityKind { .oneTouchPassing }
 
@@ -119,26 +120,30 @@ struct OneTouchPassingGetReadyView: View {
                 .environmentObject(router)
         }
         .onDisappear {
-            countdownTimer?.invalidate()
-            countdownTimer = nil
+            countdownScheduleToken = UUID()
         }
     }
 
     private func startCountdown() {
-        countdownTimer?.invalidate()
+        countdownScheduleToken = UUID()
+        let token = countdownScheduleToken
         countdown = 3
-        var remaining = 3
-        let t = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { timer in
-            remaining -= 1
-            DispatchQueue.main.async { countdown = remaining }
-            if remaining <= 0 {
-                timer.invalidate()
+        scheduleCountdownTick(remaining: 3, token: token)
+    }
+
+    private func scheduleCountdownTick(remaining: Int, token: UUID) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            guard countdownScheduleToken == token else { return }
+            let next = remaining - 1
+            countdown = next
+            if next <= 0 {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                    guard countdownScheduleToken == token else { return }
                     navigateToSession = true
                 }
+            } else {
+                scheduleCountdownTick(remaining: next, token: token)
             }
         }
-        countdownTimer = t
-        RunLoop.main.add(t, forMode: .common)
     }
 }

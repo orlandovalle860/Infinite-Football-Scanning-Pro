@@ -2,7 +2,7 @@
 //  PBABeepSoundManager.swift
 //  FootballScanningAI
 //
-//  PBA training trigger beep: 4 variations (A/B/C/D), preloaded for low-latency playback.
+//  PBA training trigger beep: 4 variations (A/B/C/D), preloaded for low latency playback.
 //  Selection persisted in AppStorage("selectedBeepSound"); preload on launch and when selection changes.
 //
 
@@ -16,11 +16,11 @@ enum PBABeepVariant: String, CaseIterable {
     case c = "C"
     case d = "D"
 
-    var resourceName: String {
+    nonisolated var resourceName: String {
         "pba_beep_\(rawValue.lowercased())"
     }
 
-    var label: String {
+    nonisolated var label: String {
         switch self {
         case .a: return "A Clear"
         case .b: return "B Punchy"
@@ -31,52 +31,74 @@ enum PBABeepVariant: String, CaseIterable {
 }
 
 /// Manages PBA training beep: loads selected WAV, preloads for low latency, plays on demand.
-final class PBABeepSoundManager {
-    static let shared = PBABeepSoundManager()
+/// All session + player work runs on a background serial queue (never blocks the main thread).
+/// Methods are `nonisolated` so Swift 6 default `@MainActor` isolation does not marshal queue work back to main.
+final class PBABeepSoundManager: @unchecked Sendable {
+    nonisolated static let shared = PBABeepSoundManager()
 
-    private var player: AVAudioPlayer?
-    private var currentVariant: PBABeepVariant?
+    private let audioQueue = DispatchQueue(label: "com.pba.beep.audio", qos: .userInitiated)
+    private nonisolated(unsafe) var player: AVAudioPlayer?
+    private nonisolated(unsafe) var currentVariant: PBABeepVariant?
+    private nonisolated(unsafe) var playbackCategoryConfigured = false
+    private nonisolated(unsafe) var playbackSessionActive = false
+    private nonisolated(unsafe) var interruptionObserver: NSObjectProtocol?
 
-    private init() {}
+    nonisolated private init() {
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: nil
+        ) { [weak self] notification in
+            self?.handleAudioSessionInterruption(notification)
+        }
+    }
+
+    deinit {
+        if let interruptionObserver {
+            NotificationCenter.default.removeObserver(interruptionObserver)
+        }
+    }
 
     /// AppStorage key for selected beep. Use with @AppStorage("selectedBeepSound").
-    static let selectedBeepStorageKey = "selectedBeepSound"
+    nonisolated static let selectedBeepStorageKey = "selectedBeepSound"
 
     /// New installs and invalid stored values: D (hybrid / signature in generated `pba_beep_d.wav`).
-    static let defaultSelectedBeepRawValue = PBABeepVariant.d.rawValue
+    nonisolated static let defaultSelectedBeepRawValue = PBABeepVariant.d.rawValue
 
     /// Preload the given variant so playback has minimal latency. Call on launch and when selection changes.
-    func preload(variant: PBABeepVariant) {
-        guard currentVariant != variant else { return }
-        player = nil
-        currentVariant = variant
-        guard let url = Bundle.main.url(forResource: variant.resourceName, withExtension: "wav") else {
-            #if DEBUG
-            print("[PBA-Debug] Beep preload missing file: \(variant.resourceName).wav")
-            #endif
-            return
-        }
-        do {
-            let p = try AVAudioPlayer(contentsOf: url)
-            p.prepareToPlay()
-            p.numberOfLoops = 0
-            player = p
-        } catch {
-            #if DEBUG
-            print("[PBA-Debug] Beep preload failed: \(variant.resourceName), error=\(error.localizedDescription)")
-            #endif
+    nonisolated func preload(variant: PBABeepVariant) {
+        audioQueue.async { [self] in
+            guard currentVariant != variant || player == nil else { return }
+            activatePlaybackSessionIfNeeded()
+            guard let url = Bundle.main.url(forResource: variant.resourceName, withExtension: "wav") else {
+                #if DEBUG
+                print("[PBA-Debug] Beep preload missing file: \(variant.resourceName).wav")
+                #endif
+                return
+            }
+            do {
+                let p = try AVAudioPlayer(contentsOf: url)
+                p.numberOfLoops = 0
+                p.prepareToPlay()
+                player = p
+                currentVariant = variant
+            } catch {
+                #if DEBUG
+                print("[PBA-Debug] Beep preload failed: \(variant.resourceName), error=\(error.localizedDescription)")
+                #endif
+            }
         }
     }
 
     /// Preload using the current value from UserDefaults (selectedBeepSound). Call from app launch and when selector changes.
-    func preloadCurrent() {
+    nonisolated func preloadCurrent() {
         let raw = UserDefaults.standard.string(forKey: Self.selectedBeepStorageKey) ?? Self.defaultSelectedBeepRawValue
         let variant = PBABeepVariant(rawValue: raw) ?? .d
         preload(variant: variant)
     }
 
-    /// Play the currently selected beep. No-op if sound is disabled or preload failed. Activates session if needed; call from main.
-    func play(soundEnabled: Bool = true) {
+    /// Play the currently selected beep. No-op if sound is disabled or preload failed.
+    nonisolated func play(soundEnabled: Bool = true) {
         guard soundEnabled else {
             #if DEBUG
             print("[PBA-Debug] Beep skipped: soundEnabled=false")
@@ -84,38 +106,101 @@ final class PBABeepSoundManager {
             return
         }
 
-        activateSessionIfNeeded()
-        preloadCurrent()
+        audioQueue.async { [self] in
+            activatePlaybackSessionIfNeeded()
+            playLoadedBeepOnAudioQueue()
+        }
+    }
+
+    /// Non-blocking session warm-up (safe to call from SwiftUI / main thread).
+    nonisolated func activateSessionIfNeeded() {
+        audioQueue.async { [self] in
+            activatePlaybackSessionIfNeeded()
+        }
+    }
+
+    nonisolated private func handleAudioSessionInterruption(_ notification: Notification) {
+        let typeValue = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+        audioQueue.async { [self] in
+            guard let typeValue,
+                  let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
+            switch type {
+            case .began, .ended:
+                playbackSessionActive = false
+            @unknown default:
+                playbackSessionActive = false
+            }
+        }
+    }
+
+    /// Configures and activates AVAudioSession on `audioQueue` only. iOS has no async setActive API (watchOS-only).
+    nonisolated private func activatePlaybackSessionIfNeeded() {
+        #if DEBUG
+        assert(!Thread.isMainThread, "AVAudioSession must not be configured on the main thread")
+        #endif
+
+        let session = AVAudioSession.sharedInstance()
+        do {
+            if !playbackCategoryConfigured {
+                try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+                playbackCategoryConfigured = true
+            }
+            guard !playbackSessionActive else { return }
+            try session.setActive(true, options: [])
+            playbackSessionActive = true
+        } catch {
+            playbackSessionActive = false
+        }
+    }
+
+    nonisolated private func playLoadedBeepOnAudioQueue() {
+        let raw = UserDefaults.standard.string(forKey: Self.selectedBeepStorageKey) ?? Self.defaultSelectedBeepRawValue
+        let variant = PBABeepVariant(rawValue: raw) ?? .d
+
+        if player == nil || currentVariant != variant {
+            guard let loaded = loadPlayer(for: variant) else { return }
+            player = loaded
+            currentVariant = variant
+        }
+
         guard let p = player else {
             #if DEBUG
             print("[PBA-Debug] Beep play failed: player=nil")
             #endif
             return
         }
-        p.currentTime = 0
-        let played = p.play()
 
-        // Rarely AVAudioPlayer can fail to start after route/interruption changes.
-        // Reload the selected asset and retry once.
-        if !played {
-            #if DEBUG
-            print("[PBA-Debug] Beep first play() returned false; reloading and retrying")
-            #endif
-            let raw = UserDefaults.standard.string(forKey: Self.selectedBeepStorageKey) ?? Self.defaultSelectedBeepRawValue
-            let variant = PBABeepVariant(rawValue: raw) ?? .d
-            currentVariant = nil
-            preload(variant: variant)
-            player?.currentTime = 0
-            _ = player?.play()
-        }
+        p.currentTime = 0
+        if p.play() { return }
+
+        #if DEBUG
+        print("[PBA-Debug] Beep first play() returned false; reloading and retrying")
+        #endif
+        guard let reloaded = loadPlayer(for: variant) else { return }
+        player = reloaded
+        currentVariant = variant
+        reloaded.currentTime = 0
+        _ = reloaded.play()
     }
 
-    /// Activate audio session for playback. Call once before first play (e.g. from display views that already do this).
-    func activateSessionIfNeeded() {
+    nonisolated private func loadPlayer(for variant: PBABeepVariant) -> AVAudioPlayer? {
+        guard let url = Bundle.main.url(forResource: variant.resourceName, withExtension: "wav") else {
+            #if DEBUG
+            print("[PBA-Debug] Beep play failed: missing file \(variant.resourceName).wav")
+            #endif
+            return nil
+        }
         do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
-            try AVAudioSession.sharedInstance().setActive(true)
-        } catch {}
+            let p = try AVAudioPlayer(contentsOf: url)
+            p.numberOfLoops = 0
+            p.prepareToPlay()
+            return p
+        } catch {
+            #if DEBUG
+            print("[PBA-Debug] Beep play load failed: \(error.localizedDescription)")
+            #endif
+            return nil
+        }
     }
 }
 

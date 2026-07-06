@@ -10,6 +10,7 @@ import SwiftUI
 struct DribbleOrPassBlockSummaryView: View {
     let results: [DribbleOrPassRepResult]
     let config: DribbleOrPassConfig
+    let trainingMode: TrainingMode
     var summaryCalibratedTravelSeconds: Double? = nil
     var showTimingAdaptationFeedback: Bool = false
     /// Live in-session streak from ``DribbleOrPassEngine.earlyStreak`` when available; otherwise derived from `results`.
@@ -209,7 +210,15 @@ struct DribbleOrPassBlockSummaryView: View {
 
     var body: some View {
         Group {
-            if let s = sessionResultForSummary {
+            if trainingMode == .solo {
+                SoloSessionSummaryView(
+                    passTempo: config.difficulty.passTempo,
+                    recalibrationRoute: .dribbleOrPassSetup(mode: .solo),
+                    onRunItBack: onRunItBack,
+                    onDone: { popToRootFromBlockSummary() }
+                )
+                .environmentObject(router)
+            } else if let s = sessionResultForSummary {
                 SessionSummaryScreenView(
                     session: s,
                     playerName: profileManager.currentProfile?.name ?? "Player",
@@ -222,14 +231,16 @@ struct DribbleOrPassBlockSummaryView: View {
                     earlyRepBestStreak: liveBestEarlyRepStreak,
                     earlySessionStreakDisplay: earlySessionStreakForSummary,
                     profileManager: profileManager,
-                    settingsViewModel: settingsViewModel
+                    settingsViewModel: settingsViewModel,
+                    trainingMode: trainingMode
                 )
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
+            } else {
+                blockSummaryContent
             }
-            else { blockSummaryContent }
         }
         .onAppear {
             PBASessionFlowPolicy.handleResultsPresented()
@@ -344,12 +355,14 @@ struct DribbleOrPassBlockSummaryView: View {
                 xpEarnedFromBlock = rewards.xpEarned
                 newlyUnlockedBadgesFromBlock = rewards.newlyUnlockedBadges
                 earlySessionStreakForSummary = EarlySessionStreakStore.current(for: result.playerID)
-                sessionResultForSummary = result
+                if trainingMode != .solo {
+                    sessionResultForSummary = result
+                }
             }
             didSave = true
         }
         .navigationDestination(isPresented: $navigateToNewBlock) {
-            DribbleOrPassDisplaySessionView(config: config, mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+            DribbleOrPassDisplaySessionView(config: config, mode: trainingMode, settingsViewModel: settingsViewModel, profileManager: profileManager)
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
@@ -371,7 +384,9 @@ struct DribbleOrPassBlockSummaryView: View {
         }
     }
 
-    private var blockSummaryContent: some View {
+    private var blockSummaryContent: some View { partnerBlockSummaryFullContent }
+
+    private var partnerBlockSummaryFullContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 VStack(spacing: 12) {

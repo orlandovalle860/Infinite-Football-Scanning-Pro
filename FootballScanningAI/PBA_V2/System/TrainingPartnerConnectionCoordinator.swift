@@ -71,7 +71,7 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
     private var hasStartedAtLeastOneRep: Bool = false
     /// Full-screen recovery UI while partner link drops mid-drill (both devices).
     @Published private(set) var isMidSessionPartnerDisconnect: Bool = false
-    private var midSessionDisconnectDebounceWorkItem: DispatchWorkItem?
+    private var midSessionDisconnectDebounceToken: UUID?
     /// True after transport dropped while drilling (foreground only); cleared when link returns or session resets.
     private var linkDownSinceDrillUnderway: Bool = false
     /// True while iOS background suspend has torn down relay sockets — avoids treating that as a mid-drill drop for soft rep restart.
@@ -230,7 +230,7 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         if let recycleDisplayRelayDueToExpiredCodeObserver {
             NotificationCenter.default.removeObserver(recycleDisplayRelayDueToExpiredCodeObserver)
         }
-        midSessionDisconnectDebounceWorkItem?.cancel()
+        midSessionDisconnectDebounceToken = nil
         midSessionLinkCancellable?.cancel()
     }
 
@@ -355,17 +355,19 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
     }
 
     private func cancelMidSessionDisconnectDebounce() {
-        midSessionDisconnectDebounceWorkItem?.cancel()
-        midSessionDisconnectDebounceWorkItem = nil
+        midSessionDisconnectDebounceToken = nil
     }
 
     private func scheduleMidSessionDisconnectOverlayIfNeeded() {
-        guard midSessionDisconnectDebounceWorkItem == nil else { return }
-        let work = DispatchWorkItem { [weak self] in
+        guard midSessionDisconnectDebounceToken == nil else { return }
+        let token = UUID()
+        midSessionDisconnectDebounceToken = token
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             guard let self else { return }
             Task { @MainActor [weak self] in
-                defer { self?.midSessionDisconnectDebounceWorkItem = nil }
                 guard let self else { return }
+                guard self.midSessionDisconnectDebounceToken == token else { return }
+                self.midSessionDisconnectDebounceToken = nil
                 guard self.isPartnerTrainingSessionActive else { return }
                 guard !self.isPartnerTransportLinkLive else { return }
                 guard self.hadPartnerTransportLinkLiveThisSession else { return }
@@ -375,8 +377,6 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
                 self.relayDisplaySession.cancelRelayDisconnectRecycleTask()
             }
         }
-        midSessionDisconnectDebounceWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
     }
 
     private func clearMidSessionPartnerDisconnectState() {

@@ -11,6 +11,7 @@ import Combine
 struct OneTouchPassingBlockSummaryView: View {
     let results: [OneTouchRepResult]
     let config: OneTouchPassingConfig
+    let trainingMode: TrainingMode
     var summaryCalibratedTravelSeconds: Double? = nil
     var showTimingAdaptationFeedback: Bool = false
     let onRunItBack: () -> Void
@@ -222,7 +223,15 @@ struct OneTouchPassingBlockSummaryView: View {
 
     var body: some View {
         Group {
-            if let s = sessionResultForSummary {
+            if trainingMode == .solo {
+                SoloSessionSummaryView(
+                    passTempo: config.difficulty.passTempo,
+                    recalibrationRoute: .oneTouchPassingSetup(mode: .solo),
+                    onRunItBack: onRunItBack,
+                    onDone: { popToRootFromBlockSummary() }
+                )
+                .environmentObject(router)
+            } else if let s = sessionResultForSummary {
                 SessionSummaryScreenView(
                     session: s,
                     playerName: profileManager.currentProfile?.name ?? "Player",
@@ -235,14 +244,16 @@ struct OneTouchPassingBlockSummaryView: View {
                     earlyRepBestStreak: earlyRepBestStreakForSummary,
                     earlySessionStreakDisplay: earlySessionStreakForSummary,
                     profileManager: profileManager,
-                    settingsViewModel: settingsViewModel
+                    settingsViewModel: settingsViewModel,
+                    trainingMode: trainingMode
                 )
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
+            } else {
+                blockSummaryContent
             }
-            else { blockSummaryContent }
         }
         .onAppear {
             PBASessionFlowPolicy.handleResultsPresented()
@@ -353,12 +364,14 @@ struct OneTouchPassingBlockSummaryView: View {
                 earlySessionStreakForSummary = EarlySessionStreakStore.current(for: result.playerID)
                 let bestEarly = BestEarlyStreakStore.recordIfNewBest(maxConsecutiveEarlyRepStreak, playerId: result.playerID)
                 earlyRepBestStreakForSummary = bestEarly > 0 ? bestEarly : nil
-                sessionResultForSummary = result
+                if trainingMode != .solo {
+                    sessionResultForSummary = result
+                }
             }
             didSave = true
         }
         .navigationDestination(isPresented: $navigateToNewBlock) {
-            OneTouchPassingDisplaySessionView(config: config, mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+            OneTouchPassingDisplaySessionView(config: config, mode: trainingMode, settingsViewModel: settingsViewModel, profileManager: profileManager)
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
@@ -380,7 +393,9 @@ struct OneTouchPassingBlockSummaryView: View {
         }
     }
 
-    private var blockSummaryContent: some View {
+    private var blockSummaryContent: some View { partnerBlockSummaryFullContent }
+
+    private var partnerBlockSummaryFullContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 VStack(spacing: 12) {

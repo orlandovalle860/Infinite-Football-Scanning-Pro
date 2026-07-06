@@ -10,6 +10,7 @@ import SwiftUI
 struct TwoMinuteResultsView: View {
     let logs: [RepLog]
     let difficulty: TestDifficulty
+    var trainingMode: TrainingMode = .partner
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
     @EnvironmentObject private var progressStore: ProgressStore
@@ -214,7 +215,8 @@ struct TwoMinuteResultsView: View {
                     earlyRepBestStreak: earlyRepBestStreakForSummary,
                     earlySessionStreakDisplay: earlySessionStreakForSummary,
                     profileManager: profileManager,
-                    settingsViewModel: settingsViewModel
+                    settingsViewModel: settingsViewModel,
+                    trainingMode: trainingMode
                 )
                     .environmentObject(progressStore)
                     .environmentObject(playerStore)

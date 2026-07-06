@@ -75,8 +75,7 @@ final class OneTouchPassingEngine: ObservableObject {
             case .armedScanning, .blockComplete, .waitingForNextRep:
                 break
             default:
-                print("[INVALID TRANSITION] waitingForNextRep → \(newPhase)")
-                assertionFailure("[INVALID TRANSITION] waitingForNextRep → \(newPhase)")
+                print("[INVALID TRANSITION] waitingForNextRep → \(newPhase) — ignored (stale timer/work item)")
                 return
             }
         }
@@ -86,39 +85,11 @@ final class OneTouchPassingEngine: ObservableObject {
 
     private func updateInstructions() {
         switch phase {
-        case .waitingForNextRep:
-            instructionTitle = "Waiting for coach…"
-            if trainingMode == .partner {
-                instructionSubtitle = ""
-            } else {
-                instructionSubtitle = "Scan the field."
-            }
-        case .armedScanning:
-            instructionTitle = "Scan freely"
-            if trainingMode == .partner {
-                instructionSubtitle = ""
-            } else {
-                instructionSubtitle = "Scan multiple options early.\nCHECK is coming."
-            }
-        case .showingCheck:
-            instructionTitle = "CHECK"
-            instructionSubtitle = trainingMode == .partner ? "" : "Ball is coming…"
-        case .awaitingPassTrigger:
-            instructionTitle = "Ball is coming…"
-            instructionSubtitle = trainingMode == .partner
-                ? ""
-                : "Coach: press PASS at the strike."
-        case .cueRevealing:
-            instructionTitle = "Decide now"
-            instructionSubtitle = "Decide before expected arrival."
-        case .cueVisible:
-            instructionTitle = "Swipe now"
-            instructionSubtitle = "Swipe immediately on contact."
-        case .awaitingExitLog:
-            instructionTitle = "Great anticipation"
-            instructionSubtitle = "Waiting for coach swipe log…"
         case .blockComplete:
             instructionTitle = "Block complete."
+            instructionSubtitle = ""
+        default:
+            instructionTitle = ""
             instructionSubtitle = ""
         }
     }
@@ -289,7 +260,16 @@ final class OneTouchPassingEngine: ObservableObject {
         cueHideTimer?.invalidate()
         cueHideTimer = nil
         revealedGates = []
-        commitPhase(.awaitingExitLog(repIndex: repIndex))
+        commitPhase(.waitingForNextRep)
+    }
+
+    /// Coach `nextRep` may arrive while stimulus is still visible — return to between-reps without requiring exitLogged.
+    func forceReadyForIncomingCoachNextRep() {
+        cancelTimers()
+        cueTimingDebugVisibleAt = nil
+        revealedGates = []
+        showCheckCue = false
+        commitPhase(.waitingForNextRep)
     }
 
     private func cancelRevealTimers() {
@@ -412,11 +392,59 @@ final class OneTouchPassingEngine: ObservableObject {
     /// Max reaction time (trigger → confirmation); reps above this are discarded.
     private static let maxReactionTimeSeconds: TimeInterval = 2.0
 
+    /// Optional late direction log after the rep cycle already returned to `waitingForNextRep`.
+    private func recordExitLoggedWithoutBlockingRepFlow(repIndex: Int, gate: Gate, timestamp: Date) -> Double? {
+        guard directionLoggedByRep[repIndex] == nil else { return nil }
+        guard let triggerTime = passTriggeredAt ?? passTriggeredByRep[repIndex] else { return nil }
+
+        let reactionTimeSeconds = timestamp.timeIntervalSince(triggerTime)
+        guard reactionTimeSeconds <= Self.maxReactionTimeSeconds else { return nil }
+
+        let p = plan[repIndex]
+        let correct = p.greenDirections.contains(gate)
+        let expectedArrivalTime = triggerTime.addingTimeInterval(travelTimeSeconds)
+        let decisionWindowSeconds = expectedArrivalTime.timeIntervalSince(timestamp)
+        let score = adaptiveSessionScore(including: decisionWindowSeconds, isCorrect: correct)
+        let speed: DecisionSpeed
+        switch DecisionTimingModel.speedBucket(forDecisionWindow: decisionWindowSeconds, activity: .oneTouchPassing, score: score) {
+        case .fast: speed = .fast
+        case .medium: speed = .medium
+        case .slow: speed = .slow
+        }
+        directionLoggedByRep[repIndex] = timestamp
+        repDecisions.append(
+            RepDecision(
+                repIndex: repIndex,
+                direction: gate,
+                isCorrect: correct,
+                decisionWindowSeconds: decisionWindowSeconds,
+                bucket: Self.bucket(for: decisionWindowSeconds, score: score)
+            )
+        )
+        applyAdaptiveAfterRep(wasCorrect: correct, decisionWindow: decisionWindowSeconds)
+        CurrentSessionStore.shared.recordDecisionTimingCalibrationSample(
+            decisionWindowSeconds: decisionWindowSeconds,
+            activityId: ActivityKind.oneTouchPassing.sessionActivityActivityId
+        )
+        let result = OneTouchRepResult(
+            repIndex: repIndex,
+            correct: correct,
+            chosenGate: gate,
+            decisionTime: reactionTimeSeconds,
+            decisionSpeed: speed,
+            greenDirections: p.greenDirections
+        )
+        repResults.append(result)
+        passTriggeredAt = nil
+        passTriggeredByRep[repIndex] = nil
+        return reactionTimeSeconds
+    }
+
     /// Returns reaction time in seconds when rep was saved; nil when discarded.
     func onExitLogged(repIndex: Int, gate: Gate, timestamp: Date) -> Double? {
         guard repIndex == currentRepIndex else { return nil }
         if case .waitingForNextRep = phase {
-            return nil
+            return recordExitLoggedWithoutBlockingRepFlow(repIndex: repIndex, gate: gate, timestamp: timestamp)
         }
         var rIdx: Int?
         switch phase {

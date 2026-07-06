@@ -79,7 +79,7 @@ struct PassTempoCalibrationScreen: View {
     @State private var passTimestamp: TimeInterval?
     @State private var travelTimes: [Double] = []
     @State private var isShowingCompletion = false
-    @State private var completionWorkItem: DispatchWorkItem?
+    @State private var completionWorkToken = UUID()
 
     private enum CalibrationPhase {
         case waitingForPass
@@ -216,6 +216,9 @@ struct PassTempoCalibrationScreen: View {
                 Spacer(minLength: 20)
             }
         }
+        .onDisappear {
+            completionWorkToken = UUID()
+        }
     }
 
     private var currentInstruction: String {
@@ -258,12 +261,12 @@ struct PassTempoCalibrationScreen: View {
     private func showCompletionThenFinish() {
         guard !isShowingCompletion else { return }
         isShowingCompletion = true
-        completionWorkItem?.cancel()
-        let work = DispatchWorkItem {
+        completionWorkToken = UUID()
+        let token = completionWorkToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) {
+            guard completionWorkToken == token else { return }
             onComplete(calibratedAverageTravelTime)
         }
-        completionWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.75, execute: work)
     }
 
     private var calibratedAverageTravelTime: Double {

@@ -18,8 +18,17 @@ private final class ResultsCoverPathHolder: ObservableObject {
     }
 }
 
-private func routeForActivity(_ activity: ActivityKind) -> AppRoute {
-    PBASessionFlowPolicy.routeForActivityLaunch(activity)
+private func routeForActivity(_ activity: ActivityKind, trainingMode: TrainingMode) -> AppRoute {
+    switch activity {
+    case .twoMinuteTest:
+        return .twoMinuteGetReady(mode: trainingMode)
+    case .awayFromPressure:
+        return .awayFromPressureSetup(mode: trainingMode)
+    case .dribbleOrPass:
+        return .dribbleOrPassSetup(mode: trainingMode)
+    case .oneTouchPassing:
+        return .oneTouchPassingSetup(mode: trainingMode)
+    }
 }
 
 struct TwoMinuteCriticalScanSessionView: View {
@@ -38,7 +47,6 @@ struct TwoMinuteCriticalScanSessionView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var testResultItem: TwoMinuteResultItem?
     @State private var nextRepIndex = 0
-    @State private var audioInterruptionObserver: NSObjectProtocol?
     @StateObject private var sessionManager = TwoMinuteSessionManager()
     @StateObject private var resultsCoverPathHolder = ResultsCoverPathHolder()
     @Environment(\.dismiss) private var dismiss
@@ -53,24 +61,22 @@ struct TwoMinuteCriticalScanSessionView: View {
     /// Tracks applied coach reps for stale detection (debug); coach index is authoritative when advancing.
     @State private var partnerCoachRepGate = PartnerCoachRepSequenceGate()
     @StateObject private var repController = RepStateController()
+    /// Solo: post-beep delay uses shared `AppStorageKeys.soloReturnTime` (same key as wall calibration), not `calibratedReturnTime` alone.
+    @StateObject private var soloWallCalibration = SoloWallCalibrationController()
+    @StateObject private var soloLoopRunner = SoloLoopRunner()
+    @State private var isSoloRunning = false
     /// Display-side relay (join code, WebSocket, coach paired). Used when `partnerTransportMode == .relayWebSocket`.
     /// Conforms to ``PartnerRelayDisplayControlling``; concrete type is ``PartnerRelayDisplaySession``.
-    @ObservedObject private var partnerRelaySession = TrainingPartnerConnectionCoordinator.shared.relayDisplaySession
+    @ObservedObject private var partnerRelaySession: PartnerRelayDisplaySession
     @State private var hasCompletedPassTempoCalibration = false
     @State private var showPassTempoCalibration = false
     @State private var showCalibrationChoicePrompt = false
     @State private var partnerCalibration = PartnerPassTempoCalibrationTracker()
     @State private var showConnectedConfirmation = false
     @State private var hasStartedConnectedToCalibrationTransition = false
-    @State private var soloFirstRepScheduled = false
     @State private var startedWithoutSavedCalibration = false
     @State private var justCompletedCalibrationThisSession = false
-    @State private var soloGetReadyWorkItem: DispatchWorkItem?
-    @State private var soloBeepRushWorkItem: DispatchWorkItem?
-    @State private var soloAutoNextRepWorkItem: DispatchWorkItem?
-    @State private var playerFirstRunGuidanceText: String?
-    @State private var playerFirstRunGuidanceOpacity = 0.0
-    @State private var playerFirstRunGuidanceTask: Task<Void, Never>?
+    @State private var stimulusAfterBeepToken = UUID()
 
     init(config: TwoMinuteTestConfig, mode: TrainingMode, settingsViewModel: SettingsViewModel, profileManager: UserProfileManager) {
         self.config = config
@@ -86,6 +92,7 @@ struct TwoMinuteCriticalScanSessionView: View {
             config: config,
             repPlans: TwoMinuteRepPlanner.generatePlan(forBlockSize: repCount)
         ))
+        _partnerRelaySession = ObservedObject(wrappedValue: TrainingPartnerConnectionCoordinator.shared.relayDisplaySession)
     }
 
     private var blockTotalReps: Int {
@@ -100,6 +107,10 @@ struct TwoMinuteCriticalScanSessionView: View {
         PartnerTransportPolicy.transportMode(for: .twoMinute, trainingMode: mode)
     }
 
+    private var showsBetweenRepPlayerText: Bool {
+        DisplaySessionPlayerTextPolicy.showsBetweenRepPlayerText(for: engine.phase)
+    }
+
     private var isBallVisible: Bool {
         if case .ballVisible = engine.phase { return true }
         return false
@@ -108,12 +119,16 @@ struct TwoMinuteCriticalScanSessionView: View {
     private var sessionStack: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            dribbleOrPassLayout
+            if !(mode == .solo && soloWallCalibration.isCalibrating) {
+                dribbleOrPassLayout
+            }
             statusOverlay
                 .opacity(isBallVisible ? 0.25 : 1)
             waitingForCoachOverlay
-            repCountOverlay
-            if showExitLogButtons, let repIndex = repIndexForExit {
+            if mode != .solo, showsBetweenRepPlayerText {
+                repCountOverlay
+            }
+            if mode == .partner, showExitLogButtons, let repIndex = repIndexForExit {
                 twoMinuteExitLogOverlay(repIndex: repIndex)
                     .zIndex(2)
             }
@@ -125,10 +140,9 @@ struct TwoMinuteCriticalScanSessionView: View {
             if mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket {
                 PartnerRelayLifecycleBannerOverlay()
             }
-            PlayerFirstRunGuidanceToastOverlay(message: playerFirstRunGuidanceText, opacity: playerFirstRunGuidanceOpacity)
-                .zIndex(124)
             PartnerMidSessionDisconnectRecoveryOverlay()
                 .zIndex(125)
+            SoloWallCalibrationGetReadyOverlay(mode: mode, calibration: soloWallCalibration)
         }
     }
 
@@ -136,6 +150,14 @@ struct TwoMinuteCriticalScanSessionView: View {
         sessionStack
             .contentShape(Rectangle())
             .onTapGesture {
+                if SoloWallCalibrationInput.handleIfSoloCalibrating(
+                    mode: mode,
+                    controller: soloWallCalibration,
+                    soundEnabled: settingsViewModel.soundEnabled,
+                    activateAudio: { activateAudioSession() },
+                    preloadBeep: { preloadBeepAssetsForInstantReveal() },
+                    onCompletedThreePass: onTwoMinuteSoloWallCalibrationFinished
+                ) { return }
                 if mode == .solo { handleWallSoloTrigger() }
             }
             .fullScreenCover(item: $testResultItem) { item in
@@ -147,14 +169,15 @@ struct TwoMinuteCriticalScanSessionView: View {
                         settingsViewModel: settingsViewModel,
                         onDismissCover: { testResultItem = nil },
                         onStartTraining: { activity in
-                            let route = routeForActivity(activity)
+                            let route = routeForActivity(activity, trainingMode: mode)
                             #if DEBUG
                             print("[PBA-Debug] TwoMinute StartTraining tapped: selectedPlayerId=\(playerStore.selectedPlayerId?.uuidString ?? "nil"), route=\(route)")
                             #endif
                             pendingTrainingRoute = route
                             testResultItem = nil
                         },
-                        showTimingAdaptationFeedback: item.showTimingAdaptationFeedback
+                        showTimingAdaptationFeedback: item.showTimingAdaptationFeedback,
+                        trainingMode: mode
                     )
                     .environmentObject(progressStore)
                     .environmentObject(playerStore)
@@ -184,13 +207,6 @@ struct TwoMinuteCriticalScanSessionView: View {
                 applyPartnerStartNewSessionLocalTeardownTwoMinute()
             }
             .onChange(of: engine.currentRepIndex) { _, newValue in
-                if newValue >= 2 {
-                    PlayerFirstRunGuidanceToastAnimator.cancel(
-                        task: &playerFirstRunGuidanceTask,
-                        message: $playerFirstRunGuidanceText,
-                        opacity: $playerFirstRunGuidanceOpacity
-                    )
-                }
                 guard mode.requiresPhoneDisplayRelay else { return }
                 TrainingPartnerConnectionCoordinator.shared.syncDisplaySessionCurrentRepIndex(
                     newValue,
@@ -233,18 +249,26 @@ struct TwoMinuteCriticalScanSessionView: View {
 
     var body: some View {
         sessionContentWithSessionModifiers
-            .sessionCountdown(waitForPartnerReady: mode.requiresPhoneDisplayRelay, partnerReady: partnerReadyForCountdown, suppressCoachMessagesDuringCountdown: $blockCoachDrillDuringSessionCountdown)
+            .sessionCountdown(
+                waitForPartnerReady: mode.requiresPhoneDisplayRelay,
+                partnerReady: partnerReadyForCountdown,
+                suppressCoachMessagesDuringCountdown: $blockCoachDrillDuringSessionCountdown,
+                isEnabled: !mode.usesAutoLoop
+            )
             .onChange(of: blockCoachDrillDuringSessionCountdown) { old, new in
                 guard mode.requiresPhoneDisplayRelay, old == true, new == false else { return }
                 flushPendingCoachNextRepAfterCountdown()
             }
             .onChange(of: showPassTempoCalibration) { old, new in
                 guard old == true, new == false else { return }
-                scheduleSoloFirstRepIfNeeded()
+                tryStartSoloAutoloop()
             }
             .onChange(of: showCalibrationChoicePrompt) { old, new in
                 guard old == true, new == false else { return }
-                scheduleSoloFirstRepIfNeeded()
+                tryStartSoloAutoloop()
+            }
+            .onChange(of: hasCompletedPassTempoCalibration) { _, _ in
+                tryStartSoloAutoloop()
             }
             .fullScreenCover(isPresented: $showCalibrationChoicePrompt) {
                 TwoMinuteCalibrationPromptView(
@@ -288,6 +312,13 @@ struct TwoMinuteCriticalScanSessionView: View {
                     activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId,
                     relay: TrainingPartnerConnectionCoordinator.shared.relayDisplaySession
                 )
+            }
+            .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { notification in
+                guard let userInfo = notification.userInfo,
+                      let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+                      let type = AVAudioSession.InterruptionType(rawValue: typeValue),
+                      type == .ended else { return }
+                activateAudioSession()
             }
     }
 
@@ -423,19 +454,11 @@ struct TwoMinuteCriticalScanSessionView: View {
         defer { isTearingDownForNewSession = false }
         pendingNextRepIndex = nil
         blockCoachDrillDuringSessionCountdown = false
-        soloGetReadyWorkItem?.cancel()
-        soloGetReadyWorkItem = nil
-        soloBeepRushWorkItem?.cancel()
-        soloBeepRushWorkItem = nil
-        soloAutoNextRepWorkItem?.cancel()
-        soloAutoNextRepWorkItem = nil
+        cancelStimulusAfterBeepWork()
+        stopSoloAutoloop()
+        soloWallCalibration.cancelPendingBeeps()
         engine.invalidateAllTimers()
         repController.resetForNewSession()
-        PlayerFirstRunGuidanceToastAnimator.cancel(
-            task: &playerFirstRunGuidanceTask,
-            message: $playerFirstRunGuidanceText,
-            opacity: $playerFirstRunGuidanceOpacity
-        )
     }
 
     /// Coach hub “Start Next Block”: leave results / complete phase and reset without dropping relay.
@@ -482,8 +505,9 @@ struct TwoMinuteCriticalScanSessionView: View {
         }
         guard case .waitingForNextRep = engine.phase else {
             print("[NEXTREP] received repIndex=\(repIndex) while phase=\(engine.phase) currentRepIndex=\(engine.currentRepIndex)")
-            print("[NEXTREP DEFERRED] buffering until phase=waitingForNextRep")
-            pendingNextRepIndex = repIndex
+            engine.forceReadyForIncomingCoachNextRep()
+            repController.completeRepCycleEnd()
+            _ = tryCommitPartnerCoachNextRep(repIndex: repIndex)
             return
         }
         _ = tryCommitPartnerCoachNextRep(repIndex: repIndex)
@@ -530,7 +554,7 @@ struct TwoMinuteCriticalScanSessionView: View {
             }
         }
         repController.completeRepCycleEnd()
-        if !repController.acceptIncomingNextRep() {
+        if !repController.acceptIncomingNextRepAllowingCoachOverride() {
             if twoMTDisplayEngineIsMidRep(repIndex: repIndex) {
                 sendRepStartedAck(repIndex: repIndex)
                 pendingNextRepIndex = nil
@@ -575,7 +599,7 @@ struct TwoMinuteCriticalScanSessionView: View {
         case .beepedAwaitingPass(let r, _):
             return r == repIndex
         case .armedScanning(let r, _, _):
-            return r == repIndex
+            return mode != .solo && r == repIndex
         default:
             return false
         }
@@ -595,36 +619,17 @@ struct TwoMinuteCriticalScanSessionView: View {
         twoMTAllowsExitLogged(repIndex: repIndex)
     }
 
-    private func twoMinutePlayerFirstRunGuidanceIfNeeded(oldPhase: CriticalScanPhase, newPhase: CriticalScanPhase) {
-        let activityId = ActivityKind.twoMinuteTest.sessionActivityActivityId
-        guard !PlayerFirstRunGuidanceStore.hasCompletedFirstRun(activityId: activityId) else { return }
-        guard engine.currentRepIndex <= 1 else { return }
-
-        if case .ballVisible(let r, _, _) = newPhase, r == 0 {
-            if case .ballVisible(let rOld, _, _) = oldPhase, rOld == 0 { return }
-            guard let msg = PlayerFirstRunGuidanceCopy.message(for: .twoMinuteTest, repIndexZeroBased: 0) else { return }
-            PlayerFirstRunGuidanceToastAnimator.schedule(
-                text: msg,
-                task: &playerFirstRunGuidanceTask,
-                message: $playerFirstRunGuidanceText,
-                opacity: $playerFirstRunGuidanceOpacity
-            )
-        }
-        if case .armedScanning(let r, _, _) = newPhase, r == 1 {
-            if case .armedScanning(let rOld, _, _) = oldPhase, rOld == 1 { return }
-            guard let msg = PlayerFirstRunGuidanceCopy.message(for: .twoMinuteTest, repIndexZeroBased: 1) else { return }
-            PlayerFirstRunGuidanceToastAnimator.schedule(
-                text: msg,
-                task: &playerFirstRunGuidanceTask,
-                message: $playerFirstRunGuidanceText,
-                opacity: $playerFirstRunGuidanceOpacity
-            )
-        }
-    }
-
     private func handlePhaseChange(_ oldPhase: CriticalScanPhase, _ newPhase: CriticalScanPhase) {
+        if case .beepedAwaitingPass = oldPhase {
+            if case .beepedAwaitingPass = newPhase { }
+            else {
+                cancelStimulusAfterBeepWork()
+            }
+        }
         syncRepController(with: newPhase)
         if case .complete = newPhase {
+            cancelStimulusAfterBeepWork()
+            stopSoloAutoloop()
             PlayerFirstRunGuidanceStore.markCompletedFirstRun(activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId)
             pendingNextRepIndex = nil
             if mode.requiresPhoneDisplayRelay {
@@ -634,31 +639,112 @@ struct TwoMinuteCriticalScanSessionView: View {
                 )
             }
             DispatchQueue.main.async {
-                let calId = ActivityKind.twoMinuteTest.sessionActivityActivityId
-                let adapted = abs(CurrentSessionStore.shared.calibrationFactor(for: calId) - 1.0) > 0.001
                 testResultItem = TwoMinuteResultItem(
                     result: TwoMinuteTestResult.from(logs: engine.repLogs, difficulty: config.difficulty),
                     logs: engine.repLogs,
-                    showTimingAdaptationFeedback: adapted
+                    showTimingAdaptationFeedback: false
                 )
                 AnalyticsManager.shared.track(.twoMinuteTestCompleted, playerId: playerStore.selectedPlayerId)
             }
         }
-        twoMinutePlayerFirstRunGuidanceIfNeeded(oldPhase: oldPhase, newPhase: newPhase)
-        if case .armedScanning(let repIndex, let ballGate, _) = newPhase {
+        if case .armedScanning = newPhase {
             preloadBeepAssetsForInstantReveal()
-            scheduleSoloRushBeepIfNeeded(repIndex: repIndex, ballGate: ballGate)
         }
-        if case .beepedAwaitingPass(let repIndex, _) = newPhase {
-            playBeep()
-            scheduleSoloPassTriggerIfNeeded(repIndex: repIndex)
+        if case .beepedAwaitingPass = newPhase {
+            // Solo: `playBeep()` — unified wall timing + automatic ball (synthetic pass); see `playBeep()`.
+            if mode != .solo || !soloWallCalibration.isCalibrating {
+                playBeep()
+            }
         }
         if case .waitingForNextRep = newPhase {
-            scheduleSoloAutoNextRepIfNeeded()
+            cancelStimulusAfterBeepWork()
+        }
+        if mode == .solo, !mode.requiresPhoneDisplayRelay,
+           case .awaitingExitLog(let ri, let ballGate) = newPhase,
+           case .ballVisible(let oldR, let oldB, _) = oldPhase, oldR == ri, oldB == ballGate {
+            DispatchQueue.main.async {
+                guard case .awaitingExitLog(let currentRI, let currentGate) = self.engine.phase,
+                      currentRI == ri, currentGate == ballGate else { return }
+                self.logExit(repIndex: ri, gate: ballGate)
+            }
         }
     }
 
+    /// Solo wall: synthetic pass reveals the ball (same cue-on-pass model as DOP wedges).
+    private func applySoloSyntheticWallPass(repIndex: Int) {
+        guard mode == .solo else { return }
+        guard case .beepedAwaitingPass(let r, _) = engine.phase, r == repIndex else { return }
+        guard !repController.hasLoggedTap else { return }
+        if repController.state != .decisionWindow {
+            repController.openDecisionWindow()
+        }
+        twoMinuteEnginePassTrigger(repIndex: repIndex, passTimestamp: Date())
+        repController.registerTap()
+    }
+
+    private func cancelStimulusAfterBeepWork() {
+        stimulusAfterBeepToken = UUID()
+    }
+
+    /// Same source as DOP / OTP / AFP `playBeep()` — inline wall calibration controller value.
+    private func soloWallReturnTimeSeconds() -> TimeInterval {
+        max(0.05, soloWallCalibration.calibratedReturnTime)
+    }
+
+    private var soloAutoloopTimingSettings: SoloTimingSettings {
+        let s = SoloTimingSettings.default
+        let rt = soloWallReturnTimeSeconds()
+        return SoloTimingSettings(
+            preBeepMin: s.preBeepMin,
+            preBeepMax: s.preBeepMax,
+            returnTime: rt,
+            decisionLeadTime: s.decisionLeadTime,
+            resetTime: s.resetTime
+        )
+    }
+
+    private func startRepSolo() {
+        guard isSoloRunning else { return }
+        handleWallSoloTrigger()
+    }
+
+    private func tryStartSoloAutoloop() {
+        guard mode.usesAutoLoop else { return }
+        guard !soloWallCalibration.isCalibrating else { return }
+        guard hasCompletedPassTempoCalibration else { return }
+        guard !blockCoachDrillDuringSessionCountdown else { return }
+        guard !soloLoopRunner.isRunning else { return }
+        if case .complete = engine.phase { return }
+        guard nextRepIndex < blockTotalReps else { return }
+        startSoloLoop()
+    }
+
+    private func startSoloLoop() {
+        guard mode.usesAutoLoop else { return }
+        guard hasCompletedPassTempoCalibration else { return }
+        guard !blockCoachDrillDuringSessionCountdown else { return }
+        guard !soloLoopRunner.isRunning else { return }
+        if case .complete = engine.phase { return }
+        guard nextRepIndex < blockTotalReps else { return }
+        SoloTimingSettings.applySoloAutoloopBallReturnToSessionStore()
+        CurrentSessionStore.shared.setExpectedBallTravelTimeOverrideSeconds(soloWallReturnTimeSeconds())
+        isSoloRunning = true
+        soloLoopRunner.start(settings: soloAutoloopTimingSettings) { startRepSolo() }
+    }
+
+    private func stopSoloAutoloop() {
+        isSoloRunning = false
+        soloLoopRunner.stop()
+    }
+
+    /// Partner / relay pass → ball. Solo uses ``applySoloSyntheticWallPass(repIndex:)`` after the wall delay only.
     private func twoMinuteApplyPassTrigger(repIndex: Int, passTimestamp: Date) {
+        guard mode != .solo else { return }
+        twoMinuteEnginePassTrigger(repIndex: repIndex, passTimestamp: passTimestamp)
+    }
+
+    private func twoMinuteEnginePassTrigger(repIndex: Int, passTimestamp: Date) {
+        if mode == .solo, case .armedScanning = engine.phase { return }
         PBAFlowDebugLog.passReceived(repId: repIndex, timestamp: passTimestamp)
         #if DEBUG
         let wallBeforeEngine = Date()
@@ -701,6 +787,9 @@ struct TwoMinuteCriticalScanSessionView: View {
         showConnectedConfirmation = false
         hasStartedConnectedToCalibrationTransition = false
         beginConnectedToCalibrationTransitionIfNeeded()
+        if mode != .solo {
+            soloWallCalibration.resetForNonSoloSession()
+        }
         let coordinator = TrainingPartnerConnectionCoordinator.shared
         if mode.requiresPhoneDisplayRelay {
             let partnerNeedsCalibration = PBASessionFlowPolicy.shouldPromptCalibration(for: .partner) && !coordinator.sessionCalibrationResolved
@@ -712,6 +801,18 @@ struct TwoMinuteCriticalScanSessionView: View {
                 )
                 hasCompletedPassTempoCalibration = true
             }
+        } else if mode == .solo {
+            let nominal = config.difficulty.passTempo.expectedBallTravelTime(distanceMeters: 11.0)
+            SoloSessionStart.applySoloWallCalibrationBoot(
+                trainingMode: mode,
+                controller: soloWallCalibration,
+                nominalWallTravelSeconds: nominal,
+                setHasCompletedPassTempoCalibration: { hasCompletedPassTempoCalibration = $0 },
+                soundEnabled: settingsViewModel.soundEnabled,
+                activateAudio: { activateAudioSession() },
+                preloadBeep: { preloadBeepAssetsForInstantReveal() },
+                onInlineCalibrationFinished: onTwoMinuteSoloWallCalibrationFinished
+            )
         } else if let saved = PartnerPassTempoCalibrationStore.savedAverageTravelTimeSeconds() {
             CurrentSessionStore.shared.setExpectedBallTravelTimeOverrideSeconds(saved)
             hasCompletedPassTempoCalibration = true
@@ -727,7 +828,6 @@ struct TwoMinuteCriticalScanSessionView: View {
         }
         activateAudioSession()
         preloadBeepAssetsForInstantReveal()
-        subscribeToAudioInterruption()
         AnalyticsManager.shared.track(.twoMinuteTestStarted, playerId: playerStore.selectedPlayerId)
         // Relay: start join-code + WebSocket immediately (parallel with Supabase); no intentional delay before code.
         if mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket {
@@ -756,22 +856,24 @@ struct TwoMinuteCriticalScanSessionView: View {
                 playerId: playerStore.selectedPlayerId ?? profileManager.currentProfile?.id
             )
         }
-        configureCalibrationStartFlowForCurrentMode()
+        if !mode.requiresPhoneDisplayRelay {
+            configureCalibrationStartFlowForCurrentMode()
+        }
+        if mode.usesAutoLoop {
+            isSoloRunning = true
+            if hasCompletedPassTempoCalibration, !soloWallCalibration.isCalibrating {
+                tryStartSoloAutoloop()
+            }
+        } else {
+            isSoloRunning = false
+        }
     }
 
     private func handleOnDisappear() {
-        soloGetReadyWorkItem?.cancel()
-        soloGetReadyWorkItem = nil
-        soloBeepRushWorkItem?.cancel()
-        soloBeepRushWorkItem = nil
-        soloAutoNextRepWorkItem?.cancel()
-        soloAutoNextRepWorkItem = nil
+        soloWallCalibration.cancelPendingBeeps()
+        cancelStimulusAfterBeepWork()
+        stopSoloAutoloop()
         pendingNextRepIndex = nil
-        PlayerFirstRunGuidanceToastAnimator.cancel(
-            task: &playerFirstRunGuidanceTask,
-            message: $playerFirstRunGuidanceText,
-            opacity: $playerFirstRunGuidanceOpacity
-        )
         if mode.requiresPhoneDisplayRelay {
             // Do not send sessionEnded while persisting — coach app treats it as a full disconnect (clears join / hub).
             if TrainingPartnerConnectionCoordinator.shared.shouldPersistPartnerPairing {
@@ -791,7 +893,6 @@ struct TwoMinuteCriticalScanSessionView: View {
                 }
             }
         }
-        unsubscribeFromAudioInterruption()
         let preserveCoachConnection =
             mode.requiresPhoneDisplayRelay
             && TrainingPartnerConnectionCoordinator.shared.shouldPersistPartnerPairing
@@ -804,64 +905,19 @@ struct TwoMinuteCriticalScanSessionView: View {
         if testResultItem == nil { currentSessionStore.clear() }
     }
 
-    private func scheduleSoloFirstRepIfNeeded() {
-        guard mode == .solo,
-              !soloFirstRepScheduled,
-              !showPassTempoCalibration,
-              !showCalibrationChoicePrompt else { return }
-        soloFirstRepScheduled = true
-        let showGetReady = !justCompletedCalibrationThisSession
-        soloGetReadyWorkItem?.cancel()
-        let work = DispatchWorkItem {
-            guard engine.phase == .waitingForNextRep else { return }
-            repController.completeRepCycleEnd()
-            repController.startRep()
-            engine.onNextRep(repIndex: nextRepIndex)
-            justCompletedCalibrationThisSession = false
-        }
-        soloGetReadyWorkItem = work
-        let delay = showGetReady ? 0.8 : 0.05
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
-    }
-
-    private func scheduleSoloRushBeepIfNeeded(repIndex: Int, ballGate: Gate) {
-        guard mode == .solo else { return }
-        soloBeepRushWorkItem?.cancel()
-        let rushDelay = Double.random(in: 0.14...0.30)
-        let work = DispatchWorkItem {
-            engine.onBeepFire(repIndex: repIndex, ballGate: ballGate)
-        }
-        soloBeepRushWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + rushDelay, execute: work)
-    }
-
-    private func scheduleSoloPassTriggerIfNeeded(repIndex: Int) {
-        guard mode == .solo else { return }
-        let passDelay = Double.random(in: 0.08...0.22)
-        DispatchQueue.main.asyncAfter(deadline: .now() + passDelay) {
-            guard case .beepedAwaitingPass(let currentRep, _) = engine.phase, currentRep == repIndex else { return }
-            twoMinuteApplyPassTrigger(repIndex: repIndex, passTimestamp: Date())
-        }
-    }
-
-    private func scheduleSoloAutoNextRepIfNeeded() {
-        guard mode == .solo, nextRepIndex < blockTotalReps else { return }
-        soloAutoNextRepWorkItem?.cancel()
-        let work = DispatchWorkItem {
-            guard engine.phase == .waitingForNextRep else { return }
-            repController.completeRepCycleEnd()
-            repController.startRep()
-            engine.onNextRep(repIndex: nextRepIndex)
-        }
-        soloAutoNextRepWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
-    }
-
     private func handleScenePhaseChange(old: ScenePhase, new: ScenePhase) {
         if new == .background {
+            if mode == .solo {
+                cancelStimulusAfterBeepWork()
+                stopSoloAutoloop()
+                if soloWallCalibration.isCalibrating {
+                    soloWallCalibration.cancelPendingBeeps()
+                }
+            }
             engine.applicationDidEnterBackground()
         } else if new == .active {
             engine.synchronizeTimersAfterEnteringForeground()
+            tryStartSoloAutoloop()
         }
     }
 
@@ -892,14 +948,14 @@ struct TwoMinuteCriticalScanSessionView: View {
     private func resultsCoverRouteView(_ route: AppRoute, pathHolder: ResultsCoverPathHolder) -> some View {
         switch route {
         case .awayFromPressureRoleSelection:
-            AwayFromPressureDisplaySessionView(config: AwayFromPressureConfig.config(for: .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+            AwayFromPressureDisplaySessionView(config: AwayFromPressureConfig.config(for: .standard), mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
         case .awayFromPressureTrainingModeSelection:
-            AwayFromPressureDisplaySessionView(config: AwayFromPressureConfig.config(for: .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
-        case .awayFromPressureSetup:
-            AwayFromPressureDisplaySessionView(config: AwayFromPressureConfig.config(for: .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+            AwayFromPressureDisplaySessionView(config: AwayFromPressureConfig.config(for: .standard), mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+        case .awayFromPressureSetup(let routeMode):
+            AwayFromPressureDisplaySessionView(config: AwayFromPressureConfig.config(for: .standard), mode: routeMode, settingsViewModel: settingsViewModel, profileManager: profileManager)
         case .dribbleOrPassRoleSelection:
             if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
-                DribbleOrPassDisplaySessionView(config: DribbleOrPassConfig.defaultConfig(for: .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                DribbleOrPassDisplaySessionView(config: DribbleOrPassConfig.defaultConfig(for: .standard), mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
             } else {
                 PremiumPaywallView(profileManager: profileManager)
                     .environmentObject(playerStore)
@@ -907,15 +963,15 @@ struct TwoMinuteCriticalScanSessionView: View {
             }
         case .dribbleOrPassTrainingModeSelection:
             if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
-                DribbleOrPassDisplaySessionView(config: DribbleOrPassConfig.defaultConfig(for: .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                DribbleOrPassDisplaySessionView(config: DribbleOrPassConfig.defaultConfig(for: .standard), mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
             } else {
                 PremiumPaywallView(profileManager: profileManager)
                     .environmentObject(playerStore)
                     .environmentObject(router)
             }
-        case .dribbleOrPassSetup:
+        case .dribbleOrPassSetup(let routeMode):
             if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
-                DribbleOrPassDisplaySessionView(config: DribbleOrPassConfig.defaultConfig(for: .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                DribbleOrPassDisplaySessionView(config: DribbleOrPassConfig.defaultConfig(for: .standard), mode: routeMode, settingsViewModel: settingsViewModel, profileManager: profileManager)
             } else {
                 PremiumPaywallView(profileManager: profileManager)
                     .environmentObject(playerStore)
@@ -923,7 +979,7 @@ struct TwoMinuteCriticalScanSessionView: View {
             }
         case .oneTouchPassingRoleSelection:
             if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
-                OneTouchPassingDisplaySessionView(config: OneTouchPassingConfig.defaultConfig(for: .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                OneTouchPassingDisplaySessionView(config: OneTouchPassingConfig.defaultConfig(for: .standard), mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
             } else {
                 PremiumPaywallView(profileManager: profileManager)
                     .environmentObject(playerStore)
@@ -931,42 +987,73 @@ struct TwoMinuteCriticalScanSessionView: View {
             }
         case .oneTouchPassingTrainingModeSelection:
             if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
-                OneTouchPassingDisplaySessionView(config: OneTouchPassingConfig.defaultConfig(for: .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                OneTouchPassingDisplaySessionView(config: OneTouchPassingConfig.defaultConfig(for: .standard), mode: mode, settingsViewModel: settingsViewModel, profileManager: profileManager)
             } else {
                 PremiumPaywallView(profileManager: profileManager)
                     .environmentObject(playerStore)
                     .environmentObject(router)
             }
-        case .oneTouchPassingSetup:
+        case .oneTouchPassingSetup(let routeMode):
             if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
-                OneTouchPassingDisplaySessionView(config: OneTouchPassingConfig.defaultConfig(for: .standard), mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+                OneTouchPassingDisplaySessionView(config: OneTouchPassingConfig.defaultConfig(for: .standard), mode: routeMode, settingsViewModel: settingsViewModel, profileManager: profileManager)
             } else {
                 PremiumPaywallView(profileManager: profileManager)
                     .environmentObject(playerStore)
                     .environmentObject(router)
             }
+        case .dribbleOrPass(let routeMode):
+            if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
+                DribbleOrPassDisplaySessionView(config: DribbleOrPassConfig.defaultConfig(for: .standard), mode: routeMode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+            } else {
+                PremiumPaywallView(profileManager: profileManager)
+                    .environmentObject(playerStore)
+                    .environmentObject(router)
+            }
+        case .oneTouchPassing(let routeMode):
+            if profileManager.isPremiumActive(playerId: playerStore.selectedPlayerId) {
+                OneTouchPassingDisplaySessionView(config: OneTouchPassingConfig.defaultConfig(for: .standard), mode: routeMode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+            } else {
+                PremiumPaywallView(profileManager: profileManager)
+                    .environmentObject(playerStore)
+                    .environmentObject(router)
+            }
+        case .awayFromPressure(let routeMode):
+            AwayFromPressureDisplaySessionView(config: AwayFromPressureConfig.config(for: .standard), mode: routeMode, settingsViewModel: settingsViewModel, profileManager: profileManager)
+        case .twoMinuteTest(let routeMode):
+            TwoMinuteCriticalScanSessionView(config: TwoMinuteTestConfig.baseline, mode: routeMode, settingsViewModel: settingsViewModel, profileManager: profileManager)
         default:
             EmptyView()
         }
     }
 
+    private func onTwoMinuteSoloWallCalibrationFinished(_: Double) {
+        hasCompletedPassTempoCalibration = true
+        justCompletedCalibrationThisSession = true
+        showCalibrationChoicePrompt = false
+        showPassTempoCalibration = false
+        startSoloLoop()
+    }
+
     private func handleWallSoloTrigger() {
+        if SoloWallCalibrationInput.handleIfSoloCalibrating(
+            mode: mode,
+            controller: soloWallCalibration,
+            soundEnabled: settingsViewModel.soundEnabled,
+            activateAudio: { activateAudioSession() },
+            preloadBeep: { preloadBeepAssetsForInstantReveal() },
+            onCompletedThreePass: onTwoMinuteSoloWallCalibrationFinished
+        ) { return }
         switch engine.phase {
         case .waitingForNextRep:
             repController.completeRepCycleEnd()
             guard repController.acceptIncomingNextRep() else { return }
             engine.onNextRep(repIndex: nextRepIndex)
-        case .beepedAwaitingPass(repIndex: let ri, ballGate: _):
-            guard twoMTAllowsPassTrigger(repIndex: ri) else { return }
-            guard !repController.hasLoggedTap else { return }
+        case .beepedAwaitingPass(let r, _):
+            // Same as DOP/OTP/AFP: pass only after post-beep delay opened the decision window.
+            guard repController.canAcceptTap() else { return }
+            guard twoMTAllowsPassTrigger(repIndex: r) else { return }
             repController.registerTap()
-            #if DEBUG
-            let soloPass = Date()
-            DecisionSpeedDebugLog.logSoloDisplayPassTrigger(activity: .twoMinuteTest, repIndex: ri, displayWallPassTS: soloPass)
-            twoMinuteApplyPassTrigger(repIndex: ri, passTimestamp: soloPass)
-            #else
-            twoMinuteApplyPassTrigger(repIndex: ri, passTimestamp: Date())
-            #endif
+            twoMinuteEnginePassTrigger(repIndex: r, passTimestamp: Date())
         default:
             break
         }
@@ -989,7 +1076,7 @@ struct TwoMinuteCriticalScanSessionView: View {
     private func twoMinuteExitLogOverlay(repIndex: Int) -> some View {
         VStack {
             Spacer()
-            HStack(spacing: 20) {
+            VStack(spacing: 16) {
                 Button { logExit(repIndex: repIndex, gate: .up) } label: {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 36, weight: .bold))
@@ -1002,6 +1089,15 @@ struct TwoMinuteCriticalScanSessionView: View {
                 HStack(spacing: 16) {
                     Button { logExit(repIndex: repIndex, gate: .left) } label: {
                         Image(systemName: "arrow.left")
+                            .font(.system(size: 36, weight: .bold))
+                            .foregroundColor(.white)
+                            .frame(width: 70, height: 56)
+                            .background(Color.white.opacity(0.2))
+                            .cornerRadius(12)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    Button { logExit(repIndex: repIndex, gate: .down) } label: {
+                        Image(systemName: "arrow.down")
                             .font(.system(size: 36, weight: .bold))
                             .foregroundColor(.white)
                             .frame(width: 70, height: 56)
@@ -1053,11 +1149,14 @@ struct TwoMinuteCriticalScanSessionView: View {
             repController.completeRepCycleEnd()
         case .armedScanning:
             repController.startRep()
-        case .beepedAwaitingPass, .ballVisible:
-            repController.openDecisionWindow()
+        case .beepedAwaitingPass:
+            // Solo: window opens after `SoloUnifiedStimulusTiming` in `playBeep()`. Partner: at beep, same as committed 2MT `playBeep()`.
+            break
+        case .ballVisible:
+            break
         case .awaitingExitLog:
-            // Partner coach may log exit while engine is here — keep swipe acceptance open until `waitingForNextRep`.
-            repController.openDecisionWindow()
+            // Partner: window opened in `playBeep()`; solo: after the unified post-beep delay in `playBeep()`.
+            break
         case .complete:
             repController.completeRepCycleEnd()
         }
@@ -1099,12 +1198,23 @@ struct TwoMinuteCriticalScanSessionView: View {
     /// Same layout as Dribble or Pass: center "X" marker, no players. Ball at one of four slots when visible.
     private var dribbleOrPassLayout: some View {
         GeometryReader { geo in
+            let downshift = PartnerDisplayLayout.drillFocalCenterYOffset
             let ballSide = TwoMinuteSlotPositions.ballSideLength(in: geo.size, safeAreaInsets: geo.safeAreaInsets)
-            let positions = TwoMinuteSlotPositions.positions(in: geo.size, safeAreaInsets: geo.safeAreaInsets, ballSideLength: ballSide)
-            let center = TwoMinuteSlotPositions.centerPosition(in: geo.size, safeAreaInsets: geo.safeAreaInsets, ballSideLength: ballSide)
+            let positions = TwoMinuteSlotPositions.positions(
+                in: geo.size,
+                safeAreaInsets: geo.safeAreaInsets,
+                ballSideLength: ballSide,
+                focalContentDownshift: downshift
+            )
+            let center = TwoMinuteSlotPositions.centerPosition(
+                in: geo.size,
+                safeAreaInsets: geo.safeAreaInsets,
+                ballSideLength: ballSide,
+                focalContentDownshift: downshift
+            )
 
             ZStack {
-                // Center marker (same as Dribble or Pass)
+                // Center marker (same as Dribble or Pass).
                 VStack(spacing: 10) {
                     Text("X")
                         .font(.system(size: 80, weight: .bold))
@@ -1128,7 +1238,7 @@ struct TwoMinuteCriticalScanSessionView: View {
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
-            .offset(y: PartnerDisplayLayout.drillFocalCenterYOffset)
+            .offset(y: downshift)
         }
         // Full-screen geometry + `safeAreaInsets` so slot math matches the physical display (esp. landscape iPad).
         .ignoresSafeArea()
@@ -1165,13 +1275,13 @@ struct TwoMinuteCriticalScanSessionView: View {
 
     private func configureCalibrationStartFlowForCurrentMode() {
         guard !mode.requiresPhoneDisplayRelay else { return }
-        soloFirstRepScheduled = false
+        if mode == .solo, soloWallCalibration.isCalibrating { return }
         if !PBASessionFlowPolicy.shouldPromptCalibration(for: mode),
-           let calibrated = PartnerPassTempoCalibrationStore.savedAverageTravelTimeSeconds() {
+           let calibrated = SoloWallCalibrationController.effectiveSoloWallReturnTimeSeconds() {
             CurrentSessionStore.shared.setExpectedBallTravelTimeOverrideSeconds(calibrated)
             showCalibrationChoicePrompt = false
             showPassTempoCalibration = false
-            scheduleSoloFirstRepIfNeeded()
+            tryStartSoloAutoloop()
         } else {
             CurrentSessionStore.shared.setExpectedBallTravelTimeOverrideSeconds(nil)
             showCalibrationChoicePrompt = true
@@ -1326,8 +1436,7 @@ struct TwoMinuteCriticalScanSessionView: View {
     }
 
     private func activateAudioSession() {
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
-        try? AVAudioSession.sharedInstance().setActive(true)
+        PBABeepSoundManager.shared.activateSessionIfNeeded()
     }
 
     private func preloadBeepAssetsForInstantReveal() {
@@ -1350,19 +1459,51 @@ struct TwoMinuteCriticalScanSessionView: View {
     }
 
     private func playBeep() {
-        // Arm coach PASS acceptance on the same run loop as the beep (and again with audio) so taps are not dropped vs. `DispatchQueue.main.async` sound scheduling.
-        repController.openDecisionWindow()
-        if case .beepedAwaitingPass(let r, _) = engine.phase {
-            PBAFlowDebugLog.beep(repId: r, timestamp: Date())
-        }
-        // Tell the coach the iPad just beeped so its PASS button can arm.
-        // See DribbleOrPassDisplaySessionView.playBeep for full rationale.
-        sendBeepArmed(repIndex: engine.currentRepIndex)
-        DispatchQueue.main.async {
-            self.repController.openDecisionWindow()
-            self.activateAudioSession()
-            self.preloadBeepAssetsForInstantReveal()
-            PBABeepSoundManager.shared.play(soundEnabled: settingsViewModel.soundEnabled)
+        if mode == .solo {
+            guard !soloWallCalibration.isCalibrating else { return }
+            cancelStimulusAfterBeepWork()
+            if case .beepedAwaitingPass(let r, _) = engine.phase {
+                PBAFlowDebugLog.beep(repId: r, timestamp: Date())
+            }
+            sendBeepArmed(repIndex: engine.currentRepIndex)
+            let returnTime = soloWallReturnTimeSeconds()
+            let windowDelay = SoloUnifiedStimulusTiming.stimulusDelayAfterBeepForSolo(returnTime: returnTime)
+            let repAtBeep = engine.currentRepIndex
+            let token = stimulusAfterBeepToken
+            // Match DOP/OTP/AFP: decision window opens after the perception lead.
+            DispatchQueue.main.asyncAfter(deadline: .now() + windowDelay) {
+                guard self.stimulusAfterBeepToken == token else { return }
+                guard case .beepedAwaitingPass(let r, _) = self.engine.phase, r == repAtBeep else { return }
+                self.repController.openDecisionWindow()
+            }
+            // Ball is the stimulus — reveal on synthetic pass at full wall-travel time (same moment wedges appear after a pass).
+            DispatchQueue.main.asyncAfter(deadline: .now() + returnTime) {
+                guard self.stimulusAfterBeepToken == token else { return }
+                guard case .beepedAwaitingPass(let r, _) = self.engine.phase, r == repAtBeep else { return }
+                self.applySoloSyntheticWallPass(repIndex: repAtBeep)
+            }
+            DispatchQueue.main.async {
+                self.activateAudioSession()
+                self.preloadBeepAssetsForInstantReveal()
+                PBABeepSoundManager.shared.play(soundEnabled: self.settingsViewModel.soundEnabled)
+            }
+            return
+        } else {
+            // Partner / relay: pre-change 2MT behavior (immediate decision window; no post-beep delay or `stimulusAfterBeepWorkItem`).
+            // Arm coach PASS acceptance on the same run loop as the beep (and again with audio) so taps are not dropped vs. `DispatchQueue.main.async` sound scheduling.
+            repController.openDecisionWindow()
+            if case .beepedAwaitingPass(let r, _) = engine.phase {
+                PBAFlowDebugLog.beep(repId: r, timestamp: Date())
+            }
+            // Tell the coach the iPad just beeped so its PASS button can arm.
+            // See DribbleOrPassDisplaySessionView.playBeep for full rationale.
+            sendBeepArmed(repIndex: engine.currentRepIndex)
+            DispatchQueue.main.async {
+                self.repController.openDecisionWindow()
+                self.activateAudioSession()
+                self.preloadBeepAssetsForInstantReveal()
+                PBABeepSoundManager.shared.play(soundEnabled: self.settingsViewModel.soundEnabled)
+            }
         }
     }
 
@@ -1376,28 +1517,6 @@ struct TwoMinuteCriticalScanSessionView: View {
             return
         }
         connectionManager.sendTwoMinuteMessage(message)
-    }
-
-    private func subscribeToAudioInterruption() {
-        audioInterruptionObserver = NotificationCenter.default.addObserver(
-            forName: AVAudioSession.interruptionNotification,
-            object: AVAudioSession.sharedInstance(),
-            queue: .main
-        ) { notification in
-            guard let userInfo = notification.userInfo,
-                  let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
-                  let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
-            if type == .ended {
-                self.activateAudioSession()
-            }
-        }
-    }
-
-    private func unsubscribeFromAudioInterruption() {
-        if let observer = audioInterruptionObserver {
-            NotificationCenter.default.removeObserver(observer)
-            audioInterruptionObserver = nil
-        }
     }
 
     /// Pops back to Progress (root of 2-min flow) after user dismisses results cover.

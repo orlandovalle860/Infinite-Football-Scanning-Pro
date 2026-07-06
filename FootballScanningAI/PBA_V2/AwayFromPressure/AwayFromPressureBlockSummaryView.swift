@@ -10,6 +10,7 @@ import SwiftUI
 struct AwayFromPressureBlockSummaryView: View {
     let logs: [AwayFromPressureRepLog]
     let config: AwayFromPressureConfig
+    let trainingMode: TrainingMode
     /// Effective pass travel (seconds) used for decision-window math on this block; nil = derive from store/config.
     var summaryCalibratedTravelSeconds: Double? = nil
     /// Set from display at block complete when timing calibration ≠ 1.0 for this activity.
@@ -281,7 +282,15 @@ struct AwayFromPressureBlockSummaryView: View {
 
     var body: some View {
         Group {
-            if let s = sessionResultForSummary {
+            if trainingMode == .solo {
+                SoloSessionSummaryView(
+                    passTempo: config.difficulty.passTempo,
+                    recalibrationRoute: .awayFromPressureSetup(mode: .solo),
+                    onRunItBack: onRunItBack,
+                    onDone: { popToRootFromBlockSummary() }
+                )
+                .environmentObject(router)
+            } else if let s = sessionResultForSummary {
                 SessionSummaryScreenView(
                     session: s,
                     playerName: profileManager.currentProfile?.name ?? "Player",
@@ -294,14 +303,16 @@ struct AwayFromPressureBlockSummaryView: View {
                     earlyRepBestStreak: earlyRepBestStreakForSummary,
                     earlySessionStreakDisplay: earlySessionStreakForSummary,
                     profileManager: profileManager,
-                    settingsViewModel: settingsViewModel
+                    settingsViewModel: settingsViewModel,
+                    trainingMode: trainingMode
                 )
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
+            } else {
+                blockSummaryContent
             }
-            else { blockSummaryContent }
         }
         .onAppear {
             PBASessionFlowPolicy.handleResultsPresented()
@@ -435,12 +446,14 @@ struct AwayFromPressureBlockSummaryView: View {
                 earlySessionStreakForSummary = EarlySessionStreakStore.current(for: result.playerID)
                 let bestEarly = BestEarlyStreakStore.recordIfNewBest(maxConsecutiveEarlyRepStreak, playerId: result.playerID)
                 earlyRepBestStreakForSummary = bestEarly > 0 ? bestEarly : nil
-                sessionResultForSummary = result
+                if trainingMode != .solo {
+                    sessionResultForSummary = result
+                }
             }
             didSave = true
         }
         .navigationDestination(isPresented: $navigateToNewBlock) {
-            AwayFromPressureDisplaySessionView(config: config, mode: .partner, settingsViewModel: settingsViewModel, profileManager: profileManager)
+            AwayFromPressureDisplaySessionView(config: config, mode: trainingMode, settingsViewModel: settingsViewModel, profileManager: profileManager)
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
@@ -469,7 +482,9 @@ struct AwayFromPressureBlockSummaryView: View {
         }
     }
 
-    private var blockSummaryContent: some View {
+    private var blockSummaryContent: some View { partnerBlockSummaryFullContent }
+
+    private var partnerBlockSummaryFullContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 VStack(spacing: 12) {

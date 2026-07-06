@@ -7,8 +7,6 @@
 
 import SwiftUI
 
-private let pbaLastTrainingModeKey = "pba.lastSelectedTrainingMode"
-
 struct TrainingModeSelectionView<Next: View>: View {
     let activityTitle: String
     let nextDestination: ((TrainingMode) -> Next)?
@@ -121,11 +119,8 @@ struct TrainingModeSelectionView<Next: View>: View {
             }
         }
         .onAppear {
-            if let raw = UserDefaults.standard.string(forKey: pbaLastTrainingModeKey) {
-                savedMode = TrainingMode(rawValue: raw)
-            } else {
-                savedMode = nil
-            }
+            let m = PBASessionFlowPolicy.lastSelectedTrainingMode()
+            savedMode = m
             showModeSelection = false
         }
     }
@@ -160,7 +155,7 @@ struct TrainingModeSelectionView<Next: View>: View {
     }
 
     private func saveLastMode(_ mode: TrainingMode) {
-        UserDefaults.standard.set(mode.rawValue, forKey: pbaLastTrainingModeKey)
+        PBASessionFlowPolicy.persistTrainingMode(mode)
         savedMode = mode
     }
 }

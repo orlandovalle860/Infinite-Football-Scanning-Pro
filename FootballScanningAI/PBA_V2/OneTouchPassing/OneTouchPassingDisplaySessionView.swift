@@ -10,13 +10,13 @@ import UIKit
 import AVFoundation
 import Combine
 
-#if DEBUG
-private enum OTPPersistDebug {
+private enum OTPersistDebug {
     static func log(_ message: String) {
+        #if DEBUG
         print("[OTP-Persist-Debug] \(message)")
+        #endif
     }
 }
-#endif
 
 struct OneTouchPassingDisplaySessionView: View {
     let config: OneTouchPassingConfig
@@ -33,10 +33,11 @@ struct OneTouchPassingDisplaySessionView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @State private var navigateToBlockSummary = false
+    /// True when the pushed summary is the Solo session complete screen (text-only).
+    @State private var showSoloSummary = false
     @State private var blockSummaryCalibratedTravelSeconds: Double?
     @State private var blockSummaryShowTimingAdaptationFeedback = false
     @State private var nextRepIndex = 0
-    @State private var audioInterruptionObserver: NSObjectProtocol?
     @State private var hasSentSessionEnded = false
     @State private var hasCompletedPassTempoCalibration = false
     @State private var showPassTempoCalibration = false
@@ -52,10 +53,22 @@ struct OneTouchPassingDisplaySessionView: View {
     /// Red covered gate wedge: same adaptive style as Playing Away From Pressure (`WedgeDifficultyEngine`).
     @State private var wedgeStyle: WedgeCueStyle = WedgeCueStyle.style(for: 1)
     @StateObject private var repController = RepStateController()
-    @ObservedObject private var partnerRelaySession = TrainingPartnerConnectionCoordinator.shared.relayDisplaySession
-    @State private var playerFirstRunGuidanceText: String?
-    @State private var playerFirstRunGuidanceOpacity = 0.0
-    @State private var playerFirstRunGuidanceTask: Task<Void, Never>?
+    @StateObject private var soloWallCalibration = SoloWallCalibrationController()
+    @ObservedObject private var partnerRelaySession: PartnerRelayDisplaySession
+    @StateObject private var soloLoopRunner = SoloLoopRunner()
+    /// Solo: delays ``RepStateController/openDecisionWindow()`` until after unified post-beep delay.
+    @State private var soloStimulusAfterBeepToken = UUID()
+    private var soloAutoloopTimingSettings: SoloTimingSettings {
+        let s = SoloTimingSettings.default
+        let rt = max(0.05, soloWallCalibration.calibratedReturnTime)
+        return SoloTimingSettings(
+            preBeepMin: s.preBeepMin,
+            preBeepMax: s.preBeepMax,
+            returnTime: rt,
+            decisionLeadTime: s.decisionLeadTime,
+            resetTime: s.resetTime
+        )
+    }
 
     private var sessionTransportMode: SessionTransportMode {
         PartnerTransportPolicy.transportMode(for: .oneTouchPassing, trainingMode: mode)
@@ -73,6 +86,7 @@ struct OneTouchPassingDisplaySessionView: View {
         )
         let plan = OneTouchPassingScenarioGenerator.generatePlan(forBlockSize: repCount)
         _engine = StateObject(wrappedValue: OneTouchPassingEngine(config: config, trainingMode: mode, plan: plan))
+        _partnerRelaySession = ObservedObject(wrappedValue: TrainingPartnerConnectionCoordinator.shared.relayDisplaySession)
     }
 
     private var blockTotalReps: Int {
@@ -83,14 +97,22 @@ struct OneTouchPassingDisplaySessionView: View {
         )
     }
 
-    var body: some View {
+    private var showsBetweenRepPlayerText: Bool {
+        DisplaySessionPlayerTextPolicy.showsBetweenRepPlayerText(for: engine.phase)
+    }
+
+    private var oneTouchMainStack: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            layoutWithGates
+            if !(mode == .solo && soloWallCalibration.isCalibrating) {
+                layoutWithGates
+            }
             statusOverlay
                 .opacity(statusOverlayOpacity)
-            repCountOverlay
-            if showExitLogButtons, let repIndex = repIndexForExit {
+            if mode != .solo, showsBetweenRepPlayerText {
+                repCountOverlay
+            }
+            if mode == .partner, showExitLogButtons, let repIndex = repIndexForExit {
                 exitLogOverlay(repIndex: repIndex)
                     .zIndex(2)
             }
@@ -98,96 +120,119 @@ struct OneTouchPassingDisplaySessionView: View {
             if mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket {
                 PartnerRelayLifecycleBannerOverlay()
             }
-            PlayerFirstRunGuidanceToastOverlay(message: playerFirstRunGuidanceText, opacity: playerFirstRunGuidanceOpacity)
-                .zIndex(119)
             PartnerMidSessionDisconnectRecoveryOverlay()
                 .zIndex(120)
         }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if mode == .solo { handleWallSoloTrigger() }
-        }
-        .navigationDestination(isPresented: $navigateToBlockSummary) {
-            OneTouchPassingBlockSummaryView(
-                results: engine.repResults,
-                config: config,
-                summaryCalibratedTravelSeconds: blockSummaryCalibratedTravelSeconds,
-                showTimingAdaptationFeedback: blockSummaryShowTimingAdaptationFeedback,
-                onRunItBack: runItBackFromSummary,
-                settingsViewModel: settingsViewModel,
-                profileManager: profileManager
-            )
+    }
+
+    private var oneTouchSessionPhaseModifiers: some View {
+        oneTouchMainStack
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if SoloWallCalibrationInput.handleIfSoloCalibrating(
+                    mode: mode,
+                    controller: soloWallCalibration,
+                    soundEnabled: settingsViewModel.soundEnabled,
+                    activateAudio: { activateAudioSession() },
+                    preloadBeep: { preloadBeepAssetsForInstantReveal() },
+                    onCompletedThreePass: onSoloWallCalibrationFinished
+                ) { return }
+                if mode == .solo, !mode.usesAutoLoop {
+                    handleWallSoloTrigger()
+                }
+            }
+            .navigationDestination(isPresented: $navigateToBlockSummary) {
+                OneTouchPassingBlockSummaryView(
+                    results: engine.repResults,
+                    config: config,
+                    trainingMode: mode,
+                    summaryCalibratedTravelSeconds: blockSummaryCalibratedTravelSeconds,
+                    showTimingAdaptationFeedback: blockSummaryShowTimingAdaptationFeedback,
+                    onRunItBack: runItBackFromSummary,
+                    settingsViewModel: settingsViewModel,
+                    profileManager: profileManager
+                )
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .twoMinuteMessageReceived).receive(on: RunLoop.main), perform: handleOneTouchCoachRelayMessage)
-        .onReceive(NotificationCenter.default.publisher(for: .partnerSoftReconnectRepRestart).receive(on: RunLoop.main)) { _ in
-            guard !TrainingPartnerConnectionCoordinator.shared.isPartnerSoftReconnectRepRestartSuppressed else { return }
-            applyPartnerSoftReconnectAfterTransportRestoreOneTouchPassing()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .partnerDisplayWillStartNewSessionFromDisconnect).receive(on: RunLoop.main)) { _ in
-            applyPartnerStartNewSessionLocalTeardownOneTouchPassing()
-        }
-        .onChange(of: engine.currentRepIndex) { _, newValue in
-            if newValue >= 2 {
-                PlayerFirstRunGuidanceToastAnimator.cancel(
-                    task: &playerFirstRunGuidanceTask,
-                    message: $playerFirstRunGuidanceText,
-                    opacity: $playerFirstRunGuidanceOpacity
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .twoMinuteMessageReceived).receive(on: RunLoop.main), perform: handleOneTouchCoachRelayMessage)
+            .onReceive(NotificationCenter.default.publisher(for: .partnerSoftReconnectRepRestart).receive(on: RunLoop.main)) { _ in
+                guard !TrainingPartnerConnectionCoordinator.shared.isPartnerSoftReconnectRepRestartSuppressed else { return }
+                applyPartnerSoftReconnectAfterTransportRestoreOneTouchPassing()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .partnerDisplayWillStartNewSessionFromDisconnect).receive(on: RunLoop.main)) { _ in
+                applyPartnerStartNewSessionLocalTeardownOneTouchPassing()
+            }
+            .onChange(of: engine.currentRepIndex) { _, newValue in
+                guard mode.requiresPhoneDisplayRelay else { return }
+                TrainingPartnerConnectionCoordinator.shared.syncDisplaySessionCurrentRepIndex(
+                    newValue,
+                    activityId: ActivityKind.oneTouchPassing.sessionActivityActivityId
                 )
             }
-            guard mode.requiresPhoneDisplayRelay else { return }
-            TrainingPartnerConnectionCoordinator.shared.syncDisplaySessionCurrentRepIndex(
-                newValue,
-                activityId: ActivityKind.oneTouchPassing.sessionActivityActivityId
-            )
-        }
-        .onChange(of: engine.phase) { oldPhase, newPhase in
-            #if DEBUG
-            OTPPersistDebug.log("engine.phase -> \(String(describing: newPhase)) | blockCoachDrillDuringSessionCountdown=\(blockCoachDrillDuringSessionCountdown) waitingOverlay=\(shouldShowRelayWaiting) relayCoachPaired=\(partnerRelaySession.isCoachPaired)")
-            #endif
-            syncRepController(with: newPhase)
-            if case .blockComplete = newPhase {
-                PlayerFirstRunGuidanceStore.markCompletedFirstRun(activityId: ActivityKind.oneTouchPassing.sessionActivityActivityId)
-                pendingNextRepIndex = nil
-                if mode.requiresPhoneDisplayRelay {
-                    TrainingPartnerConnectionCoordinator.shared.syncDisplaySessionCurrentRepIndex(
-                        blockTotalReps,
-                        activityId: ActivityKind.oneTouchPassing.sessionActivityActivityId
-                    )
-                }
-                let calId = ActivityKind.oneTouchPassing.sessionActivityActivityId
-                let base = CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds
-                    ?? config.difficulty.passTempo.expectedBallTravelTime(distanceMeters: 11.0)
-                blockSummaryCalibratedTravelSeconds = CurrentSessionStore.shared.calibratedBallTravelSeconds(
-                    baseNominal: base,
-                    activityId: calId
-                )
-                blockSummaryShowTimingAdaptationFeedback =
-                    abs(CurrentSessionStore.shared.calibrationFactor(for: calId) - 1.0) > 0.001
-                DispatchQueue.main.async { navigateToBlockSummary = true }
-            }
-            if case .armedScanning = newPhase {
-                preloadBeepAssetsForInstantReveal()
-            }
-            if case .showingCheck = newPhase {
+            .onChange(of: engine.phase) { oldPhase, newPhase in
                 #if DEBUG
-                OTPPersistDebug.log("phase showingCheck — playBeep() armed from phase handler")
+                OTPersistDebug.log("engine.phase -> \(String(describing: newPhase)) | blockCoachDrillDuringSessionCountdown=\(blockCoachDrillDuringSessionCountdown) waitingOverlay=\(shouldShowRelayWaiting) relayCoachPaired=\(partnerRelaySession.isCoachPaired)")
                 #endif
-                playBeep()
+                syncRepController(with: newPhase)
+                if case .blockComplete = newPhase {
+                    stopSoloAutoloop()
+                    PlayerFirstRunGuidanceStore.markCompletedFirstRun(activityId: ActivityKind.oneTouchPassing.sessionActivityActivityId)
+                    pendingNextRepIndex = nil
+                    if mode.requiresPhoneDisplayRelay {
+                        TrainingPartnerConnectionCoordinator.shared.syncDisplaySessionCurrentRepIndex(
+                            blockTotalReps,
+                            activityId: ActivityKind.oneTouchPassing.sessionActivityActivityId
+                        )
+                    }
+                    let calId = ActivityKind.oneTouchPassing.sessionActivityActivityId
+                    let base = CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds
+                        ?? config.difficulty.passTempo.expectedBallTravelTime(distanceMeters: 11.0)
+                    blockSummaryCalibratedTravelSeconds = CurrentSessionStore.shared.calibratedBallTravelSeconds(
+                        baseNominal: base,
+                        activityId: calId
+                    )
+                    blockSummaryShowTimingAdaptationFeedback =
+                        abs(CurrentSessionStore.shared.calibrationFactor(for: calId) - 1.0) > 0.001
+                    DispatchQueue.main.async {
+                        if mode == .solo {
+                            showSoloSummary = true
+                        }
+                        navigateToBlockSummary = true
+                    }
+                }
+                if case .armedScanning = newPhase {
+                    preloadBeepAssetsForInstantReveal()
+                }
+                if case .showingCheck = newPhase {
+                    #if DEBUG
+                    OTPersistDebug.log("phase showingCheck — playBeep() armed from phase handler")
+                    #endif
+                    playBeep()
+                }
+                if mode == .solo, !mode.requiresPhoneDisplayRelay,
+                   case .awaitingExitLog(let ri) = newPhase,
+                   case .cueVisible(let oldR, _) = oldPhase, oldR == ri {
+                    DispatchQueue.main.async {
+                        self.applySoloOneTouchAutoExitIfNeeded(repIndex: ri)
+                    }
+                }
             }
-            oneTouchPassingPlayerFirstRunGuidanceIfNeeded(oldPhase: oldPhase, newPhase: newPhase)
-        }
+            .onChange(of: hasCompletedPassTempoCalibration) { _, _ in
+                tryStartSoloAutoloop()
+            }
+    }
+
+    private var oneTouchSessionViewNavChrome: some View {
+        oneTouchSessionPhaseModifiers
         .onAppear(perform: oneTouchPassingDisplaySessionOnAppear)
         .onDisappear {
+            cancelSoloOtpStimulusAfterBeepWork()
+            soloWallCalibration.cancelPendingBeeps()
+            stopSoloAutoloop()
             pendingNextRepIndex = nil
-            PlayerFirstRunGuidanceToastAnimator.cancel(
-                task: &playerFirstRunGuidanceTask,
-                message: $playerFirstRunGuidanceText,
-                opacity: $playerFirstRunGuidanceOpacity
-            )
             #if DEBUG
             PartnerPersistDebug.log("OneTouchPassingDisplaySessionView onDisappear")
             otpPersistDebugSnapshot("onDisappear")
@@ -195,10 +240,22 @@ struct OneTouchPassingDisplaySessionView: View {
             if mode.requiresPhoneDisplayRelay {
                 teardownPartnerTransportWhenSessionSuspends()
             }
-            unsubscribeFromAudioInterruption()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { notification in
+            guard let userInfo = notification.userInfo,
+                  let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  let type = AVAudioSession.InterruptionType(rawValue: typeValue),
+                  type == .ended else { return }
+            activateAudioSession()
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .background {
+                if mode == .solo {
+                    cancelSoloOtpStimulusAfterBeepWork()
+                    if soloWallCalibration.isCalibrating {
+                        soloWallCalibration.cancelPendingBeeps()
+                    }
+                }
                 engine.applicationDidEnterBackground()
             } else if newPhase == .active {
                 engine.synchronizeTimersAfterEnteringForeground()
@@ -239,7 +296,12 @@ struct OneTouchPassingDisplaySessionView: View {
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
-        .sessionCountdown(waitForPartnerReady: mode.requiresPhoneDisplayRelay, partnerReady: partnerReadyForCountdown, suppressCoachMessagesDuringCountdown: $blockCoachDrillDuringSessionCountdown)
+        .sessionCountdown(
+            waitForPartnerReady: mode.requiresPhoneDisplayRelay,
+            partnerReady: partnerReadyForCountdown,
+            suppressCoachMessagesDuringCountdown: $blockCoachDrillDuringSessionCountdown,
+            isEnabled: !mode.usesAutoLoop
+        )
         .onReceive(NotificationCenter.default.publisher(for: .relayForegroundReconnectCompleted)) { _ in
             guard mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket else { return }
             alignEngineRepWithCoordinatorSnapshotAfterRelayForegroundOneTouchPassing()
@@ -252,8 +314,9 @@ struct OneTouchPassingDisplaySessionView: View {
         }
         .onChange(of: blockCoachDrillDuringSessionCountdown) { old, new in
             #if DEBUG
-            OTPPersistDebug.log("blockCoachDrillDuringSessionCountdown=\(new) (session 3–2–1–Go overlay \(new ? "visible — drill messages suppressed" : "cleared after Go"))")
+            OTPersistDebug.log("blockCoachDrillDuringSessionCountdown=\(new) (session 3–2–1–Go overlay \(new ? "visible — drill messages suppressed" : "cleared after Go"))")
             #endif
+            tryStartSoloAutoloop()
             guard mode.requiresPhoneDisplayRelay, old == true, new == false else { return }
             flushPendingCoachNextRepAfterCountdown()
         }
@@ -263,7 +326,8 @@ struct OneTouchPassingDisplaySessionView: View {
         }
         .onChange(of: connectionManager.connectedPeerName) { _, name in
             guard mode.requiresPhoneDisplayRelay, sessionTransportMode == .multipeer else { return }
-            otpPersistDebugSnapshot("multipeer connectedPeerName=\(name ?? "nil")")
+            let peerLabel: String = name ?? "nil"
+            otpPersistDebugSnapshot("multipeer connectedPeerName=\(peerLabel)")
         }
         #endif
         .fullScreenCover(
@@ -282,7 +346,17 @@ struct OneTouchPassingDisplaySessionView: View {
         }
     }
 
+    /// Session shell after role/training-mode entry: nav chrome, countdown, relay observers, calibration cover.
+    private var oneTouchSessionViewWithBaseModifiers: some View {
+        oneTouchSessionViewNavChrome
+    }
+
+    var body: some View {
+        oneTouchSessionViewWithBaseModifiers
+    }
+
     private func handleOneTouchCoachRelayMessage(_ notification: Notification) {
+        guard mode.requiresRelay else { return }
         guard mode.requiresPhoneDisplayRelay, let msg = notification.object as? TwoMinuteMessage else { return }
         switch msg {
         case .calibrationPassTapped(let timestamp):
@@ -312,12 +386,12 @@ struct OneTouchPassingDisplaySessionView: View {
             pendingNextRepIndex: &pendingNextRepIndex
         ) {
             #if DEBUG
-            OTPPersistDebug.log("deferred drill message during session countdown (nextRep queued if applicable): \(otpMessageKind(msg))")
+            OTPersistDebug.log("deferred drill message during session countdown (nextRep queued if applicable): \(otpMessageKind(msg))")
             #endif
             return
         }
         #if DEBUG
-        OTPPersistDebug.log("coach message received: \(otpMessageKind(msg))")
+        OTPersistDebug.log("coach message received: \(otpMessageKind(msg))")
         #endif
         switch msg {
         case .repStarted:
@@ -416,6 +490,14 @@ struct OneTouchPassingDisplaySessionView: View {
     }
 
     private func handleWallSoloTrigger() {
+        if SoloWallCalibrationInput.handleIfSoloCalibrating(
+            mode: mode,
+            controller: soloWallCalibration,
+            soundEnabled: settingsViewModel.soundEnabled,
+            activateAudio: { activateAudioSession() },
+            preloadBeep: { preloadBeepAssetsForInstantReveal() },
+            onCompletedThreePass: onSoloWallCalibrationFinished
+        ) { return }
         switch engine.phase {
         case .waitingForNextRep:
             repController.completeRepCycleEnd()
@@ -435,6 +517,40 @@ struct OneTouchPassingDisplaySessionView: View {
         default:
             break
         }
+    }
+
+    private func startRepSolo() {
+        handleWallSoloTrigger()
+    }
+
+    private func tryStartSoloAutoloop() {
+        guard mode.usesAutoLoop else { return }
+        guard !soloWallCalibration.isCalibrating else { return }
+        guard hasCompletedPassTempoCalibration else { return }
+        guard !blockCoachDrillDuringSessionCountdown else { return }
+        guard !soloLoopRunner.isRunning else { return }
+        if case .blockComplete = engine.phase { return }
+        startSoloLoop()
+    }
+
+    private func startSoloLoop() {
+        guard mode.usesAutoLoop else { return }
+        guard hasCompletedPassTempoCalibration else { return }
+        guard !blockCoachDrillDuringSessionCountdown else { return }
+        guard !soloLoopRunner.isRunning else { return }
+        if case .blockComplete = engine.phase { return }
+        SoloTimingSettings.applySoloAutoloopBallReturnToSessionStore()
+        CurrentSessionStore.shared.setExpectedBallTravelTimeOverrideSeconds(soloWallCalibration.calibratedReturnTime)
+        soloLoopRunner.start(settings: soloAutoloopTimingSettings) { startRepSolo() }
+    }
+
+    private func onSoloWallCalibrationFinished(_: Double) {
+        hasCompletedPassTempoCalibration = true
+        startSoloLoop()
+    }
+
+    private func stopSoloAutoloop() {
+        soloLoopRunner.stop()
     }
 
     private var showExitLogButtons: Bool {
@@ -457,7 +573,8 @@ struct OneTouchPassingDisplaySessionView: View {
     }
 
     private var shouldShowRelayWaiting: Bool {
-        mode.requiresPhoneDisplayRelay
+        mode.requiresRelay
+            && mode.requiresPhoneDisplayRelay
             && sessionTransportMode == .relayWebSocket
             && !partnerRelaySession.isCoachPaired
             && !TrainingPartnerConnectionCoordinator.shared.isMidSessionPartnerDisconnect
@@ -543,7 +660,7 @@ struct OneTouchPassingDisplaySessionView: View {
     private func exitLogOverlay(repIndex: Int) -> some View {
         VStack {
             Spacer()
-            HStack(spacing: 20) {
+            VStack(spacing: 16) {
                 Button { logExit(repIndex: repIndex, gate: .up) } label: {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 36, weight: .bold))
@@ -556,6 +673,15 @@ struct OneTouchPassingDisplaySessionView: View {
                 HStack(spacing: 16) {
                     Button { logExit(repIndex: repIndex, gate: .left) } label: {
                         Image(systemName: "arrow.left")
+                            .font(.system(size: 36, weight: .bold))
+                            .foregroundColor(.white)
+                            .frame(width: 70, height: 56)
+                            .background(Color.white.opacity(0.2))
+                            .cornerRadius(12)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    Button { logExit(repIndex: repIndex, gate: .down) } label: {
+                        Image(systemName: "arrow.down")
                             .font(.system(size: 36, weight: .bold))
                             .foregroundColor(.white)
                             .frame(width: 70, height: 56)
@@ -580,6 +706,15 @@ struct OneTouchPassingDisplaySessionView: View {
         .padding(.bottom, 32)
     }
 
+    /// Solo: exit overlay is intentionally not shown (partner-only arrows). The engine still needs `onExitLogged` to reach ``waitingForNextRep`` so the solo autoloop can schedule the next rep — log the first valid green for this rep.
+    private func applySoloOneTouchAutoExitIfNeeded(repIndex: Int) {
+        guard mode == .solo, !mode.requiresPhoneDisplayRelay else { return }
+        guard case .awaitingExitLog(let r) = engine.phase, r == repIndex else { return }
+        guard let plan = engine.currentPlan,
+              let gate = Gate.allCases.first(where: { plan.isGreen($0) }) else { return }
+        logExit(repIndex: repIndex, gate: gate)
+    }
+
     private func logExit(repIndex: Int, gate: Gate) {
         guard otpAllowsExitLogged(repIndex: repIndex) else { return }
         guard !repController.hasLoggedSwipe else { return }
@@ -602,6 +737,9 @@ struct OneTouchPassingDisplaySessionView: View {
     }
 
     private func oneTouchPassingDisplaySessionOnAppear() {
+        if mode != .solo {
+            soloWallCalibration.resetForNonSoloSession()
+        }
         let coordinator = TrainingPartnerConnectionCoordinator.shared
         hasCompletedPassTempoCalibration = false
         if mode.requiresPhoneDisplayRelay {
@@ -616,14 +754,18 @@ struct OneTouchPassingDisplaySessionView: View {
                 hasCompletedPassTempoCalibration = true
             }
         } else {
-            showPassTempoCalibration = PBASessionFlowPolicy.shouldPromptCalibration(for: mode)
-            if let calibrated = PartnerPassTempoCalibrationStore.savedAverageTravelTimeSeconds(),
-               !PBASessionFlowPolicy.shouldPromptCalibration(for: mode) {
-                CurrentSessionStore.shared.setExpectedBallTravelTimeOverrideSeconds(calibrated)
-                hasCompletedPassTempoCalibration = true
-            } else {
-                CurrentSessionStore.shared.setExpectedBallTravelTimeOverrideSeconds(nil)
-            }
+            showPassTempoCalibration = false
+            let nominal = config.difficulty.passTempo.expectedBallTravelTime(distanceMeters: 11.0)
+            SoloSessionStart.applySoloWallCalibrationBoot(
+                trainingMode: mode,
+                controller: soloWallCalibration,
+                nominalWallTravelSeconds: nominal,
+                setHasCompletedPassTempoCalibration: { hasCompletedPassTempoCalibration = $0 },
+                soundEnabled: settingsViewModel.soundEnabled,
+                activateAudio: { activateAudioSession() },
+                preloadBeep: { preloadBeepAssetsForInstantReveal() },
+                onInlineCalibrationFinished: onSoloWallCalibrationFinished
+            )
         }
         partnerCalibration.reset()
         showConnectedConfirmation = false
@@ -661,9 +803,18 @@ struct OneTouchPassingDisplaySessionView: View {
         wedgeStyle = WedgeDifficultyEngine.currentStyle(playerId: pid)
         activateAudioSession()
         preloadBeepAssetsForInstantReveal()
-        subscribeToAudioInterruption()
         AnalyticsManager.shared.track(.trainingSessionStarted, playerId: playerStore.selectedPlayerId)
         registerSupabaseOneTouchPassingBlockSession()
+        if mode.usesAutoLoop {
+            syncRepController(with: engine.phase)
+        }
+        if mode == .solo {
+            if !soloWallCalibration.isCalibrating {
+                tryStartSoloAutoloop()
+            }
+        } else {
+            tryStartSoloAutoloop()
+        }
     }
 
     private func registerSupabaseOneTouchPassingBlockSession() {
@@ -681,6 +832,9 @@ struct OneTouchPassingDisplaySessionView: View {
     }
 
     private func runItBackFromSummary() {
+        soloWallCalibration.cancelPendingBeeps()
+        stopSoloAutoloop()
+        showSoloSummary = false
         navigateToBlockSummary = false
         blockSummaryCalibratedTravelSeconds = nil
         blockSummaryShowTimingAdaptationFeedback = false
@@ -694,32 +848,23 @@ struct OneTouchPassingDisplaySessionView: View {
         engine.restartBlockFromBeginning()
         syncRepController(with: engine.phase)
         registerSupabaseOneTouchPassingBlockSession()
-    }
-
-    private func oneTouchPassingPlayerFirstRunGuidanceIfNeeded(oldPhase: OneTouchPassingPhase, newPhase: OneTouchPassingPhase) {
-        let activityId = ActivityKind.oneTouchPassing.sessionActivityActivityId
-        guard !PlayerFirstRunGuidanceStore.hasCompletedFirstRun(activityId: activityId) else { return }
-        guard engine.currentRepIndex <= 1 else { return }
-
-        if case .cueVisible(let r, _) = newPhase, r == 0 {
-            if case .cueVisible(let rOld, _) = oldPhase, rOld == 0 { return }
-            guard let msg = PlayerFirstRunGuidanceCopy.message(for: .oneTouchPassing, repIndexZeroBased: 0) else { return }
-            PlayerFirstRunGuidanceToastAnimator.schedule(
-                text: msg,
-                task: &playerFirstRunGuidanceTask,
-                message: $playerFirstRunGuidanceText,
-                opacity: $playerFirstRunGuidanceOpacity
+        if mode == .solo {
+            let nominal = config.difficulty.passTempo.expectedBallTravelTime(distanceMeters: 11.0)
+            SoloSessionStart.applySoloWallCalibrationBoot(
+                trainingMode: mode,
+                controller: soloWallCalibration,
+                nominalWallTravelSeconds: nominal,
+                setHasCompletedPassTempoCalibration: { hasCompletedPassTempoCalibration = $0 },
+                soundEnabled: settingsViewModel.soundEnabled,
+                activateAudio: { activateAudioSession() },
+                preloadBeep: { preloadBeepAssetsForInstantReveal() },
+                onInlineCalibrationFinished: onSoloWallCalibrationFinished
             )
-        }
-        if case .cueVisible(let r, _) = newPhase, r == 1 {
-            if case .cueVisible(let rOld, _) = oldPhase, rOld == 1 { return }
-            guard let msg = PlayerFirstRunGuidanceCopy.message(for: .oneTouchPassing, repIndexZeroBased: 1) else { return }
-            PlayerFirstRunGuidanceToastAnimator.schedule(
-                text: msg,
-                task: &playerFirstRunGuidanceTask,
-                message: $playerFirstRunGuidanceText,
-                opacity: $playerFirstRunGuidanceOpacity
-            )
+            if !soloWallCalibration.isCalibrating {
+                tryStartSoloAutoloop()
+            }
+        } else {
+            tryStartSoloAutoloop()
         }
     }
 
@@ -729,7 +874,10 @@ struct OneTouchPassingDisplaySessionView: View {
             repController.completeRepCycleEnd()
         case .armedScanning:
             repController.startRep()
-        case .showingCheck, .awaitingPassTrigger, .cueRevealing, .cueVisible:
+        case .showingCheck, .awaitingPassTrigger:
+            if mode == .solo { break }
+            repController.openDecisionWindow()
+        case .cueRevealing, .cueVisible:
             repController.openDecisionWindow()
         case .awaitingExitLog:
             repController.openDecisionWindow()
@@ -746,11 +894,11 @@ struct OneTouchPassingDisplaySessionView: View {
         if mode.requiresPhoneDisplayRelay, result.repIndex < 3 {
             let updated = PartnerPassTempoCalibrationStore.updateRollingAverageTravelTime(
                 observedSeconds: max(0.01, result.decisionTime),
-                trainingMode: .partner
+                trainingMode: mode
             )
             TrainingPartnerConnectionCoordinator.shared.markSessionCalibrationResolved(
                 averageTravelTimeSeconds: updated,
-                trainingMode: .partner
+                trainingMode: mode
             )
         }
         let baseTravel = CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds
@@ -878,7 +1026,7 @@ struct OneTouchPassingDisplaySessionView: View {
         let ready = partnerReadyForCountdown
         let block = blockCoachDrillDuringSessionCountdown
         let phase = String(describing: engine.phase)
-        OTPPersistDebug.log("\(tag) | partnerTrainingSessionActive=\(sessionActive) relayCoachPaired=\(paired) otpThinksCoachPaired(relay)=\(paired) partnerReadyForCountdown=\(ready) waitingForCoachOverlay=\(waiting) reason=\(waiting ? "!isCoachPaired (relay)" : "paired or not relay") blockCoachDrillDuringSessionCountdown=\(block) phase=\(phase)")
+        OTPersistDebug.log("\(tag) | partnerTrainingSessionActive=\(sessionActive) relayCoachPaired=\(paired) otpThinksCoachPaired(relay)=\(paired) partnerReadyForCountdown=\(ready) waitingForCoachOverlay=\(waiting) reason=\(waiting ? "!isCoachPaired (relay)" : "paired or not relay") blockCoachDrillDuringSessionCountdown=\(block) phase=\(phase)")
     }
 
     private func otpMessageKind(_ msg: TwoMinuteMessage) -> String {
@@ -904,28 +1052,7 @@ struct OneTouchPassingDisplaySessionView: View {
     #endif
 
     private func activateAudioSession() {
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
-        try? AVAudioSession.sharedInstance().setActive(true)
-    }
-
-    private func subscribeToAudioInterruption() {
-        audioInterruptionObserver = NotificationCenter.default.addObserver(
-            forName: AVAudioSession.interruptionNotification,
-            object: AVAudioSession.sharedInstance(),
-            queue: .main
-        ) { notification in
-            guard let userInfo = notification.userInfo,
-                  let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
-                  let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
-            if type == .ended { self.activateAudioSession() }
-        }
-    }
-
-    private func unsubscribeFromAudioInterruption() {
-        if let observer = audioInterruptionObserver {
-            NotificationCenter.default.removeObserver(observer)
-            audioInterruptionObserver = nil
-        }
+        PBABeepSoundManager.shared.activateSessionIfNeeded()
     }
 
     private func flushPendingCoachNextRepAfterCountdown() {
@@ -971,13 +1098,10 @@ struct OneTouchPassingDisplaySessionView: View {
         defer { isTearingDownForNewSession = false }
         pendingNextRepIndex = nil
         blockCoachDrillDuringSessionCountdown = false
+        cancelSoloOtpStimulusAfterBeepWork()
+        soloWallCalibration.cancelPendingBeeps()
         engine.invalidateAllTimers()
         repController.resetForNewSession()
-        PlayerFirstRunGuidanceToastAnimator.cancel(
-            task: &playerFirstRunGuidanceTask,
-            message: $playerFirstRunGuidanceText,
-            opacity: $playerFirstRunGuidanceOpacity
-        )
     }
 
     private func applyPartnerCoachNextRep(repIndex: Int) {
@@ -1002,8 +1126,9 @@ struct OneTouchPassingDisplaySessionView: View {
         }
         guard case .waitingForNextRep = engine.phase else {
             print("[NEXTREP] received repIndex=\(repIndex) while phase=\(engine.phase) currentRepIndex=\(engine.currentRepIndex)")
-            print("[NEXTREP DEFERRED] buffering until phase=waitingForNextRep")
-            pendingNextRepIndex = repIndex
+            engine.forceReadyForIncomingCoachNextRep()
+            repController.completeRepCycleEnd()
+            _ = tryCommitPartnerCoachNextRep(repIndex: repIndex)
             return
         }
         _ = tryCommitPartnerCoachNextRep(repIndex: repIndex)
@@ -1050,7 +1175,7 @@ struct OneTouchPassingDisplaySessionView: View {
             }
         }
         repController.completeRepCycleEnd()
-        if !repController.acceptIncomingNextRep() {
+        if !repController.acceptIncomingNextRepAllowingCoachOverride() {
             if otpDisplayEngineIsMidRep(repIndex: repIndex) {
                 sendRepStartedAck(repIndex: repIndex)
                 pendingNextRepIndex = nil
@@ -1120,22 +1245,55 @@ struct OneTouchPassingDisplaySessionView: View {
         PBABeepSoundManager.shared.preloadCurrent()
     }
 
+    private func cancelSoloOtpStimulusAfterBeepWork() {
+        soloStimulusAfterBeepToken = UUID()
+    }
+
     private func playBeep() {
-        #if DEBUG
-        OTPPersistDebug.log("playBeep() executing (CHECK cue)")
-        #endif
-        repController.openDecisionWindow()
-        if case .showingCheck(let r) = engine.phase {
-            PBAFlowDebugLog.beep(repId: r, timestamp: Date())
-        }
-        // Tell the coach the iPad just beeped so its PASS button can arm.
-        // See DribbleOrPassDisplaySessionView.playBeep for full rationale.
-        sendBeepArmed(repIndex: engine.currentRepIndex)
-        DispatchQueue.main.async {
-            self.repController.openDecisionWindow()
-            self.activateAudioSession()
-            self.preloadBeepAssetsForInstantReveal()
-            PBABeepSoundManager.shared.play(soundEnabled: settingsViewModel.soundEnabled)
+        if mode == .solo {
+            cancelSoloOtpStimulusAfterBeepWork()
+            if case .showingCheck(let r) = engine.phase {
+                PBAFlowDebugLog.beep(repId: r, timestamp: Date())
+            }
+            sendBeepArmed(repIndex: engine.currentRepIndex)
+            let delay = SoloUnifiedStimulusTiming.stimulusDelayAfterBeepForSolo(
+                returnTime: soloWallCalibration.calibratedReturnTime
+            )
+            let repAtBeep = engine.currentRepIndex
+            let token = soloStimulusAfterBeepToken
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                guard self.soloStimulusAfterBeepToken == token else { return }
+                switch self.engine.phase {
+                case .showingCheck(let r) where r == repAtBeep:
+                    self.repController.openDecisionWindow()
+                case .awaitingPassTrigger(let r) where r == repAtBeep:
+                    self.repController.openDecisionWindow()
+                default:
+                    break
+                }
+            }
+            DispatchQueue.main.async {
+                self.activateAudioSession()
+                self.preloadBeepAssetsForInstantReveal()
+                PBABeepSoundManager.shared.play(soundEnabled: self.settingsViewModel.soundEnabled)
+            }
+        } else {
+            #if DEBUG
+            OTPersistDebug.log("playBeep() executing (CHECK cue)")
+            #endif
+            repController.openDecisionWindow()
+            if case .showingCheck(let r) = engine.phase {
+                PBAFlowDebugLog.beep(repId: r, timestamp: Date())
+            }
+            // Tell the coach the iPad just beeped so its PASS button can arm.
+            // See DribbleOrPassDisplaySessionView.playBeep for full rationale.
+            sendBeepArmed(repIndex: engine.currentRepIndex)
+            DispatchQueue.main.async {
+                self.repController.openDecisionWindow()
+                self.activateAudioSession()
+                self.preloadBeepAssetsForInstantReveal()
+                PBABeepSoundManager.shared.play(soundEnabled: self.settingsViewModel.soundEnabled)
+            }
         }
     }
 

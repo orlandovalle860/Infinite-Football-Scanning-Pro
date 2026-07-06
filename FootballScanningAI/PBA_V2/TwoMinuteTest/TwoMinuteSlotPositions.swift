@@ -25,8 +25,9 @@ enum TwoMinuteSlotPositions {
     /// Use this from `GeometryReader { geo in … }` so the ball and center X align; do not mix with `UIScreen` alone.
     ///
     /// `ballSideLength` must match the rendered ball frame so slot **centers** keep the full ball inside the usable rect.
-    static func positions(in size: CGSize, safeAreaInsets: EdgeInsets, ballSideLength: CGFloat) -> [Gate: CGPoint] {
-        let m = layoutMetrics(size: size, safeAreaInsets: safeAreaInsets, ballSideLength: ballSideLength)
+    /// - Parameter focalContentDownshift: Same value as the drill view’s `offset(y:)` (e.g. ``PartnerDisplayLayout/drillFocalCenterYOffset``) so slot math accounts for the shift and the bottom ball is not clipped in landscape.
+    static func positions(in size: CGSize, safeAreaInsets: EdgeInsets, ballSideLength: CGFloat, focalContentDownshift: CGFloat = 0) -> [Gate: CGPoint] {
+        let m = layoutMetrics(size: size, safeAreaInsets: safeAreaInsets, ballSideLength: ballSideLength, focalContentDownshift: focalContentDownshift)
         return [
             .up: CGPoint(x: m.cx, y: m.topY),
             .down: CGPoint(x: m.cx, y: m.bottomY),
@@ -48,7 +49,7 @@ enum TwoMinuteSlotPositions {
         }
         let insets = EdgeInsets(top: top, leading: leading, bottom: bottom, trailing: trailing)
         let side = ballSideLength(in: b.size, safeAreaInsets: insets)
-        return positions(in: b.size, safeAreaInsets: insets, ballSideLength: side)
+        return positions(in: b.size, safeAreaInsets: insets, ballSideLength: side, focalContentDownshift: 0)
     }
 
     /// Soccer ball side length: scales with the playable area so 11" vs 13" (and split view) stay consistent.
@@ -68,8 +69,8 @@ enum TwoMinuteSlotPositions {
     }
 
     /// Center of the playable band (matches the diamond’s vertical/horizontal midlines).
-    static func centerPosition(in size: CGSize, safeAreaInsets: EdgeInsets, ballSideLength: CGFloat) -> CGPoint {
-        let m = layoutMetrics(size: size, safeAreaInsets: safeAreaInsets, ballSideLength: ballSideLength)
+    static func centerPosition(in size: CGSize, safeAreaInsets: EdgeInsets, ballSideLength: CGFloat, focalContentDownshift: CGFloat = 0) -> CGPoint {
+        let m = layoutMetrics(size: size, safeAreaInsets: safeAreaInsets, ballSideLength: ballSideLength, focalContentDownshift: focalContentDownshift)
         return CGPoint(x: m.cx, y: m.midY)
     }
 
@@ -82,7 +83,7 @@ enum TwoMinuteSlotPositions {
         let rightX: CGFloat
     }
 
-    private static func layoutMetrics(size: CGSize, safeAreaInsets: EdgeInsets, ballSideLength: CGFloat) -> LayoutMetrics {
+    private static func layoutMetrics(size: CGSize, safeAreaInsets: EdgeInsets, ballSideLength: CGFloat, focalContentDownshift: CGFloat) -> LayoutMetrics {
         let w = size.width
         let h = size.height
         let t = safeAreaInsets.top
@@ -99,7 +100,8 @@ enum TwoMinuteSlotPositions {
         let half = ballSideLength / 2
         let m = ballEdgeMargin
         let minCY = t + half + m
-        let maxCY = t + usableH - half - m
+        // Nudge the allowed band up when the whole drill is offset downward (iPad), so the bottom slot stays on-screen.
+        let maxCY = t + usableH - half - m - max(0, focalContentDownshift)
         let minCX = l + half + m
         let maxCX = l + usableW - half - m
 

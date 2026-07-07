@@ -46,7 +46,7 @@ struct SoloActivitySelectionView: View {
 
     private let options: [ActivityOption] = [
 
-        ActivityOption(activity: .twoMinuteTest, title: "2 Minute Test"),
+        ActivityOption(activity: .twoMinuteTest, title: ActivityKind.twoMinuteTest.displayName),
 
         ActivityOption(activity: .awayFromPressure, title: "Playing Away From Pressure"),
 

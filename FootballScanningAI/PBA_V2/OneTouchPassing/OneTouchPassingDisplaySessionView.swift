@@ -68,6 +68,19 @@ struct OneTouchPassingDisplaySessionView: View {
     @State private var isSoloSessionEnding = false
     @State private var soloTimedCompleteElapsed: TimeInterval = 0
     @State private var soloTimedCompleteReps = 0
+    @State private var soloWallBootResolved = false
+    @State private var sessionStartCueContent: ActivitySessionStartCueContent?
+    @State private var hasPresentedSessionStartCue = false
+    @State private var sessionStartCueHeight: CGFloat = 0
+
+    private var showsDrillFocalLayout: Bool {
+        SoloWallCalibrationDisplayPolicy.showsDrillFocalLayout(
+            mode: mode,
+            isCalibrating: soloWallCalibration.isCalibrating,
+            bootResolved: soloWallBootResolved
+        )
+    }
+
     private var sessionTransportMode: SessionTransportMode {
         PartnerTransportPolicy.transportMode(for: .oneTouchPassing, trainingMode: mode)
     }
@@ -113,11 +126,17 @@ struct OneTouchPassingDisplaySessionView: View {
     private var oneTouchMainStack: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            if !(mode == .solo && soloWallCalibration.isCalibrating) {
+            if showsDrillFocalLayout {
                 layoutWithGates
             }
-            statusOverlay
-                .opacity(statusOverlayOpacity)
+            if SoloWallCalibrationDisplayPolicy.showsTrainingSessionChrome(
+                mode: mode,
+                isCalibrating: soloWallCalibration.isCalibrating,
+                bootResolved: soloWallBootResolved
+            ) {
+                statusOverlay
+                    .opacity(statusOverlayOpacity)
+            }
             if mode != .solo, showsBetweenRepPlayerText {
                 repCountOverlay
             }
@@ -132,7 +151,7 @@ struct OneTouchPassingDisplaySessionView: View {
             PartnerMidSessionDisconnectRecoveryOverlay()
                 .zIndex(120)
             SoloWallCalibrationGetReadyOverlay(mode: mode, calibration: soloWallCalibration)
-            if mode == .solo, soloActionIdleCue.showTapHint {
+            if mode == .solo, soloActionIdleCue.showTapHint, !soloWallCalibration.isCalibrating {
                 SoloActionTapHintView()
                     .zIndex(50)
                     .transition(.opacity)
@@ -272,12 +291,19 @@ struct OneTouchPassingDisplaySessionView: View {
                     }
                 }
             }
-            .onChange(of: hasCompletedPassTempoCalibration) { _, _ in
+            .onChange(of: hasCompletedPassTempoCalibration) { _, completed in
+                guard completed else { return }
+                tryPresentSessionStartCue()
                 if mode == .solo {
                     onSoloCalibrationReadyIfNeeded()
                 } else {
                     tryStartSoloAutoloop()
                 }
+            }
+            .onChange(of: soloWallCalibration.isCalibrating) { _, isCalibrating in
+                guard !isCalibrating else { return }
+                tryPresentSessionStartCue()
+                tryStartSoloAutoloop()
             }
     }
 
@@ -372,6 +398,9 @@ struct OneTouchPassingDisplaySessionView: View {
             #if DEBUG
             OTPersistDebug.log("blockCoachDrillDuringSessionCountdown=\(new) (session 3–2–1–Go overlay \(new ? "visible — drill messages suppressed" : "cleared after Go"))")
             #endif
+            if old == true, new == false {
+                tryPresentSessionStartCue()
+            }
             tryStartSoloAutoloop()
             SoloActionIdleCue.handleCountdownEnded(
                 mode: mode,
@@ -586,6 +615,7 @@ struct OneTouchPassingDisplaySessionView: View {
 
     private func startRepSolo() {
         guard !isSoloDrillInputFrozen else { return }
+        guard sessionStartCueContent == nil else { return }
         handleWallSoloTrigger()
     }
 
@@ -595,6 +625,7 @@ struct OneTouchPassingDisplaySessionView: View {
         guard !soloWallCalibration.isCalibrating else { return }
         guard hasCompletedPassTempoCalibration else { return }
         guard !blockCoachDrillDuringSessionCountdown else { return }
+        guard sessionStartCueContent == nil else { return }
         guard !soloLoopRunner.isRunning else { return }
         if case .blockComplete = engine.phase { return }
         soloLoopRunner.start(settings: SoloTimingSettings.soloAutoloopSettings(wallController: soloWallCalibration)) { startRepSolo() }
@@ -606,6 +637,7 @@ struct OneTouchPassingDisplaySessionView: View {
 
     private func onSoloWallCalibrationFinished(_: Double) {
         hasCompletedPassTempoCalibration = true
+        tryPresentSessionStartCue()
         startSoloLoop()
     }
 
@@ -870,6 +902,7 @@ struct OneTouchPassingDisplaySessionView: View {
         AnalyticsManager.shared.track(.trainingSessionStarted, playerId: playerStore.selectedPlayerId)
         registerSupabaseOneTouchPassingBlockSession()
         if effectiveUsesAutoLoop {
+            tryPresentSessionStartCue()
             syncRepController(with: engine.phase)
         }
         if mode == .solo {
@@ -877,6 +910,7 @@ struct OneTouchPassingDisplaySessionView: View {
         } else {
             tryStartSoloAutoloop()
         }
+        soloWallBootResolved = true
     }
 
     private func onSoloCalibrationReadyIfNeeded() {
@@ -884,7 +918,8 @@ struct OneTouchPassingDisplaySessionView: View {
             mode: mode,
             hasCompletedCalibration: hasCompletedPassTempoCalibration,
             isCalibrating: soloWallCalibration.isCalibrating,
-            timer: soloSessionTimer
+            timer: soloSessionTimer,
+            tryAutoloop: { tryStartSoloAutoloop() }
         )
     }
 
@@ -1078,36 +1113,114 @@ struct OneTouchPassingDisplaySessionView: View {
 
     private var layoutWithGates: some View {
         GeometryReader { geo in
-            let center = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
-            let focalDownshift = PartnerDisplayLayout.drillFocalCenterYOffset
-            ZStack {
-                VStack(spacing: 10) {
-                    SoloActionCenterMarkerView(
-                        focusPulseTrigger: soloActionIdleCue.focusPulseTrigger,
-                        isSessionEnding: isSoloSessionEnding
-                    )
-                }
-                .position(x: center.x, y: center.y + focalDownshift)
-
-                if let plan = engine.currentPlan, otpShouldPreloadGateCueLayers {
-                    ForEach(Gate.allCases, id: \.self) { gate in
-                        OneTouchGateOverlay(
-                            gate: gate,
-                            isGreen: plan.isGreen(gate),
-                            wedgeStyle: wedgeStyle,
-                            isDecisionRevealActive: engine.revealedGates.contains(gate)
-                        )
-                            .id("\(oneTouchActiveCueRepIndex)-\(gate.rawValue)")
-                            .opacity(otpGateCueOpacity(for: gate))
-                            .animation(nil, value: engine.revealedGates)
-                            .zIndex(1)
-                    }
-                }
-            }
-            .frame(width: geo.size.width, height: geo.size.height)
+            layoutWithGatesContent(geo: geo)
         }
         .soloSessionEndingDim(isActive: isSoloSessionEnding)
         .ignoresSafeArea()
+    }
+
+    private func layoutWithGatesContent(geo: GeometryProxy) -> some View {
+        let center = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
+        let focalDownshift = PartnerDisplayLayout.drillFocalCenterYOffset
+        let gameplayReference = min(geo.size.width, geo.size.height)
+
+        return ZStack {
+            otpGateOverlayLayer
+            otpSessionStartCueMarkerStack(
+                geo: geo,
+                center: center,
+                focalDownshift: focalDownshift,
+                gameplayReference: gameplayReference
+            )
+            .zIndex(55)
+        }
+        .frame(width: geo.size.width, height: geo.size.height)
+        .onPreferenceChange(SessionStartCueHeightPreferenceKey.self) { sessionStartCueHeight = $0 }
+    }
+
+    @ViewBuilder
+    private var otpGateOverlayLayer: some View {
+        if let plan = engine.currentPlan, otpShouldPreloadGateCueLayers {
+            ForEach(Gate.allCases, id: \.self) { gate in
+                OneTouchGateOverlay(
+                    gate: gate,
+                    isGreen: plan.isGreen(gate),
+                    wedgeStyle: wedgeStyle,
+                    isDecisionRevealActive: engine.revealedGates.contains(gate)
+                )
+                .id("\(oneTouchActiveCueRepIndex)-\(gate.rawValue)")
+                .opacity(otpGateCueOpacity(for: gate))
+                .animation(nil, value: engine.revealedGates)
+                .zIndex(1)
+            }
+        }
+    }
+
+    private var sessionStartCueDrillIsVisible: Bool {
+        if mode == .solo, soloWallCalibration.isCalibrating { return false }
+        if blockCoachDrillDuringSessionCountdown { return false }
+        return true
+    }
+
+    private var sessionStartCueStackYOffset: CGFloat {
+        guard sessionStartCueContent != nil else { return 0 }
+        return (sessionStartCueHeight + ActivitySessionStartCueView.spacingAboveCenterMarker) / 2
+    }
+
+    private func tryPresentSessionStartCue() {
+        guard !hasPresentedSessionStartCue else { return }
+        guard let content = ActivityKind.oneTouchPassing.sessionStartCue else { return }
+        guard sessionStartCueDrillIsVisible else { return }
+        hasPresentedSessionStartCue = true
+        sessionStartCueContent = content
+    }
+
+    /// Cue finished: clear UI and restart autoloop if a pre-cue start left the runner stuck without firing a rep.
+    private func onSessionStartCueFinished() {
+        sessionStartCueContent = nil
+        if soloLoopRunner.isRunning {
+            stopSoloAutoloop()
+        }
+        tryStartSoloAutoloop()
+    }
+
+    @ViewBuilder
+    private func otpSessionStartCueMarkerStack(
+        geo: GeometryProxy,
+        center: CGPoint,
+        focalDownshift: CGFloat,
+        gameplayReference: CGFloat
+    ) -> some View {
+        let markerStackSpacing: CGFloat = sessionStartCueContent == nil
+            ? 10
+            : ActivitySessionStartCueView.spacingAboveCenterMarker
+        VStack(spacing: markerStackSpacing) {
+            if let cueContent = sessionStartCueContent {
+                ActivitySessionStartCueView(
+                    content: cueContent,
+                    inlineVisualSideLength: ActivitySessionStartCueView.inlineVisualSideLength(relativeTo: gameplayReference)
+                ) {
+                    onSessionStartCueFinished()
+                }
+                .frame(maxWidth: max(0, geo.size.width - 64))
+                .background(
+                    GeometryReader { cueGeo in
+                        Color.clear.preference(
+                            key: SessionStartCueHeightPreferenceKey.self,
+                            value: cueGeo.size.height
+                        )
+                    }
+                )
+            }
+            SoloActionCenterMarkerView(
+                focusPulseTrigger: soloActionIdleCue.focusPulseTrigger,
+                isSessionEnding: isSoloSessionEnding
+            )
+        }
+        .position(
+            x: center.x,
+            y: center.y + focalDownshift - sessionStartCueStackYOffset
+        )
     }
 
     private var statusOverlay: some View {

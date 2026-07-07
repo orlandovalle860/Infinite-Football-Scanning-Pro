@@ -243,18 +243,6 @@ func getDifficulty(for level: PlayerLevel) -> DifficultySettings {
     }
 }
 
-extension ActivityKind {
-    /// Display name for level-based recommendations and summaries.
-    var displayName: String {
-        switch self {
-        case .twoMinuteTest: return "2-Minute Test"
-        case .awayFromPressure: return "Playing Away From Pressure"
-        case .dribbleOrPass: return "Dribble or Pass"
-        case .oneTouchPassing: return "One-Touch Passing"
-        }
-    }
-}
-
 // MARK: - In-session adaptive difficulty
 
 struct AdaptiveState: Equatable {

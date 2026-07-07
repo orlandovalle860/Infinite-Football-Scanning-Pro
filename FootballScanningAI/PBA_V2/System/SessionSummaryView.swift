@@ -10,15 +10,6 @@ import SwiftUI
 import UIKit
 #endif
 
-private func activityDisplayName(_ kind: ActivityKind) -> String {
-    switch kind {
-    case .twoMinuteTest: return "2-Minute Test"
-    case .awayFromPressure: return "Playing Away From Pressure"
-    case .dribbleOrPass: return "Dribble or Pass"
-    case .oneTouchPassing: return "One-Touch Passing"
-    }
-}
-
 private func biasLabel(_ gate: Gate?) -> String {
     guard let g = gate else { return "none" }
     switch g {
@@ -298,7 +289,7 @@ struct SessionSummaryScreenView: View {
         self.trainingMode = .partner
     }
 
-    private var activityName: String { activityDisplayName(session.activityType) }
+    private var activityName: String { session.activityType.displayName }
     private var avgReactionTimeSecondsDisplay: String {
         String(format: "%.2fs", session.avgDecisionTime ?? 0)
     }

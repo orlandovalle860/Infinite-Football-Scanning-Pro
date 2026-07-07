@@ -37,7 +37,7 @@ enum TrainingRecommendationModel {
                 primaryTitle: "Keep attacking your pocket moments early.",
                 primaryBody: "Add pressure. Reduce time. Decide earlier under stress.",
                 activities: [
-                    (title: "2-Minute Test", detail: "Repeat and aim for earlier decisions."),
+                    (title: ActivityKind.twoMinuteTest.displayName, detail: "Repeat and aim for earlier decisions."),
                     (title: "Playing Away From Pressure", detail: "Play away from pressure with a clear first action.")
                 ],
                 goalText: "Aim for 8 out of 10 early decisions."
@@ -48,7 +48,7 @@ enum TrainingRecommendationModel {
                 primaryTitle: "Train deciding before the pocket closes.",
                 primaryBody: "Know your next action before the ball reaches you.",
                 activities: [
-                    (title: "2-Minute Test", detail: "Repeat and aim for earlier decisions."),
+                    (title: ActivityKind.twoMinuteTest.displayName, detail: "Repeat and aim for earlier decisions."),
                     (title: "Playing Away From Pressure", detail: "Play away from pressure with a clear first action.")
                 ],
                 goalText: "Aim for on-time to lead 6+ of 10 reps."
@@ -60,7 +60,7 @@ enum TrainingRecommendationModel {
                 primaryBody: "See the picture before expected arrival.",
                 activities: [
                     (title: "Playing Away From Pressure", detail: "Play away from pressure with a clear first action."),
-                    (title: "2-Minute Test", detail: "Repeat and aim for earlier decisions.")
+                    (title: ActivityKind.twoMinuteTest.displayName, detail: "Repeat and aim for earlier decisions.")
                 ],
                 goalText: "Aim for under 5 late decisions in your next 10 reps."
             )
@@ -70,7 +70,7 @@ enum TrainingRecommendationModel {
                 primaryTitle: "Train deciding before the pocket closes.",
                 primaryBody: "Know your next action before the ball reaches you.",
                 activities: [
-                    (title: "2-Minute Test", detail: "Repeat and aim for earlier decisions."),
+                    (title: ActivityKind.twoMinuteTest.displayName, detail: "Repeat and aim for earlier decisions."),
                     (title: "Playing Away From Pressure", detail: "Play away from pressure with a clear first action.")
                 ],
                 goalText: "Aim for 8 out of 10 early decisions."
@@ -169,7 +169,7 @@ struct TrainingRecommendationView: View {
                         Button {
                             onRunTestAgain()
                         } label: {
-                            Text("Run Test Again")
+                            Text("Train Again")
                                 .font(.headline)
                                 .frame(maxWidth: .infinity)
                         }

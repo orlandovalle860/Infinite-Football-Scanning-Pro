@@ -75,10 +75,10 @@ struct PlayerDashboardView: View {
         guard !recent.isEmpty else {
             return ParentRecommendedNextPlan(
                 weakness: "none",
-                message: "Build your baseline to get personalized guidance.",
+                message: "Complete your first session to unlock personalized guidance.",
                 activity: .twoMinuteTest,
-                activityName: "2-Minute Test",
-                focus: "Establish your baseline"
+                activityName: ActivityKind.twoMinuteTest.displayName,
+                focus: "Train your first touch under pressure"
             )
         }
 
@@ -338,7 +338,7 @@ struct PlayerDashboardView: View {
         case .awayFromPressure: return "Correct First-Decision Trend"
         case .dribbleOrPass: return "Correct Decision Trend"
         case .oneTouchPassing: return "Decision Timing Trend"
-        case .twoMinuteTest: return "2-Minute Balanced Trend"
+        case .twoMinuteTest: return "\(ActivityKind.twoMinuteTest.displayName) Balanced Trend"
         case .none: return "Primary Trend"
         }
     }
@@ -644,7 +644,7 @@ struct PlayerDashboardView: View {
                     .foregroundColor(.white.opacity(0.92))
                 parentActivityButton(title: "Dribble or Pass", activity: .dribbleOrPass)
                 parentActivityButton(title: "Playing Away From Pressure", activity: .awayFromPressure)
-                parentActivityButton(title: "2-Minute Test", activity: .twoMinuteTest)
+                parentActivityButton(title: ActivityKind.twoMinuteTest.displayName, activity: .twoMinuteTest)
             }
             .parentCardStyle()
 

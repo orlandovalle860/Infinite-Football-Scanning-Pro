@@ -182,7 +182,7 @@ struct TwoMinuteTestResultsView: View {
                 testResult: TestResultSummary(
                     decisionScore: min(100, result.correctCount * 10),
                     status: "Decision Timing Summary",
-                    consistency: "First test"
+                    consistency: "First session"
                 ),
                 twoMinuteTestResult: profileManager.profiles.isEmpty ? result : nil,
                 onComplete: onDismissCover
@@ -214,7 +214,7 @@ struct TwoMinuteTestResultsView: View {
 
     private var headerSection: some View {
         VStack(spacing: 8) {
-            Text(trainingMode == .solo ? "2-Minute test complete" : "Decision Timing Summary")
+            Text(trainingMode == .solo ? "\(ActivityKind.twoMinuteTest.displayName) complete" : "Decision Timing Summary")
                 .font(.title2)
                 .fontWeight(.semibold)
                 .foregroundColor(.white.opacity(0.95))
@@ -225,7 +225,7 @@ struct TwoMinuteTestResultsView: View {
 
     private var soloOnboardingSummary: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("You finished the assessment.")
+            Text("You finished your session.")
                 .font(.title3.weight(.semibold))
                 .foregroundColor(.white)
         }

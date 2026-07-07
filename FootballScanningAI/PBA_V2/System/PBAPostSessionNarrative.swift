@@ -49,7 +49,7 @@ enum PBAPostSessionNarrativeBuilder {
         previousSession: SessionRecord?,
         progressStore: ProgressStore
     ) -> PBAPostSessionNarrative {
-        let activityTitle = activityDisplayName(session.activityType)
+        let activityTitle = session.activityType.displayName
         let insight = CoachInsightGenerator.insightPackage(for: session, previous: previousSession)
         let headline = primaryMetricHeadlineLead(session: session, baseHeadline: insight.headline)
 
@@ -101,12 +101,12 @@ enum PBAPostSessionNarrativeBuilder {
         var placeholder = false
         if let prev = previousTwoMinute {
             let syn = twoMinuteSyntheticSession(result: result, playerId: playerId)
-            lines.append(contentsOf: trendLinesDecisionTimeAndCorrect(session: syn, previous: prev, activityTitle: "2-Minute Test", block: false))
+            lines.append(contentsOf: trendLinesDecisionTimeAndCorrect(session: syn, previous: prev, activityTitle: ActivityKind.twoMinuteTest.displayName, block: false))
             if lines.isEmpty {
-                lines.append("Consistent with your last 2-Minute Test — keep sharpening scanning and first decisions.")
+                lines.append("Consistent with your last \(ActivityKind.twoMinuteTest.displayName) — keep sharpening scanning and first decisions.")
             }
         } else {
-            lines.append("First test logged — next time you'll see how you trend.")
+            lines.append("First session logged — next time you'll see how you trend.")
             placeholder = true
         }
 
@@ -118,7 +118,7 @@ enum PBAPostSessionNarrativeBuilder {
 
         return PBAPostSessionNarrative(
             headlineInsight: headline,
-            progressSectionTitle: "Compared to your last 2-Minute Test",
+            progressSectionTitle: "Compared to your last \(ActivityKind.twoMinuteTest.displayName)",
             progressLines: lines,
             coachInsight: coachText.trimmingCharacters(in: .whitespacesAndNewlines),
             nextStepTitle: next.title,
@@ -305,7 +305,7 @@ enum PBAPostSessionNarrativeBuilder {
         case .reactor: return "You're reacting in the moment — next step is earlier pictures"
         case .scanner: return "You're scanning — now commit faster under pressure"
         case .anticipator: return "You're reading patterns — sharpen execution on the first action"
-        case .playmaker: return "High standard — keep testing yourself in more complex scenarios"
+        case .playmaker: return "High standard — keep challenging yourself in more complex scenarios"
         }
     }
 
@@ -331,7 +331,7 @@ enum PBAPostSessionNarrativeBuilder {
             if window < 0.0 { return "One-touch timing is still late — \(baseHeadline)" }
             return baseHeadline
         case .twoMinuteTest:
-            if acc >= 80, window >= 0.51 { return "Balanced test: timing and choices both improved — \(baseHeadline)" }
+            if acc >= 80, window >= 0.51 { return "Balanced session: timing and choices both improved — \(baseHeadline)" }
             return baseHeadline
         }
     }
@@ -411,15 +411,6 @@ enum PBAPostSessionNarrativeBuilder {
         _ = accuracyPercent
         let next = CoachInsightGenerator.nextStepPackage(for: synthetic, previous: previous)
         return ("Next step", next.instruction)
-    }
-
-    private static func activityDisplayName(_ kind: ActivityKind) -> String {
-        switch kind {
-        case .twoMinuteTest: return "2-Minute Test"
-        case .awayFromPressure: return "Playing Away From Pressure"
-        case .dribbleOrPass: return "Dribble or Pass"
-        case .oneTouchPassing: return "One-Touch Passing"
-        }
     }
 
     private enum NarrativeAnchorContext {

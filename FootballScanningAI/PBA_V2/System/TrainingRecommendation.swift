@@ -154,7 +154,7 @@ enum TrainingRecommendation {
         case .oneTouchPassing:
             return "Win your pocket moment early — one-touch execution."
         case .twoMinuteTest:
-            return "Win your pocket moment early — baseline check."
+            return "Win your pocket moment early — first-touch focus."
         }
     }
 
@@ -193,7 +193,7 @@ enum TrainingRecommendation {
     ) -> (focus: String, coachTip: String) {
         switch activity {
         case .twoMinuteTest:
-            return ("Win your pocket moment early — baseline check.", "Take the 2-Minute Test before starting training.")
+            return ("Win your pocket moment early — first-touch focus.", "Start with \(ActivityKind.twoMinuteTest.displayName) before your training path.")
         case .awayFromPressure:
             if case .firstTouchIssues = reason, let subtype = firstTouchSubtype(lastAFPSessionResult) {
                 switch subtype {
@@ -245,9 +245,9 @@ enum TrainingRecommendation {
             if !hasCompletedInitialTest {
                 return TrainingRecommendationResult(
                     activity: .twoMinuteTest,
-                    focusLine: "Win your pocket moment early — start with the 2-Minute Test.",
-                    coachTip: "Take the 2-Minute Test before starting training.",
-                    reason: "Take the 2-Minute Test first."
+                    focusLine: "Win your pocket moment early — start with \(ActivityKind.twoMinuteTest.displayName).",
+                    coachTip: "Start with \(ActivityKind.twoMinuteTest.displayName) before your training path.",
+                    reason: "Start with \(ActivityKind.twoMinuteTest.displayName) first."
                 )
             }
         }
@@ -303,7 +303,7 @@ enum TrainingRecommendation {
         if hasCompletedInitialTest && activity == .twoMinuteTest {
             activity = .awayFromPressure
             recommendReason = .benchmarkFromProgress
-            reason = "Benchmark again from the Progress screen."
+            reason = "Train again from the Progress screen."
         }
 
         // If we would move on but last AFP had first-touch issues, keep recommending AFP.

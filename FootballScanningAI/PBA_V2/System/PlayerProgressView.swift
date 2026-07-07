@@ -119,7 +119,7 @@ struct PlayerProgressView: View {
         case .awayFromPressure: return "Correct First-Decision Trend"
         case .dribbleOrPass: return "Correct Decision Trend"
         case .oneTouchPassing: return "Decision Window Trend"
-        case .twoMinuteTest: return "2-Minute Balanced Trend"
+        case .twoMinuteTest: return "\(ActivityKind.twoMinuteTest.displayName) Balanced Trend"
         case .none: return "Primary Trend"
         }
     }

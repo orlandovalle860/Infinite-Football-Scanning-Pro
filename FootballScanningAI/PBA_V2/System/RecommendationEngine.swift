@@ -21,8 +21,8 @@ enum RecommendationEngine {
         // 1) Never completed 2-Minute Test → recommend test
         if progressStore.last(.twoMinuteTest, playerId: playerId) == nil {
             return Recommendation(
-                headline: "Recommended Benchmark",
-                rationale: "Take the 2-Minute Test to see your baseline.",
+                headline: "Recommended First Session",
+                rationale: "Train your first touch under pressure.",
                 nextActivity: .twoMinuteTest
             )
         }
@@ -78,12 +78,7 @@ enum RecommendationEngine {
 
     /// Activity display name for UI.
     static func activityTitle(_ activity: ActivityKind) -> String {
-        switch activity {
-        case .twoMinuteTest: return "2-Minute Test"
-        case .awayFromPressure: return "Playing Away From Pressure"
-        case .dribbleOrPass: return "Dribble or Pass"
-        case .oneTouchPassing: return "One-Touch Passing"
-        }
+        activity.displayName
     }
 
     /// Stage label for curriculum. Nil for 2-Minute Test.
@@ -99,7 +94,7 @@ enum RecommendationEngine {
     /// One-line description (subtitle) for each activity.
     static func activityDescription(_ activity: ActivityKind) -> String {
         switch activity {
-        case .twoMinuteTest: return "See your baseline decision speed."
+        case .twoMinuteTest: return "Train first-touch decisions under pressure."
         case .awayFromPressure: return "Decide opposite the red on your first action."
         case .dribbleOrPass: return "Choose the correct action."
         case .oneTouchPassing: return "Decide before expected arrival."

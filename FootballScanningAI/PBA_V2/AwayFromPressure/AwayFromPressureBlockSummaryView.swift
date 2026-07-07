@@ -265,7 +265,7 @@ struct AwayFromPressureBlockSummaryView: View {
         last2AwayFromPressure.allSatisfy { $0.correct >= 9 && $0.speedBucket == .fast }
     }
     private var retestMessage: String {
-        last2AreStrong ? "You're ready to re-test." : "Recommended after 2 strong blocks."
+        last2AreStrong ? "You're ready to train again." : "Recommended after 2 strong blocks."
     }
 
     private var previousBlockSpeedBucket: SpeedBucket? {
@@ -649,7 +649,7 @@ struct AwayFromPressureBlockSummaryView: View {
                         Button {
                             navigateToTwoMinute = true
                         } label: {
-                            Text("Re-Test 2-Minute Challenge")
+                            Text("Train \(ActivityKind.twoMinuteTest.displayName) Challenge")
                                 .font(.subheadline)
                                 .foregroundColor(.white.opacity(0.9))
                         }

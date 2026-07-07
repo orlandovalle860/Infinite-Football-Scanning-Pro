@@ -83,10 +83,22 @@ struct TwoMinuteCriticalScanSessionView: View {
     @State private var soloLifetimeRecordedRepIndices = Set<Int>()
     @StateObject private var soloSessionTimer = SoloSessionTimerController()
     @StateObject private var soloActionIdleCue = SoloActionIdleCueState()
+    @State private var sessionStartCueContent: ActivitySessionStartCueContent?
+    @State private var hasPresentedSessionStartCue = false
+    @State private var sessionStartCueHeight: CGFloat = 0
     @State private var showSoloTimedComplete = false
     @State private var isSoloSessionEnding = false
     @State private var soloTimedCompleteElapsed: TimeInterval = 0
     @State private var soloTimedCompleteReps = 0
+    @State private var soloWallBootResolved = false
+
+    private var showsDrillFocalLayout: Bool {
+        SoloWallCalibrationDisplayPolicy.showsDrillFocalLayout(
+            mode: mode,
+            isCalibrating: soloWallCalibration.isCalibrating,
+            bootResolved: soloWallBootResolved
+        )
+    }
 
     init(config: TwoMinuteTestConfig, mode: TrainingMode, settingsViewModel: SettingsViewModel, profileManager: UserProfileManager) {
         self.config = config
@@ -141,11 +153,17 @@ struct TwoMinuteCriticalScanSessionView: View {
     private var sessionStack: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            if !(mode == .solo && soloWallCalibration.isCalibrating) {
+            if showsDrillFocalLayout {
                 dribbleOrPassLayout
             }
-            statusOverlay
-                .opacity(isBallVisible ? 0.25 : 1)
+            if SoloWallCalibrationDisplayPolicy.showsTrainingSessionChrome(
+                mode: mode,
+                isCalibrating: soloWallCalibration.isCalibrating,
+                bootResolved: soloWallBootResolved
+            ) {
+                statusOverlay
+                    .opacity(isBallVisible ? 0.25 : 1)
+            }
             waitingForCoachOverlay
             if mode != .solo, showsBetweenRepPlayerText {
                 repCountOverlay
@@ -165,7 +183,7 @@ struct TwoMinuteCriticalScanSessionView: View {
             PartnerMidSessionDisconnectRecoveryOverlay()
                 .zIndex(125)
             SoloWallCalibrationGetReadyOverlay(mode: mode, calibration: soloWallCalibration)
-            if mode == .solo, soloActionIdleCue.showTapHint {
+            if mode == .solo, soloActionIdleCue.showTapHint, !soloWallCalibration.isCalibrating {
                 SoloActionTapHintView()
                     .zIndex(50)
                     .transition(.opacity)
@@ -299,6 +317,10 @@ struct TwoMinuteCriticalScanSessionView: View {
                 isEnabled: !effectiveUsesAutoLoop
             )
             .onChange(of: blockCoachDrillDuringSessionCountdown) { old, new in
+                if old == true, new == false {
+                    tryPresentSessionStartCue()
+                }
+                tryStartSoloAutoloop()
                 SoloActionIdleCue.handleCountdownEnded(
                     mode: mode,
                     wasBlocking: old,
@@ -308,6 +330,20 @@ struct TwoMinuteCriticalScanSessionView: View {
                 )
                 guard mode.requiresPhoneDisplayRelay, old == true, new == false else { return }
                 flushPendingCoachNextRepAfterCountdown()
+            }
+            .onChange(of: soloWallCalibration.isCalibrating) { _, isCalibrating in
+                guard !isCalibrating else { return }
+                tryPresentSessionStartCue()
+                tryStartSoloAutoloop()
+            }
+            .onChange(of: hasCompletedPassTempoCalibration) { _, completed in
+                guard completed else { return }
+                tryPresentSessionStartCue()
+                if mode == .solo {
+                    onSoloCalibrationReadyIfNeeded()
+                } else {
+                    tryStartSoloAutoloop()
+                }
             }
             .onChange(of: showPassTempoCalibration) { old, new in
                 guard old == true, new == false else { return }
@@ -319,13 +355,6 @@ struct TwoMinuteCriticalScanSessionView: View {
             }
             .onChange(of: showCalibrationChoicePrompt) { old, new in
                 guard old == true, new == false else { return }
-                if mode == .solo {
-                    onSoloCalibrationReadyIfNeeded()
-                } else {
-                    tryStartSoloAutoloop()
-                }
-            }
-            .onChange(of: hasCompletedPassTempoCalibration) { _, _ in
                 if mode == .solo {
                     onSoloCalibrationReadyIfNeeded()
                 } else {
@@ -772,6 +801,7 @@ struct TwoMinuteCriticalScanSessionView: View {
 
     private func startRepSolo() {
         guard isSoloRunning, !isSoloDrillInputFrozen else { return }
+        guard sessionStartCueContent == nil else { return }
         handleWallSoloTrigger()
     }
 
@@ -781,6 +811,7 @@ struct TwoMinuteCriticalScanSessionView: View {
         guard !soloWallCalibration.isCalibrating else { return }
         guard hasCompletedPassTempoCalibration else { return }
         guard !blockCoachDrillDuringSessionCountdown else { return }
+        guard sessionStartCueContent == nil else { return }
         guard !soloLoopRunner.isRunning else { return }
         if case .complete = engine.phase { return }
         guard nextRepIndex < blockTotalReps else { return }
@@ -790,6 +821,7 @@ struct TwoMinuteCriticalScanSessionView: View {
 
     private func startSoloLoop() {
         onSoloCalibrationReadyIfNeeded()
+        tryStartSoloAutoloop()
     }
 
     private func stopSoloAutoloop() {
@@ -919,15 +951,25 @@ struct TwoMinuteCriticalScanSessionView: View {
                 playerId: playerStore.selectedPlayerId ?? profileManager.currentProfile?.id
             )
         }
+        if mode == .solo, effectiveUsesAutoLoop {
+            isSoloRunning = true
+        }
+        if effectiveUsesAutoLoop {
+            tryPresentSessionStartCue()
+        }
         if !mode.requiresPhoneDisplayRelay {
             configureCalibrationStartFlowForCurrentMode()
         }
         if mode == .solo {
             if effectiveUsesAutoLoop {
-                isSoloRunning = true
+                syncRepController(with: engine.phase)
+                if !soloWallCalibration.isCalibrating {
+                    startSoloLoop()
+                }
             }
             onSoloCalibrationReadyIfNeeded()
         }
+        soloWallBootResolved = true
     }
 
     private func handleOnDisappear() {
@@ -1092,6 +1134,7 @@ struct TwoMinuteCriticalScanSessionView: View {
         justCompletedCalibrationThisSession = true
         showCalibrationChoicePrompt = false
         showPassTempoCalibration = false
+        tryPresentSessionStartCue()
         startSoloLoop()
     }
 
@@ -1277,7 +1320,8 @@ struct TwoMinuteCriticalScanSessionView: View {
             mode: mode,
             hasCompletedCalibration: hasCompletedPassTempoCalibration,
             isCalibrating: soloWallCalibration.isCalibrating,
-            timer: soloSessionTimer
+            timer: soloSessionTimer,
+            tryAutoloop: { tryStartSoloAutoloop() }
         )
     }
 
@@ -1332,14 +1376,35 @@ struct TwoMinuteCriticalScanSessionView: View {
             )
 
             ZStack {
-                // Center marker (same as Dribble or Pass).
-                VStack(spacing: 10) {
+                // Center marker + optional session-start cue stacked above (same focal center as ball slots).
+                VStack(spacing: ActivitySessionStartCueView.spacingAboveCenterMarker) {
+                    if let cueContent = sessionStartCueContent {
+                        ActivitySessionStartCueView(
+                            content: cueContent,
+                            inlineVisualSideLength: ActivitySessionStartCueView.inlineVisualSideLength(relativeTo: ballSide)
+                        ) {
+                            onSessionStartCueFinished()
+                        }
+                        .frame(maxWidth: max(0, geo.size.width - 64))
+                        .background(
+                            GeometryReader { cueGeo in
+                                Color.clear.preference(
+                                    key: SessionStartCueHeightPreferenceKey.self,
+                                    value: cueGeo.size.height
+                                )
+                            }
+                        )
+                    }
                     SoloActionCenterMarkerView(
                         focusPulseTrigger: soloActionIdleCue.focusPulseTrigger,
                         isSessionEnding: isSoloSessionEnding
                     )
                 }
-                .position(x: center.x, y: center.y)
+                .position(
+                    x: center.x,
+                    y: center.y - sessionStartCueStackYOffset
+                )
+                .zIndex(55)
 
                 // Soccer ball: pre-mounted from scan/beep with opacity 0; PASS flips opacity (partner instant reveal).
                 if let ctx = twoMinutePreparedBallContext,
@@ -1357,6 +1422,7 @@ struct TwoMinuteCriticalScanSessionView: View {
             }
             .frame(width: geo.size.width, height: geo.size.height)
             .offset(y: downshift)
+            .onPreferenceChange(SessionStartCueHeightPreferenceKey.self) { sessionStartCueHeight = $0 }
         }
         .soloSessionEndingDim(isActive: isSoloSessionEnding)
         // Full-screen geometry + `safeAreaInsets` so slot math matches the physical display (esp. landscape iPad).
@@ -1376,6 +1442,38 @@ struct TwoMinuteCriticalScanSessionView: View {
     /// Partner: 3–2–1–Go only after coach is connected (same signal as waiting overlay). Solo: always ready.
     private var partnerReadyForCountdown: Bool {
         mode.requiresPhoneDisplayRelay ? coachConnectedForCalibration : hasCompletedPassTempoCalibration
+    }
+
+    private var sessionStartCueDrillIsVisible: Bool {
+        if mode == .solo, soloWallCalibration.isCalibrating { return false }
+        if blockCoachDrillDuringSessionCountdown { return false }
+        return true
+    }
+
+    /// Shift the cue+marker stack up so the X stays on the drill focal center when the cue is visible.
+    private var sessionStartCueStackYOffset: CGFloat {
+        guard sessionStartCueContent != nil else { return 0 }
+        return (sessionStartCueHeight + ActivitySessionStartCueView.spacingAboveCenterMarker) / 2
+    }
+
+    private func tryPresentSessionStartCue() {
+        guard !hasPresentedSessionStartCue else { return }
+        guard let content = ActivityKind.twoMinuteTest.sessionStartCue else { return }
+        guard sessionStartCueDrillIsVisible else { return }
+        hasPresentedSessionStartCue = true
+        sessionStartCueContent = content
+    }
+
+    /// Cue finished: clear UI and restart autoloop if a pre-cue start left the runner stuck without firing a rep.
+    private func onSessionStartCueFinished() {
+        sessionStartCueContent = nil
+        if soloLoopRunner.isRunning {
+            stopSoloAutoloop()
+            if mode == .solo, effectiveUsesAutoLoop {
+                isSoloRunning = true
+            }
+        }
+        tryStartSoloAutoloop()
     }
 
     private var coachConnectedForCalibration: Bool {
@@ -1450,7 +1548,7 @@ struct TwoMinuteCriticalScanSessionView: View {
                 if mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket {
                     PartnerRelayDisplayWaitingWithSessionErrorOverlay(
                         joinCode: partnerRelaySession.joinCode,
-                        activityTitle: "2-Minute Test",
+                        activityTitle: ActivityKind.twoMinuteTest.displayName,
                         isDatabaseSessionCreating: sessionManager.isCreating,
                         databaseSessionError: sessionManager.creationError,
                         onRetryDatabaseSession: {

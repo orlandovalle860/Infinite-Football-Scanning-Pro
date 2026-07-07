@@ -150,12 +150,12 @@ struct PBAProgressView: View {
         last2AwayFromPressure.allSatisfy { $0.correct >= 9 && $0.speedBucket == .fast }
     }
     private var retestReadinessMessage: String {
-        last2AwayFromPressureStrong ? "You're ready to re-test." : "Recommended after 2 strong blocks."
+        last2AwayFromPressureStrong ? "You're ready to train again." : "Recommended after 2 strong blocks."
     }
 
     private var section2MinuteTest: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("2-Minute Test")
+            Text(ActivityKind.twoMinuteTest.displayName)
                 .font(.headline)
                 .foregroundColor(.white)
             if let last = progressStore.last(.twoMinuteTest, playerId: selectedPlayerId) {
@@ -198,7 +198,7 @@ struct PBAProgressView: View {
             Button {
                 navigateToTwoMinuteTest = true
             } label: {
-                Text("Re-Test 2-Minute Challenge")
+                Text("Train \(ActivityKind.twoMinuteTest.displayName) Challenge")
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.9))
             }
@@ -306,7 +306,7 @@ struct PBAProgressView: View {
                             selectedSessionResult = session
                         } label: {
                             HStack {
-                                Text(activityDisplayName(session.activityType))
+                                Text(session.activityType.displayName)
                                     .font(.subheadline)
                                     .foregroundColor(.white)
                                 Text("•")
@@ -338,15 +338,6 @@ struct PBAProgressView: View {
             }
         }
         .padding(.vertical, 8)
-    }
-
-    private func activityDisplayName(_ kind: ActivityKind) -> String {
-        switch kind {
-        case .twoMinuteTest: return "2-Minute Test"
-        case .awayFromPressure: return "Playing Away From Pressure"
-        case .dribbleOrPass: return "Dribble or Pass"
-        case .oneTouchPassing: return "One-Touch Passing"
-        }
     }
 
     private func sessionSpeedLabel(_ session: SessionResult) -> String {

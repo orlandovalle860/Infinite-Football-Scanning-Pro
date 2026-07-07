@@ -127,6 +127,9 @@ struct SoloActionCenterMarkerView: View {
     let focusPulseTrigger: Int
     var isSessionEnding: Bool = false
 
+    /// Visual half-height of the 80pt marker (for stacking layout above the X).
+    static let layoutHalfHeight: CGFloat = 44
+
     private static let focusPulseScale: CGFloat = 1.06
     private static let focusPulseHalfDuration: TimeInterval = 0.2
 

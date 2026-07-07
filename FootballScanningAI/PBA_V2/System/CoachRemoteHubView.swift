@@ -61,7 +61,7 @@ struct CoachRemoteHubView: View {
         CoachRemoteActivityItem(
             id: "two_minute_test",
             activityKind: .twoMinuteTest,
-            title: "2-Minute Test",
+            title: ActivityKind.twoMinuteTest.displayName,
             subtitle: "10 reps",
             icon: "soccerball",
             route: .twoMinuteCoachRemote

@@ -208,7 +208,7 @@ enum SessionBlockShare {
         let score = decisionScoreValue(session: session)
         let ratio = "\(session.correctCount)/\(session.totalReps)"
         if score == 100 {
-            let activityName = activityTitle(for: session.activityType)
+            let activityName = session.activityType.displayName
             return """
 \(activityName)
 
@@ -280,21 +280,12 @@ Can you match this?
         }
     }
 
-    private static func activityTitle(for kind: ActivityKind) -> String {
-        switch kind {
-        case .twoMinuteTest: return "2-Minute Test"
-        case .awayFromPressure: return "Playing Away From Pressure"
-        case .dribbleOrPass: return "Dribble or Pass"
-        case .oneTouchPassing: return "One-Touch Passing"
-        }
-    }
-
     private static func shareCardImage(session: SessionResult, playerRecommendation: PlayerRecommendation) -> UIImage {
         let bucket = dominantTimingBucket(session: session)
         let scoreBandLabel = playerRecommendation.level.rawValue
         let timingCat = decisionTimingCategory(from: bucket)
         let card = ShareCardView(
-            activityTitle: activityTitle(for: session.activityType),
+            activityTitle: session.activityType.displayName,
             score: decisionScoreValue(session: session),
             scoreBandLabel: scoreBandLabel,
             correctCount: session.correctCount,

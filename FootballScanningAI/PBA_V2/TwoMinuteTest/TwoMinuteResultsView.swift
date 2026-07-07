@@ -189,15 +189,6 @@ struct TwoMinuteResultsView: View {
         )
     }
 
-    private func activityTitle(_ activity: ActivityKind) -> String {
-        switch activity {
-        case .twoMinuteTest: return "2-Minute Test"
-        case .awayFromPressure: return "Playing Away From Pressure"
-        case .dribbleOrPass: return "Dribble or Pass"
-        case .oneTouchPassing: return "One-Touch Passing"
-        }
-    }
-
     var body: some View {
         Group {
             if showBaselineRecommendation, let rec = baselineRecommendation, let baseline = sessionResult {
@@ -366,7 +357,7 @@ struct TwoMinuteResultsView: View {
                 testResult: TestResultSummary(
                     decisionScore: min(100, earlyDecisions * 10),
                     status: evaluatedProfile.rawValue,
-                    consistency: "First test"
+                    consistency: "First session"
                 )
             )
         }
@@ -383,7 +374,7 @@ struct TwoMinuteResultsView: View {
                 .foregroundColor(.white)
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("Baseline Summary")
+                Text("Session Summary")
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(.yellow)
                 Text("Decision window: \(baseline.avgDecisionWindowSeconds.map { DecisionTimingModel.summaryText(windowSeconds: $0) } ?? "—")")
@@ -392,13 +383,13 @@ struct TwoMinuteResultsView: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Based on your baseline, we recommend starting with:")
+                Text("Based on your first session, we recommend starting with:")
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.9))
                 Text("Stage \(recommendation.stage) of 3")
                     .font(.title3.weight(.bold))
                     .foregroundColor(.yellow)
-                Text(activityTitle(recommendation.nextActivity))
+                Text(recommendation.nextActivity.displayName)
                     .font(.headline)
                     .foregroundColor(.white)
                 Text("Focus: \(recommendation.focus)")
@@ -563,7 +554,7 @@ struct TwoMinuteResultsView: View {
                         Button {
                             dismiss()
                         } label: {
-                            Text("Retake Test")
+                            Text("Train Again")
                                 .font(.subheadline)
                                 .foregroundColor(.white.opacity(0.8))
                         }

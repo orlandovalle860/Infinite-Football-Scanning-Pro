@@ -33,6 +33,42 @@ enum ActivityKind: String, Codable, Hashable, Identifiable {
         default: return nil
         }
     }
+
+    /// User-facing activity label (display only; not used for routing or persistence).
+    var displayName: String {
+        switch self {
+        case .twoMinuteTest: return "Meet the Ball"
+        case .awayFromPressure: return "Playing Away From Pressure"
+        case .dribbleOrPass: return "Dribble or Pass"
+        case .oneTouchPassing: return "One-Touch Passing"
+        }
+    }
+
+    /// Optional one-line cue shown at session start (display only).
+    var sessionStartCue: ActivitySessionStartCueContent? {
+        switch self {
+        case .twoMinuteTest:
+            return ActivitySessionStartCueContent(
+                leadingText: "Meet the",
+                inlineVisual: .imageAsset("SoccerBall"),
+                trailingText: "with your first touch"
+            )
+        case .awayFromPressure:
+            return ActivitySessionStartCueContent(
+                leadingText: "Move away from the defender",
+                inlineVisual: .awayFromPressureDefenderLane
+            )
+        case .dribbleOrPass:
+            return ActivitySessionStartCueContent(
+                leadingText: "Open space: dribble • teammate: pass",
+                inlineVisual: .dribbleOrPassTeammateLane
+            )
+        case .oneTouchPassing:
+            return ActivitySessionStartCueContent(
+                leadingText: "Play quickly with one touch"
+            )
+        }
+    }
 }
 
 enum GridSize: String, Codable {

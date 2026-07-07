@@ -28,6 +28,37 @@ private enum DOPLaneAnimation {
 }
 
 struct DribbleOrPassGateOverlay: View {
+    /// Static mini teammate lane for session-start cue (same gradient + shape as gameplay; no animation).
+    struct SessionStartInlineTeammateBar: View {
+        let length: CGFloat
+        var opacity: Double = 0.75
+
+        private var thickness: CGFloat { length * 0.35 }
+
+        var body: some View {
+            let colors = [
+                Color.green.opacity(0.92),
+                Color.green.opacity(0.48),
+                Color.green.opacity(0.06)
+            ]
+            UnevenRoundedRectangle(
+                topLeadingRadius: 0,
+                bottomLeadingRadius: 0,
+                bottomTrailingRadius: 8,
+                topTrailingRadius: 8
+            )
+            .fill(
+                LinearGradient(
+                    colors: colors,
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
+            .frame(width: thickness, height: length)
+            .opacity(opacity)
+        }
+    }
+
     let gate: Gate
     let content: DribbleOrPassGateContent
     var wedgeStyle: WedgeCueStyle = WedgeCueStyle.style(for: 1)

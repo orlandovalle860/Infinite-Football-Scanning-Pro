@@ -78,13 +78,13 @@ enum ActivityInstructionContent {
         switch activity {
         case .twoMinuteTest:
             return ActivityInstructionData(
-                title: "2-Minute Test",
+                title: ActivityKind.twoMinuteTest.displayName,
                 yourDecisionLines: [
                     "Check surroundings early.",
                     "Recognize the open gate.",
                     "Swipe your decision as soon as the ball arrives."
                 ],
-                scoringShort: "Correct = your first decision matches the ball direction. Baseline uses accuracy, timing, and consistency.",
+                scoringShort: "Correct = your first decision matches the ball direction. Scoring uses accuracy, timing, and consistency.",
                 scoringDetails: nil
             )
         case .awayFromPressure:

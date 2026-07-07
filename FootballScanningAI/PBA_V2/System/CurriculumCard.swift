@@ -41,7 +41,7 @@ struct CurriculumCard: View {
                         Text("Recommended Drill")
                             .font(.caption)
                             .foregroundColor(.white.opacity(0.6))
-                        Text(activityTitle(for: activity))
+                        Text(activity.displayName)
                             .font(.subheadline.weight(.semibold))
                             .foregroundColor(.white)
                     }
@@ -62,13 +62,13 @@ struct CurriculumCard: View {
                 }
                 .buttonStyle(.plain)
             } else {
-                Text("Take the 2-Minute Test to unlock your training path.")
+                Text("Train \(ActivityKind.twoMinuteTest.displayName) to unlock your training path.")
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.9))
                     .fixedSize(horizontal: false, vertical: true)
 
                 Button(action: onStartTwoMinuteTest) {
-                    Text("Start 2-Minute Test")
+                    Text("Start \(ActivityKind.twoMinuteTest.displayName)")
                         .font(.subheadline.weight(.semibold))
                         .foregroundColor(.black)
                         .frame(maxWidth: .infinity)
@@ -80,14 +80,5 @@ struct CurriculumCard: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func activityTitle(for activity: ActivityKind) -> String {
-        switch activity {
-        case .awayFromPressure: return "Playing Away From Pressure"
-        case .dribbleOrPass: return "Dribble or Pass"
-        case .oneTouchPassing: return "One-Touch Passing"
-        case .twoMinuteTest: return "2-Minute Test"
-        }
     }
 }

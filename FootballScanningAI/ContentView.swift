@@ -294,11 +294,7 @@ struct SplashScreen: View {
     @EnvironmentObject private var multipeerManager: MultipeerManager
     @State private var isActive = false
 
-    #if DEBUG
-    private let splashDuration: TimeInterval = 0.35
-    #else
-    private let splashDuration: TimeInterval = 2.0
-    #endif
+    private let splashDuration: TimeInterval = 2.5
 
     var body: some View {
         Group {
@@ -316,11 +312,14 @@ struct SplashScreen: View {
                     Color.white
                         .ignoresSafeArea()
 
-                    Image("SplashLogo")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 300)
-                        .padding()
+                    GeometryReader { geo in
+                        let logoWidth = min(geo.size.width * 0.82, geo.size.height * 0.94)
+                        Image("SplashLogo")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: logoWidth)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 }
             }
         }
@@ -2035,9 +2034,9 @@ struct IntroView: View {
             if delta < -0.04 { return "You were later relative to arrival last \(title) session — reset early scans next block." }
             return "Your decision timing is stable in recent \(title) sessions."
         case .balanced:
-            if delta >= 3 { return "Your timing and selection are improving together in recent test blocks." }
-            if delta <= -3 { return "Your balance of timing and selection dipped in the latest test — reset and re-center next block." }
-            return "Your timing-selection balance is stable across recent test sessions."
+            if delta >= 3 { return "Your timing and selection are improving together in recent training blocks." }
+            if delta <= -3 { return "Your balance of timing and selection dipped in your latest session — reset and re-center next block." }
+            return "Your timing-selection balance is stable across recent training sessions."
         }
     }
 
@@ -2285,7 +2284,7 @@ struct IntroView: View {
                 homeActivityButton("Dribble or Pass", activity: .dribbleOrPass)
                 homeActivityButton("One-Touch Passing", activity: .oneTouchPassing)
                 homeActivityButton("Away From Pressure", activity: .awayFromPressure)
-                homeActivityButton("2-Minute Test", activity: .twoMinuteTest)
+                homeActivityButton(ActivityKind.twoMinuteTest.displayName, activity: .twoMinuteTest)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2300,15 +2299,6 @@ struct IntroView: View {
         }
         let rest = trainingActivities.filter { $0 != recommended }
         return [recommended] + rest
-    }
-
-    private func dailyPlanActivityTitle(_ activity: ActivityKind) -> String {
-        switch activity {
-        case .awayFromPressure: return "Playing Away From Pressure"
-        case .dribbleOrPass: return "Dribble or Pass"
-        case .oneTouchPassing: return "One-Touch Passing"
-        case .twoMinuteTest: return "2-Minute Test"
-        }
     }
 
     /// Focus line for guided next training card.
@@ -2970,13 +2960,13 @@ struct IntroView: View {
                         Text("Start Your Training")
                             .font(.headline.weight(.semibold))
                             .foregroundColor(.white)
-                        Text("Let’s get your baseline so we can personalize your training. Takes 2 minutes.")
+                        Text("Train your first touch under pressure so we can personalize your path. Takes 2 minutes.")
                             .font(.subheadline)
                             .foregroundColor(.white.opacity(0.85))
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     if !canStartLocalTrainingFromHome {
-                        Text("Your coach runs the 2-minute assessment from Coach Remote on a phone.")
+                        Text("Your coach runs \(ActivityKind.twoMinuteTest.displayName) from Coach Remote on a phone.")
                             .font(.subheadline)
                             .foregroundColor(.white.opacity(0.8))
                             .fixedSize(horizontal: false, vertical: true)
@@ -2991,7 +2981,7 @@ struct IntroView: View {
                                 isNavigatingToTraining = false
                             }
                         } label: {
-                            Text("Start 2-Minute Assessment")
+                            Text("Start \(ActivityKind.twoMinuteTest.displayName)")
                                 .font(.headline.weight(.semibold))
                                 .foregroundColor(.black)
                                 .frame(maxWidth: .infinity)
@@ -3004,8 +2994,8 @@ struct IntroView: View {
                         .scaleEffect(isStartTrainingPressed ? 0.98 : 1.0)
                         .animation(.spring(response: 0.25, dampingFraction: 0.6), value: isStartTrainingPressed)
                         .disabled(isNavigatingToTraining)
-                        .accessibilityLabel("Start 2-Minute Assessment")
-                        .accessibilityHint("Double tap to run your baseline assessment.")
+                        .accessibilityLabel("Start \(ActivityKind.twoMinuteTest.displayName)")
+                        .accessibilityHint("Double tap to start your first training session.")
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -3122,7 +3112,7 @@ struct IntroView: View {
                     .font(.title.weight(.bold))
                     .foregroundColor(.white)
                 if isBaselineDecisionSpeedScore {
-                    Text("Baseline Score")
+                    Text("Starting Score")
                         .font(.caption.weight(.semibold))
                         .foregroundColor(.yellow)
                 }
@@ -3503,7 +3493,7 @@ struct IntroView: View {
                             .font(.caption)
                             .foregroundColor(.white.opacity(0.7))
                             .frame(width: 52, alignment: .leading)
-                        Text(dailyPlanActivityTitle(activity))
+                        Text(activity.displayName)
                             .font(.subheadline)
                             .foregroundColor(.white.opacity(0.95))
                         Text("— 12 reps")
@@ -3857,7 +3847,7 @@ struct IntroView: View {
                 Text("Path not set")
                     .font(.subheadline.weight(.medium))
                     .foregroundColor(.white.opacity(0.9))
-                Text("Complete your 2-minute assessment to begin.")
+                Text("Complete \(ActivityKind.twoMinuteTest.displayName) to begin.")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.7))
             } else {
@@ -3913,7 +3903,7 @@ struct IntroView: View {
                     router.push(.achievements)
                 }
                 if canStartLocalTrainingFromHome {
-                    otherActivityRow(title: "Run 2-Minute Test", subtitle: "Re-test baseline and benchmark progress") {
+                    otherActivityRow(title: "Train \(ActivityKind.twoMinuteTest.displayName)", subtitle: "Train again and track your progress") {
                         router.pushRespectingCoachRemotePadGate(PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest), coachRemotePrompt: coachRemoteRequiredPrompt)
                     }
                 }
@@ -4020,7 +4010,7 @@ struct IntroView: View {
                 otherActivityRow(title: "Coach Remote", subtitle: "Open remote controls for partner training") {
                     router.push(.coachRemote)
                 }
-                otherActivityRow(title: "2-Minute Test", subtitle: "Benchmark your decision speed") {
+                otherActivityRow(title: ActivityKind.twoMinuteTest.displayName, subtitle: "Train first-touch decisions under pressure") {
                     router.pushRespectingCoachRemotePadGate(PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest), coachRemotePrompt: coachRemoteRequiredPrompt)
                 }
                 otherActivityRow(title: "Personal Bests", subtitle: "Fastest decision speed, AFP first-decision accuracy, forward intent") {
@@ -4135,16 +4125,16 @@ struct IntroView: View {
 
     private var twoMinuteTestCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("2-Minute Test")
+            Text(ActivityKind.twoMinuteTest.displayName)
                 .font(.subheadline.weight(.semibold))
                 .foregroundColor(.white)
-            Text("Benchmark your decision speed.")
+            Text("Train first-touch decisions under pressure.")
                 .font(.footnote)
                 .foregroundColor(.white.opacity(0.8))
             Button {
                 router.pushRespectingCoachRemotePadGate(PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest), coachRemotePrompt: coachRemoteRequiredPrompt)
             } label: {
-                Text("Run Test")
+                Text("Start Training")
                     .font(.subheadline.weight(.medium))
                     .foregroundColor(.black)
                     .frame(maxWidth: .infinity)
@@ -4395,7 +4385,7 @@ struct TwoMinuteRoleSelectionView: View {
     var body: some View {
         VStack(spacing: 24) {
             Spacer(minLength: 24)
-            Text("2-Minute Test")
+            Text(ActivityKind.twoMinuteTest.displayName)
                 .font(.system(size: 24, weight: .bold, design: .rounded))
                 .foregroundColor(.white)
                 .multilineTextAlignment(.center)

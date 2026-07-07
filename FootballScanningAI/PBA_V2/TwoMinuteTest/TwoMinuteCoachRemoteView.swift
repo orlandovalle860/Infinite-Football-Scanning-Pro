@@ -298,7 +298,7 @@ struct TwoMinuteCoachRemoteView: View {
 
     private func sharedSessionInput(repIndex: Int) -> some View {
         CoachSessionView(
-            coachRemoteHeaderTitle: "Coach — 2-Minute (\(totalReps) reps)",
+            coachRemoteHeaderTitle: "Coach — \(ActivityKind.twoMinuteTest.displayName) (\(totalReps) reps)",
             totalReps: totalReps,
             currentRepOneBased: currentRepIndex + 1,
             preBeepDelayRange: 0.0...0.0,
@@ -574,7 +574,7 @@ struct TwoMinuteCoachRemoteView: View {
                 .font(.footnote)
                 .foregroundColor(.white.opacity(0.5))
             Spacer()
-            Text("Test complete")
+            Text("Session complete")
                 .font(.title2.bold())
                 .foregroundColor(.white)
             Text("Results are on the Display.")

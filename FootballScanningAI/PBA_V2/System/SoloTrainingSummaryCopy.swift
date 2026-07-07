@@ -10,7 +10,7 @@ import Foundation
 enum SoloTrainingSummaryCopy {
     static func endTitle(for activity: ActivityKind) -> String {
         switch activity {
-        case .twoMinuteTest: return "2-Minute test complete"
+        case .twoMinuteTest: return "\(activity.displayName) complete"
         case .awayFromPressure: return "Block complete"
         case .dribbleOrPass: return "Block complete"
         case .oneTouchPassing: return "Block complete"

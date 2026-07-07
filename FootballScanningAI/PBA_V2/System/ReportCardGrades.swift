@@ -326,7 +326,7 @@ enum ReportCardGenerator {
         switch zone {
         case "Elite": return "Excellent — consistently deciding well before expected arrival."
         case "Advanced": return "Strong timing — usually before expected arrival."
-        case "Competent": return "Solid baseline — decisions land around arrival."
+        case "Competent": return "Solid foundation — decisions land around arrival."
         case "Late": return "You're often a beat late — decide earlier."
         case "Too Late": return "Decision comes after expected arrival too often — build earlier pictures."
         default: return "Complete more sessions to unlock timing feedback."
@@ -467,13 +467,7 @@ enum ReportCardGenerator {
             weakest = ""
         }
         let focus = trainingRecommendation.focusLine
-        let activityName: String
-        switch trainingRecommendation.activity {
-        case .twoMinuteTest: activityName = "the 2-Minute Test"
-        case .awayFromPressure: activityName = "Playing Away From Pressure"
-        case .dribbleOrPass: activityName = "Dribble or Pass"
-        case .oneTouchPassing: activityName = "One-Touch Passing"
-        }
+        let activityName = trainingRecommendation.activity.displayName
         if !weakest.isEmpty {
             return "Your development is on track. Focus on \(weakest.lowercased()). Recommended next: \(activityName)—\(focus)."
         }

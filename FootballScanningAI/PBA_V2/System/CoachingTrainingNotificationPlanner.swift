@@ -31,7 +31,7 @@ enum CoachingTrainingNotificationPlanner {
         let lastRecordDate = mostRecentSessionRecordDate(playerId: playerId, progressStore: progressStore)
 
         let guided = GuidedCurriculumEngine.currentProgress(playerId: playerId)
-        let nextTitle = activityDisplayName(guided.nextActivity)
+        let nextTitle = guided.nextActivity.displayName
         let baselineDone = GuidedCurriculumEngine.hasCompletedBaseline(playerId: playerId)
 
         // A — performance-driven (last session signals)
@@ -51,7 +51,7 @@ enum CoachingTrainingNotificationPlanner {
         if let readyActivity = nextCurriculumActivityToHighlight(playerId: playerId, progressStore: progressStore) {
             let templates = CoachingTrainingNotificationCopy.bodies(for: .flowReadyToProgress)
             let template = templates[variationIndex(seed: playerId, kind: .flowReadyToProgress, count: templates.count)]
-            let body = CoachingTrainingNotificationCopy.formatFlowReady(template: template, nextActivityTitle: activityDisplayName(readyActivity))
+            let body = CoachingTrainingNotificationCopy.formatFlowReady(template: template, nextActivityTitle: readyActivity.displayName)
             return CoachingTrainingNudgePlan(
                 kind: .flowReadyToProgress,
                 title: CoachingTrainingNotificationCopy.title(for: .flowReadyToProgress),
@@ -76,10 +76,10 @@ enum CoachingTrainingNotificationPlanner {
             )
         }
 
-        let body = "Run the 2-Minute Test once — it sets your path so every block targets the right habit."
+        let body = "Train with \(ActivityKind.twoMinuteTest.displayName) once — it sets your path so every block targets the right habit."
         return CoachingTrainingNudgePlan(
             kind: .flowNextFocus,
-            title: "Start your baseline",
+            title: "Start training",
             body: body
         )
     }
@@ -240,15 +240,6 @@ enum CoachingTrainingNotificationPlanner {
         let startLast = cal.startOfDay(for: date)
         let startNow = cal.startOfDay(for: Date())
         return cal.dateComponents([.day], from: startLast, to: startNow).day ?? 0
-    }
-
-    private static func activityDisplayName(_ kind: ActivityKind) -> String {
-        switch kind {
-        case .twoMinuteTest: return "2-Minute Test"
-        case .awayFromPressure: return "Playing Away From Pressure"
-        case .dribbleOrPass: return "Dribble or Pass"
-        case .oneTouchPassing: return "One-Touch Passing"
-        }
     }
 
     // MARK: - Variation

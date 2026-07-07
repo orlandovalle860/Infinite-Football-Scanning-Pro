@@ -8,21 +8,12 @@
 import SwiftUI
 import UIKit
 
-private func activityDisplayName(_ kind: ActivityKind) -> String {
-    switch kind {
-    case .twoMinuteTest: return "2-Minute Test"
-    case .awayFromPressure: return "Playing Away From Pressure"
-    case .dribbleOrPass: return "Dribble or Pass"
-    case .oneTouchPassing: return "One-Touch Passing"
-    }
-}
-
 /// Report layout for sharing as image or PDF. Light background, dark text, fixed size for rendering.
 struct SessionReportView: View {
     let session: SessionResult
     let playerName: String
 
-    private var activityName: String { activityDisplayName(session.activityType) }
+    private var activityName: String { session.activityType.displayName }
     private var dateString: String {
         let f = DateFormatter()
         f.dateStyle = .medium

@@ -19,6 +19,38 @@ private enum AFPLaneAnimation {
 }
 
 struct AwayFromPressureGateOverlay: View {
+    /// Static mini defender lane for session-start cue (same gradient + shape as gameplay; no animation).
+    struct SessionStartInlineDefenderBar: View {
+        let length: CGFloat
+        var opacity: Double = 0.75
+
+        private var thickness: CGFloat { length * 0.35 }
+
+        var body: some View {
+            let edge = 0.96
+            let colors = [
+                Color.red.opacity(edge),
+                Color.red.opacity(edge * 0.58),
+                Color.red.opacity(0.06)
+            ]
+            UnevenRoundedRectangle(
+                topLeadingRadius: 0,
+                bottomLeadingRadius: 0,
+                bottomTrailingRadius: 8,
+                topTrailingRadius: 8
+            )
+            .fill(
+                LinearGradient(
+                    colors: colors,
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
+            .frame(width: thickness, height: length)
+            .opacity(opacity)
+        }
+    }
+
     let gate: Gate
     var wedgeStyle: WedgeCueStyle = WedgeCueStyle.style(for: 1)
     var insetFraction: CGFloat = 0.15

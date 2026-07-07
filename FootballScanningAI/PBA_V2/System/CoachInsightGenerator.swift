@@ -597,7 +597,7 @@ enum CoachInsightGenerator {
             return ThemeLines(
                 anchor: "Speed of play is speed of thought.",
                 supporting: [
-                    "In the 2-Minute Test, scan before the pass so you can decide early\(biasText).",
+                    "In \(ActivityKind.twoMinuteTest.displayName), scan before the pass so you can decide early\(biasText).",
                     "Treat each rep like game pressure: picture the action before contact.",
                     "Use early shoulders checks so your first decision is ready on arrival.",
                     "Build repeatable early scans across all reps."
@@ -608,7 +608,7 @@ enum CoachInsightGenerator {
                 anchor: "The window of opportunity closes before expected arrival.",
                 supporting: [
                     "Your timing swings between reps - settle rhythm and keep your scans early.",
-                    "Calm feet and clear eyes will make your test results more reliable.",
+                    "Calm feet and clear eyes will make your session results more reliable.",
                     "Consistency is the target: same early process every rep.",
                     "Do not chase speed; build stable early decisions first."
                 ]

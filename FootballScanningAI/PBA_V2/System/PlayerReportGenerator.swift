@@ -34,7 +34,7 @@ enum PlayerReportGenerator {
         )
         let strength = strengthFromTwoMinute(type: type, correct: testResult.correctCount, total: testResult.totalReps)
         let needsImprovement = needsImprovementFromTwoMinute(type: type, slow: testResult.slowCount, bias: testResult.biasDirection)
-        let trainingRec = "Practice \(activityDisplayName(activity)) to \(focus)."
+        let trainingRec = "Practice \(activity.displayName) to \(focus)."
         return PlayerReportContent(
             decisionStyle: type.title,
             strength: strength,
@@ -78,9 +78,9 @@ enum PlayerReportGenerator {
         )
         let trainingRec: String
         if rec.activity == .twoMinuteTest {
-            trainingRec = "Take the 2-Minute Test to see your baseline."
+            trainingRec = "Train your first touch under pressure to personalize your path."
         } else {
-            trainingRec = "Practice \(activityDisplayName(rec.activity)) to \(rec.focusLine)."
+            trainingRec = "Practice \(rec.activity.displayName) to \(rec.focusLine)."
         }
         return PlayerReportContent(
             decisionStyle: decisionStyle,
@@ -192,14 +192,5 @@ enum PlayerReportGenerator {
             return "Your decisions can arrive slightly late—decide earlier."
         }
         return recommendation.coachTip
-    }
-
-    private static func activityDisplayName(_ activity: ActivityKind) -> String {
-        switch activity {
-        case .twoMinuteTest: return "the 2-Minute Test"
-        case .awayFromPressure: return "Playing Away From Pressure"
-        case .dribbleOrPass: return "Dribble or Pass"
-        case .oneTouchPassing: return "One-Touch Passing"
-        }
     }
 }

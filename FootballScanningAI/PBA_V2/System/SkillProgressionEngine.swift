@@ -31,12 +31,7 @@ enum SkillProgressionEngine {
 
     /// Activity display name for messages.
     static func activityTitle(_ activity: ActivityKind) -> String {
-        switch activity {
-        case .twoMinuteTest: return "2-Minute Test"
-        case .awayFromPressure: return "Playing Away From Pressure"
-        case .dribbleOrPass: return "Dribble or Pass"
-        case .oneTouchPassing: return "One-Touch Passing"
-        }
+        activity.displayName
     }
 
     /// Whether the last session for this activity meets mastery: accuracy >= 0.80, avg reaction <= 750 ms, decision speed score >= 60.

@@ -130,62 +130,53 @@ struct SoloSessionTimerCornerBadge: View {
     var onLongPressEnd: (() -> Void)?
 
     var body: some View {
-        VStack {
-            HStack {
-                Spacer()
-                Text(text)
-                    .font(.caption2.monospacedDigit())
-                    .foregroundColor(.white.opacity(0.32))
-                    .padding(.trailing, 16)
-                    .padding(.top, 12)
-                    .contentShape(Rectangle())
-                    .onLongPressGesture(minimumDuration: 1.2) {
-                        onLongPressEnd?()
-                    }
-                    .accessibilityHint(onLongPressEnd == nil ? "" : "Long press to end session")
+        HStack(spacing: 12) {
+            timerLabel
+            if let onEnd = onLongPressEnd {
+                Button(action: onEnd) {
+                    Text("End")
+                        .font(.footnote.weight(.medium))
+                        .foregroundColor(.white.opacity(0.75))
+                        .padding(.vertical, 5)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("End session")
             }
-            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-        .allowsHitTesting(onLongPressEnd != nil)
+        .frame(maxWidth: .infinity)
+        .safeAreaPadding(.top, 8)
+    }
+
+    private var timerLabel: some View {
+        Text(text)
+            .font(.subheadline.monospacedDigit().weight(.medium))
+            .foregroundColor(.white.opacity(0.62))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Color.white.opacity(0.1))
+            .clipShape(Capsule())
+            .contentShape(Rectangle())
+            .onLongPressGesture(minimumDuration: 1.2) {
+                onLongPressEnd?()
+            }
+            .accessibilityLabel("Session time \(text)")
+            .accessibilityHint(onLongPressEnd == nil ? "" : "Long press to end session")
     }
 }
 
-struct SoloTimeBasedSessionCompleteView: View {
-    let elapsedSeconds: TimeInterval
-    let repCount: Int
-    let onDone: () -> Void
-
-    var body: some View {
-        VStack(spacing: 28) {
-            Spacer()
-
-            Text("Session complete")
-                .font(.system(size: 28, weight: .semibold))
-                .foregroundColor(.white)
-
-            VStack(spacing: 10) {
-                Text("Time: \(SoloSessionTimeFormat.mmss(elapsedSeconds))")
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundColor(.white.opacity(0.85))
-                Text("Reps: \(repCount)")
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundColor(.white.opacity(0.85))
+extension View {
+    /// Top-center solo session timer; layered above drill tap targets so Free Play End is tappable.
+    @ViewBuilder
+    func soloSessionTimerOverlay(
+        isVisible: Bool,
+        text: String,
+        onFreePlayEnd: (() -> Void)?
+    ) -> some View {
+        overlay(alignment: .top) {
+            if isVisible {
+                SoloSessionTimerCornerBadge(text: text, onLongPressEnd: onFreePlayEnd)
             }
-
-            Spacer()
-
-            Button("Done") {
-                onDone()
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.yellow)
-            .foregroundColor(.black)
-            .padding(.bottom, 8)
         }
-        .padding()
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(red: 0.08, green: 0.08, blue: 0.12))
-        .navigationBarBackButtonHidden(true)
     }
 }

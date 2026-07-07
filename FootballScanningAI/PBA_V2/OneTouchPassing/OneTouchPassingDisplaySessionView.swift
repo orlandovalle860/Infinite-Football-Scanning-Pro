@@ -57,13 +57,15 @@ struct OneTouchPassingDisplaySessionView: View {
     @ObservedObject private var partnerRelaySession: PartnerRelayDisplaySession
     @StateObject private var soloLoopRunner = SoloLoopRunner()
     /// Solo: delays ``RepStateController/openDecisionWindow()`` until after unified post-beep delay.
-    @State private var soloStimulusAfterBeepToken = UUID()
+    @State private var soloRepTimingScheduler = SoloRepTimingScheduler()
     /// Solo: wall time when the current rep's beep fired; anchors pass tolerance window.
     @State private var soloRepBeepWallTime: Date?
     @State private var soloLifetimeRepDisplayCount = SoloLifetimeRepCounter.totalReps(for: .oneTouchPassing)
     @State private var soloLifetimeRecordedRepIndices = Set<Int>()
     @StateObject private var soloSessionTimer = SoloSessionTimerController()
+    @StateObject private var soloActionIdleCue = SoloActionIdleCueState()
     @State private var showSoloTimedComplete = false
+    @State private var isSoloSessionEnding = false
     @State private var soloTimedCompleteElapsed: TimeInterval = 0
     @State private var soloTimedCompleteReps = 0
     private var sessionTransportMode: SessionTransportMode {
@@ -97,6 +99,13 @@ struct OneTouchPassingDisplaySessionView: View {
         SoloTimeBasedDisplaySessionSupport.effectiveUsesAutoLoop(mode: mode)
     }
 
+    private var isSoloDrillInputFrozen: Bool {
+        SoloTimeBasedDisplaySessionSupport.shouldBlockSoloDrillInput(
+            isEnding: isSoloSessionEnding,
+            showComplete: showSoloTimedComplete
+        )
+    }
+
     private var showsBetweenRepPlayerText: Bool {
         DisplaySessionPlayerTextPolicy.showsBetweenRepPlayerText(for: engine.phase)
     }
@@ -112,12 +121,6 @@ struct OneTouchPassingDisplaySessionView: View {
             if mode != .solo, showsBetweenRepPlayerText {
                 repCountOverlay
             }
-            if mode == .solo, !soloWallCalibration.isCalibrating, soloSessionTimer.isVisible {
-                SoloSessionTimerCornerBadge(
-                    text: soloSessionTimer.displayText,
-                    onLongPressEnd: soloFreeModeEndAction
-                )
-            }
             if mode == .partner, showExitLogButtons, let repIndex = repIndexForExit {
                 exitLogOverlay(repIndex: repIndex)
                     .zIndex(2)
@@ -129,6 +132,11 @@ struct OneTouchPassingDisplaySessionView: View {
             PartnerMidSessionDisconnectRecoveryOverlay()
                 .zIndex(120)
             SoloWallCalibrationGetReadyOverlay(mode: mode, calibration: soloWallCalibration)
+            if mode == .solo, soloActionIdleCue.showTapHint {
+                SoloActionTapHintView()
+                    .zIndex(50)
+                    .transition(.opacity)
+            }
         }
     }
 
@@ -144,10 +152,16 @@ struct OneTouchPassingDisplaySessionView: View {
                     preloadBeep: { preloadBeepAssetsForInstantReveal() },
                     onCompletedThreePass: onSoloWallCalibrationFinished
                 ) { return }
+                guard !isSoloDrillInputFrozen else { return }
                 if mode == .solo, !effectiveUsesAutoLoop {
                     handleWallSoloTrigger()
                 }
             }
+            .soloSessionTimerOverlay(
+                isVisible: mode == .solo && !soloWallCalibration.isCalibrating && soloSessionTimer.isVisible,
+                text: soloSessionTimer.displayText,
+                onFreePlayEnd: soloFreeModeEndAction
+            )
             .navigationDestination(isPresented: $navigateToBlockSummary) {
                 OneTouchPassingBlockSummaryView(
                     results: engine.repResults,
@@ -164,17 +178,16 @@ struct OneTouchPassingDisplaySessionView: View {
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
             }
-            .navigationDestination(isPresented: $showSoloTimedComplete) {
-                SoloTimeBasedSessionCompleteView(
-                    elapsedSeconds: soloTimedCompleteElapsed,
-                    repCount: soloTimedCompleteReps,
-                    onDone: {
-                        SoloTimeBasedSession.clear()
-                        showSoloTimedComplete = false
-                        router.popToRoot()
-                    }
-                )
-            }
+            .soloSessionCompleteOverlay(
+                isPresented: showSoloTimedComplete,
+                elapsedSeconds: soloTimedCompleteElapsed,
+                repCount: soloTimedCompleteReps,
+                onDone: {
+                    SoloTimeBasedSession.clear()
+                    showSoloTimedComplete = false
+                    router.popToRoot()
+                }
+            )
             .onReceive(NotificationCenter.default.publisher(for: .twoMinuteMessageReceived).receive(on: RunLoop.main), perform: handleOneTouchCoachRelayMessage)
             .onReceive(NotificationCenter.default.publisher(for: .partnerSoftReconnectRepRestart).receive(on: RunLoop.main)) { _ in
                 guard !TrainingPartnerConnectionCoordinator.shared.isPartnerSoftReconnectRepRestartSuppressed else { return }
@@ -194,6 +207,12 @@ struct OneTouchPassingDisplaySessionView: View {
                 #if DEBUG
                 OTPersistDebug.log("engine.phase -> \(String(describing: newPhase)) | blockCoachDrillDuringSessionCountdown=\(blockCoachDrillDuringSessionCountdown) waitingOverlay=\(shouldShowRelayWaiting) relayCoachPaired=\(partnerRelaySession.isCoachPaired)")
                 #endif
+                if mode == .solo, case .beepedAwaitingPass = oldPhase {
+                    if case .beepedAwaitingPass = newPhase { }
+                    else {
+                        cancelSoloOtpStimulusAfterBeepWork()
+                    }
+                }
                 syncRepController(with: newPhase)
                 if case .blockComplete = newPhase {
                     stopSoloAutoloop()
@@ -227,6 +246,14 @@ struct OneTouchPassingDisplaySessionView: View {
                         }
                     }
                 }
+                let wasWaitingForNextRep = if case .waitingForNextRep = oldPhase { true } else { false }
+                let isWaitingForNextRep = if case .waitingForNextRep = newPhase { true } else { false }
+                SoloActionIdleCue.applyPhaseTransition(
+                    mode: mode,
+                    wasWaitingForNextRep: wasWaitingForNextRep,
+                    isWaitingForNextRep: isWaitingForNextRep,
+                    cue: soloActionIdleCue
+                )
                 if mode == .solo, SoloTimeBasedSession.isActive, soloSessionTimer.pendingEndAfterCurrentRep,
                    case .waitingForNextRep = newPhase {
                     finishSoloTimeBasedSession()
@@ -246,7 +273,11 @@ struct OneTouchPassingDisplaySessionView: View {
                 }
             }
             .onChange(of: hasCompletedPassTempoCalibration) { _, _ in
-                tryStartSoloAutoloop()
+                if mode == .solo {
+                    onSoloCalibrationReadyIfNeeded()
+                } else {
+                    tryStartSoloAutoloop()
+                }
             }
     }
 
@@ -342,6 +373,13 @@ struct OneTouchPassingDisplaySessionView: View {
             OTPersistDebug.log("blockCoachDrillDuringSessionCountdown=\(new) (session 3–2–1–Go overlay \(new ? "visible — drill messages suppressed" : "cleared after Go"))")
             #endif
             tryStartSoloAutoloop()
+            SoloActionIdleCue.handleCountdownEnded(
+                mode: mode,
+                wasBlocking: old,
+                isBlocking: new,
+                isWaitingForNextRep: { if case .waitingForNextRep = engine.phase { true } else { false } }(),
+                cue: soloActionIdleCue
+            )
             guard mode.requiresPhoneDisplayRelay, old == true, new == false else { return }
             flushPendingCoachNextRepAfterCountdown()
         }
@@ -523,8 +561,10 @@ struct OneTouchPassingDisplaySessionView: View {
             preloadBeep: { preloadBeepAssetsForInstantReveal() },
             onCompletedThreePass: onSoloWallCalibrationFinished
         ) { return }
+        guard !isSoloDrillInputFrozen else { return }
         switch engine.phase {
         case .waitingForNextRep:
+            soloActionIdleCue.onUserTapToStart()
             repController.completeRepCycleEnd()
             guard repController.acceptIncomingNextRep() else { return }
             engine.onNextRep(repIndex: nextRepIndex)
@@ -545,27 +585,23 @@ struct OneTouchPassingDisplaySessionView: View {
     }
 
     private func startRepSolo() {
+        guard !isSoloDrillInputFrozen else { return }
         handleWallSoloTrigger()
     }
 
     private func tryStartSoloAutoloop() {
         guard effectiveUsesAutoLoop else { return }
+        guard !isSoloDrillInputFrozen else { return }
         guard !soloWallCalibration.isCalibrating else { return }
         guard hasCompletedPassTempoCalibration else { return }
         guard !blockCoachDrillDuringSessionCountdown else { return }
         guard !soloLoopRunner.isRunning else { return }
         if case .blockComplete = engine.phase { return }
-        startSoloLoop()
+        soloLoopRunner.start(settings: SoloTimingSettings.soloAutoloopSettings(wallController: soloWallCalibration)) { startRepSolo() }
     }
 
     private func startSoloLoop() {
-        startSoloSessionTimerIfNeeded()
-        guard effectiveUsesAutoLoop else { return }
-        guard hasCompletedPassTempoCalibration else { return }
-        guard !blockCoachDrillDuringSessionCountdown else { return }
-        guard !soloLoopRunner.isRunning else { return }
-        if case .blockComplete = engine.phase { return }
-        soloLoopRunner.start(settings: SoloTimingSettings.soloAutoloopSettings(wallController: soloWallCalibration)) { startRepSolo() }
+        onSoloCalibrationReadyIfNeeded()
     }
 
     private func onSoloWallCalibrationFinished(_: Double) {
@@ -837,12 +873,19 @@ struct OneTouchPassingDisplaySessionView: View {
             syncRepController(with: engine.phase)
         }
         if mode == .solo {
-            if !soloWallCalibration.isCalibrating {
-                tryStartSoloAutoloop()
-            }
+            onSoloCalibrationReadyIfNeeded()
         } else {
             tryStartSoloAutoloop()
         }
+    }
+
+    private func onSoloCalibrationReadyIfNeeded() {
+        SoloTimeBasedDisplaySessionSupport.onSoloCalibrationReady(
+            mode: mode,
+            hasCompletedCalibration: hasCompletedPassTempoCalibration,
+            isCalibrating: soloWallCalibration.isCalibrating,
+            timer: soloSessionTimer
+        )
     }
 
     private func registerSupabaseOneTouchPassingBlockSession() {
@@ -888,9 +931,7 @@ struct OneTouchPassingDisplaySessionView: View {
                 preloadBeep: { preloadBeepAssetsForInstantReveal() },
                 onInlineCalibrationFinished: onSoloWallCalibrationFinished
             )
-            if !soloWallCalibration.isCalibrating {
-                tryStartSoloAutoloop()
-            }
+            onSoloCalibrationReadyIfNeeded()
         } else {
             tryStartSoloAutoloop()
         }
@@ -962,19 +1003,37 @@ struct OneTouchPassingDisplaySessionView: View {
 
     private var soloFreeModeEndAction: (() -> Void)? {
         guard mode == .solo, SoloTimeBasedSession.config == .free else { return nil }
-        return { finishSoloTimeBasedSession() }
+        return { userInitiatedEndSoloSession() }
     }
 
-    private func startSoloSessionTimerIfNeeded() {
-        SoloTimeBasedDisplaySessionSupport.startTimerIfNeeded(mode: mode, timer: soloSessionTimer)
+    private func captureSoloSessionCompletionMetrics() {
+        soloTimedCompleteElapsed = soloSessionTimer.elapsedSeconds()
+        soloTimedCompleteReps = SoloTimeBasedDisplaySessionSupport.overlayRepCount(
+            engineLoggedRepCount: engine.repResults.count
+        )
+    }
+
+    private func freezeSoloSessionForCompletion() {
+        stopSoloAutoloop()
+        cancelSoloOtpStimulusAfterBeepWork()
+        soloWallCalibration.cancelPendingBeeps()
+        soloSessionTimer.stop()
+        captureSoloSessionCompletionMetrics()
+    }
+
+    private func userInitiatedEndSoloSession() {
+        guard mode == .solo, SoloTimeBasedSession.isActive, !showSoloTimedComplete, !isSoloSessionEnding else { return }
+        SoloSessionEndTransition.beginUserEnd(
+            setEnding: { isSoloSessionEnding = true },
+            freeze: { freezeSoloSessionForCompletion() },
+            presentOverlay: { showSoloTimedComplete = true },
+            clearEnding: { isSoloSessionEnding = false }
+        )
     }
 
     private func finishSoloTimeBasedSession() {
         guard mode == .solo, SoloTimeBasedSession.isActive, !showSoloTimedComplete else { return }
-        stopSoloAutoloop()
-        soloTimedCompleteElapsed = soloSessionTimer.elapsedSeconds()
-        soloTimedCompleteReps = SoloTimeBasedSession.sessionRepCount
-        soloSessionTimer.stop()
+        freezeSoloSessionForCompletion()
         showSoloTimedComplete = true
     }
 
@@ -1023,10 +1082,10 @@ struct OneTouchPassingDisplaySessionView: View {
             let focalDownshift = PartnerDisplayLayout.drillFocalCenterYOffset
             ZStack {
                 VStack(spacing: 10) {
-                    Text("X")
-                        .font(.system(size: 80, weight: .bold))
-                        .foregroundColor(.white)
-                        .shadow(radius: 5)
+                    SoloActionCenterMarkerView(
+                        focusPulseTrigger: soloActionIdleCue.focusPulseTrigger,
+                        isSessionEnding: isSoloSessionEnding
+                    )
                 }
                 .position(x: center.x, y: center.y + focalDownshift)
 
@@ -1047,6 +1106,7 @@ struct OneTouchPassingDisplaySessionView: View {
             }
             .frame(width: geo.size.width, height: geo.size.height)
         }
+        .soloSessionEndingDim(isActive: isSoloSessionEnding)
         .ignoresSafeArea()
     }
 
@@ -1281,12 +1341,10 @@ struct OneTouchPassingDisplaySessionView: View {
             return false
         }
         if mode == .solo {
-            return SoloUnifiedStimulusTiming.acceptsSoloPassInteraction(
-                at: passTime,
-                beepTime: soloRepBeepWallTime,
-                returnTime: soloWallCalibration.calibratedReturnTime,
-                activity: .oneTouchPassing
-            )
+            guard let beepTime = soloRepBeepWallTime else { return false }
+            // Wall-time tolerance is measured from the beep (see `playBeep`), not from `armedScanning`.
+            return SoloRepTiming.fromCalibration(soloWallCalibration.calibratedReturnTime)
+                .acceptsPass(at: passTime, beepTime: beepTime)
         }
         return true
     }
@@ -1296,6 +1354,9 @@ struct OneTouchPassingDisplaySessionView: View {
         switch engine.phase {
         case .cueVisible(let r, _), .cueRevealing(let r, _), .awaitingExitLog(let r):
             return r == repIndex
+        case .waitingForNextRep:
+            // Solo auto-exit runs after cue hide → `waitingForNextRep` (see `applySoloOneTouchAutoExitIfNeeded`).
+            return mode == .solo && !mode.requiresPhoneDisplayRelay
         default:
             return false
         }
@@ -1310,12 +1371,14 @@ struct OneTouchPassingDisplaySessionView: View {
     }
 
     private func cancelSoloOtpStimulusAfterBeepWork() {
-        soloStimulusAfterBeepToken = UUID()
+        soloRepTimingScheduler.cancelAll()
         soloRepBeepWallTime = nil
     }
 
     private func playBeep() {
         if mode == .solo {
+            // Solo timing anchor: engine finishes `armedScanning` (unified scan→beep delay) before this runs.
+            // `soloRepBeepWallTime` and SoloRepTimingScheduler count from the beep / awaiting-pass moment — not scan start.
             cancelSoloOtpStimulusAfterBeepWork()
             let beepWall = Date()
             soloRepBeepWallTime = beepWall
@@ -1323,30 +1386,30 @@ struct OneTouchPassingDisplaySessionView: View {
                 PBAFlowDebugLog.beep(repId: r, timestamp: beepWall)
             }
             sendBeepArmed(repIndex: engine.currentRepIndex)
-            let returnTime = max(0.05, soloWallCalibration.calibratedReturnTime)
-            let delay = SoloUnifiedStimulusTiming.stimulusDelayAfterBeepForSolo(returnTime: returnTime)
+            let timing = SoloRepTiming.fromCalibration(soloWallCalibration.calibratedReturnTime)
             let repAtBeep = engine.currentRepIndex
-            let token = soloStimulusAfterBeepToken
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                guard self.soloStimulusAfterBeepToken == token else { return }
-                if case .beepedAwaitingPass(let r) = self.engine.phase, r == repAtBeep {
-                    self.repController.openDecisionWindow()
+            soloRepTimingScheduler.scheduleRep(
+                timing: timing,
+                repIndex: repAtBeep,
+                onDecisionOpen: { rep in
+                    if case .beepedAwaitingPass(let r) = self.engine.phase, r == rep {
+                        self.repController.openDecisionWindow()
+                    }
+                },
+                onSyntheticPass: { rep in
+                    guard case .beepedAwaitingPass(let r) = self.engine.phase, r == rep else { return }
+                    guard self.otpAllowsPassTrigger(repIndex: rep) else { return }
+                    guard !self.repController.hasLoggedTap else { return }
+                    self.repController.registerTap()
+                    #if DEBUG
+                    let soloPass = Date()
+                    DecisionSpeedDebugLog.logSoloDisplayPassTrigger(activity: .oneTouchPassing, repIndex: rep, displayWallPassTS: soloPass)
+                    self.otpApplyPassTrigger(repIndex: rep, passTimestamp: soloPass)
+                    #else
+                    self.otpApplyPassTrigger(repIndex: rep, passTimestamp: Date())
+                    #endif
                 }
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + returnTime) {
-                guard self.soloStimulusAfterBeepToken == token else { return }
-                guard case .beepedAwaitingPass(let r) = self.engine.phase, r == repAtBeep else { return }
-                guard self.otpAllowsPassTrigger(repIndex: repAtBeep) else { return }
-                guard !self.repController.hasLoggedTap else { return }
-                self.repController.registerTap()
-                #if DEBUG
-                let soloPass = Date()
-                DecisionSpeedDebugLog.logSoloDisplayPassTrigger(activity: .oneTouchPassing, repIndex: repAtBeep, displayWallPassTS: soloPass)
-                self.otpApplyPassTrigger(repIndex: repAtBeep, passTimestamp: soloPass)
-                #else
-                self.otpApplyPassTrigger(repIndex: repAtBeep, passTimestamp: Date())
-                #endif
-            }
+            )
             DispatchQueue.main.async {
                 self.activateAudioSession()
                 self.preloadBeepAssetsForInstantReveal()

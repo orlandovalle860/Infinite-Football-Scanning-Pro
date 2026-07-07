@@ -45,7 +45,8 @@ final class DribbleOrPassEngine: ObservableObject {
     private let config: DribbleOrPassConfig
     private let trainingMode: TrainingMode
     private let playerId: UUID?
-    private let plan: [DribbleOrPassRepPlan]
+    private var plan: [DribbleOrPassRepPlan]
+    private var soloStimulusPicker = SoloStimulusAntiRepeatPicker<String>()
     private(set) var currentRepIndex: Int = 0
     private var passTriggeredAt: Date?
     /// First-touch can be logged before exit; keyed by repIndex.
@@ -116,6 +117,7 @@ final class DribbleOrPassEngine: ObservableObject {
             }
             return
         }
+        assignSoloStimulusIfNeeded(at: repIndex)
         currentRepIndex = repIndex
         passTriggeredAt = nil
         passTriggeredByRep[repIndex] = nil
@@ -294,6 +296,7 @@ final class DribbleOrPassEngine: ObservableObject {
     func restartBlockFromBeginning() {
         cancelTimers()
         cueTimingDebugVisibleAt = nil
+        soloStimulusPicker.reset()
         currentRepIndex = 0
         passTriggeredAt = nil
         passTriggeredByRep.removeAll()
@@ -691,6 +694,18 @@ final class DribbleOrPassEngine: ObservableObject {
     var currentPlan: DribbleOrPassRepPlan? {
         guard currentRepIndex >= 0, currentRepIndex < plan.count else { return nil }
         return plan[currentRepIndex]
+    }
+
+    private func assignSoloStimulusIfNeeded(at repIndex: Int) {
+        guard trainingMode == .solo else { return }
+        var candidates: [DribbleOrPassRepPlan] = []
+        candidates.reserveCapacity(8)
+        for _ in 0..<8 {
+            candidates.append(DribbleOrPassScenarioGenerator.generateRandomRep(repIndex: repIndex))
+        }
+        guard let picked = soloStimulusPicker.pick(from: candidates, key: \.soloStimulusFingerprint) else { return }
+        plan[repIndex] = picked
+        SoloStimulusDebugLog.log(repNumber: repIndex + 1, stimulus: picked.soloStimulusDebugLabel)
     }
 
     deinit { cancelTimers() }

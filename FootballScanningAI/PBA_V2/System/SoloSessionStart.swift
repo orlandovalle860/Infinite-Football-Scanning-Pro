@@ -22,10 +22,19 @@ enum SoloSessionStart {
         preloadBeep: @escaping () -> Void,
         onInlineCalibrationFinished: @escaping (Double) -> Void
     ) {
-        let boot = controller.prepareSoloLocalDisplay(
-            trainingMode: trainingMode,
-            nominalTravelSeconds: nominalWallTravelSeconds
-        )
+        let boot: SoloWallCalibrationController.SoloWallBoot
+        if SoloWallCalibrationLaunchIntent.consumeForceInlineCalibration() {
+            controller.forceStartInlineSoloWallCalibration(
+                nominalTravelSeconds: nominalWallTravelSeconds,
+                trainingMode: trainingMode
+            )
+            boot = .needsInlineThreePass
+        } else {
+            boot = controller.prepareSoloLocalDisplay(
+                trainingMode: trainingMode,
+                nominalTravelSeconds: nominalWallTravelSeconds
+            )
+        }
         switch boot {
         case .cachedTravelSeconds:
             setHasCompletedPassTempoCalibration(true)

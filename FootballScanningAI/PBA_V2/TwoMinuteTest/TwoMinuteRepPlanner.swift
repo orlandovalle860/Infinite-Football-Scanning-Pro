@@ -8,6 +8,11 @@
 import Foundation
 
 enum TwoMinuteRepPlanner {
+    /// Solo: random ball gate for this rep.
+    static func generateRandomRep(repIndex: Int) -> RepPlan {
+        RepPlan(repIndex: repIndex, ballGate: Gate.allCases.randomElement() ?? .up)
+    }
+
     /// When `repCount == 10`, uses the canonical Up 4 / Left 3 / Right 2 / Down 1 composition; otherwise a balanced gate sequence with no three identical gates in a row.
     static func generatePlan(forBlockSize repCount: Int) -> [RepPlan] {
         guard repCount > 0 else { return [] }

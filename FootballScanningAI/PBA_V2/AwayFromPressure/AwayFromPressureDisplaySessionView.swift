@@ -47,6 +47,14 @@ struct AwayFromPressureDisplaySessionView: View {
     @ObservedObject private var partnerRelaySession: PartnerRelayDisplaySession
     @StateObject private var soloLoopRunner = SoloLoopRunner()
     @State private var soloStimulusAfterBeepToken = UUID()
+    /// Solo: wall time when the current rep's beep fired; anchors pass tolerance window.
+    @State private var soloRepBeepWallTime: Date?
+    @State private var soloLifetimeRepDisplayCount = SoloLifetimeRepCounter.totalReps(for: .awayFromPressure)
+    @State private var soloLifetimeRecordedRepIndices = Set<Int>()
+    @StateObject private var soloSessionTimer = SoloSessionTimerController()
+    @State private var showSoloTimedComplete = false
+    @State private var soloTimedCompleteElapsed: TimeInterval = 0
+    @State private var soloTimedCompleteReps = 0
 
     private var sessionTransportMode: SessionTransportMode {
         PartnerTransportPolicy.transportMode(for: .awayFromPressure, trainingMode: mode)
@@ -57,7 +65,7 @@ struct AwayFromPressureDisplaySessionView: View {
         self.mode = mode
         self.settingsViewModel = settingsViewModel
         self.profileManager = profileManager
-        let repCount = TrainingPartnerConnectionCoordinator.shared.partnerBlockTotalReps(
+        let repCount = SoloTimeBasedSession.blockRepCount(
             activityId: ActivityKind.awayFromPressure.sessionActivityActivityId,
             soloFallback: 12,
             mode: mode
@@ -68,11 +76,15 @@ struct AwayFromPressureDisplaySessionView: View {
     }
 
     private var blockTotalReps: Int {
-        TrainingPartnerConnectionCoordinator.shared.partnerBlockTotalReps(
+        SoloTimeBasedSession.blockRepCount(
             activityId: ActivityKind.awayFromPressure.sessionActivityActivityId,
             soloFallback: 12,
             mode: mode
         )
+    }
+
+    private var effectiveUsesAutoLoop: Bool {
+        SoloTimeBasedDisplaySessionSupport.effectiveUsesAutoLoop(mode: mode)
     }
 
     private var showsBetweenRepPlayerText: Bool {
@@ -87,8 +99,14 @@ struct AwayFromPressureDisplaySessionView: View {
             }
             statusOverlay
                 .opacity(statusOverlayOpacity)
-            if !(mode == .solo && soloWallCalibration.isCalibrating), showsBetweenRepPlayerText {
+            if mode != .solo, showsBetweenRepPlayerText {
                 repCountOverlay
+            }
+            if mode == .solo, !soloWallCalibration.isCalibrating, soloSessionTimer.isVisible {
+                SoloSessionTimerCornerBadge(
+                    text: soloSessionTimer.displayText,
+                    onLongPressEnd: soloFreeModeEndAction
+                )
             }
             SoloWallCalibrationGetReadyOverlay(mode: mode, calibration: soloWallCalibration)
             if mode == .partner, showExitLogButtons {
@@ -111,7 +129,7 @@ struct AwayFromPressureDisplaySessionView: View {
                 preloadBeep: { preloadBeepAssetsForInstantReveal() },
                 onCompletedThreePass: onSoloWallCalibrationFinished
             ) { return }
-            if mode == .solo, !mode.usesAutoLoop {
+            if mode == .solo, !effectiveUsesAutoLoop {
                 handleWallSoloTrigger()
             }
         }
@@ -130,6 +148,17 @@ struct AwayFromPressureDisplaySessionView: View {
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
+        }
+        .navigationDestination(isPresented: $showSoloTimedComplete) {
+            SoloTimeBasedSessionCompleteView(
+                elapsedSeconds: soloTimedCompleteElapsed,
+                repCount: soloTimedCompleteReps,
+                onDone: {
+                    SoloTimeBasedSession.clear()
+                    showSoloTimedComplete = false
+                    router.popToRoot()
+                }
+            )
         }
         .onReceive(NotificationCenter.default.publisher(for: .twoMinuteMessageReceived).receive(on: RunLoop.main), perform: handleAwayFromPressureCoachRelayMessage)
         .onReceive(NotificationCenter.default.publisher(for: .partnerSoftReconnectRepRestart).receive(on: RunLoop.main)) { _ in
@@ -168,10 +197,22 @@ struct AwayFromPressureDisplaySessionView: View {
                     abs(CurrentSessionStore.shared.calibrationFactor(for: calId) - 1.0) > 0.001
                 DispatchQueue.main.async {
                     if mode == .solo {
-                        showSoloSummary = true
+                        if SoloTimeBasedSession.isActive {
+                            finishSoloTimeBasedSession()
+                        } else {
+                            showSoloSummary = true
+                            navigateToBlockSummary = true
+                        }
+                    } else {
+                        navigateToBlockSummary = true
                     }
-                    navigateToBlockSummary = true
                 }
+            }
+            if mode == .solo, SoloTimeBasedSession.isActive, soloSessionTimer.pendingEndAfterCurrentRep,
+               case .waitingForNextRep = newPhase {
+                finishSoloTimeBasedSession()
+            } else if case .waitingForNextRep = newPhase {
+                SoloTimeBasedDisplaySessionSupport.notifyQuickRepAdvanceIfNeeded(mode: mode, soloLoopRunner: soloLoopRunner)
             }
             syncRepController(with: newPhase)
             if case .armedScanning = newPhase {
@@ -182,10 +223,10 @@ struct AwayFromPressureDisplaySessionView: View {
                 // Next rep index already set when user tapped exit direction
             }
             if mode == .solo, !mode.requiresPhoneDisplayRelay,
-               case .awaitingExitLog(let ri, let pressure) = newPhase,
-               case .markerVisible(let oldR, let oldP, _) = oldPhase, oldR == ri, oldP == pressure {
+               case .waitingForNextRep = newPhase,
+               case .markerVisible(let oldR, let oldP, _) = oldPhase {
                 DispatchQueue.main.async {
-                    self.applySoloAwayFromPressureAutoExitIfNeeded(repIndex: ri, pressureGate: pressure)
+                    self.applySoloAwayFromPressureAutoExitIfNeeded(repIndex: oldR, pressureGate: oldP)
                 }
             }
         }
@@ -193,6 +234,9 @@ struct AwayFromPressureDisplaySessionView: View {
             tryStartSoloAutoloop()
         }
         .onAppear {
+            if mode == .solo {
+                soloLifetimeRepDisplayCount = SoloLifetimeRepCounter.totalReps(for: .awayFromPressure)
+            }
             let coordinator = TrainingPartnerConnectionCoordinator.shared
             hasCompletedPassTempoCalibration = false
             if mode.requiresPhoneDisplayRelay {
@@ -257,7 +301,7 @@ struct AwayFromPressureDisplaySessionView: View {
             preloadBeepAssetsForInstantReveal()
             AnalyticsManager.shared.track(.trainingSessionStarted, playerId: playerStore.selectedPlayerId)
             registerSupabaseAwayFromPressureBlockSession()
-            if mode.usesAutoLoop {
+            if effectiveUsesAutoLoop {
                 syncRepController(with: engine.phase)
             }
             if mode == .solo {
@@ -305,7 +349,7 @@ struct AwayFromPressureDisplaySessionView: View {
             waitForPartnerReady: mode.requiresPhoneDisplayRelay,
             partnerReady: partnerReadyForCountdown,
             suppressCoachMessagesDuringCountdown: $blockCoachDrillDuringSessionCountdown,
-            isEnabled: !mode.usesAutoLoop
+            isEnabled: !effectiveUsesAutoLoop
         )
         .onReceive(NotificationCenter.default.publisher(for: .relayForegroundReconnectCompleted)) { _ in
             guard mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket else { return }
@@ -508,18 +552,18 @@ struct AwayFromPressureDisplaySessionView: View {
     }
 
     private func startSoloLoop() {
+        startSoloSessionTimerIfNeeded()
         tryStartSoloAutoloop()
     }
 
     private func tryStartSoloAutoloop() {
-        guard mode.usesAutoLoop else { return }
+        guard effectiveUsesAutoLoop else { return }
         guard !soloWallCalibration.isCalibrating else { return }
         guard hasCompletedPassTempoCalibration else { return }
         guard !blockCoachDrillDuringSessionCountdown else { return }
         guard !soloLoopRunner.isRunning else { return }
         if case .blockComplete = engine.phase { return }
-        SoloTimingSettings.applySoloAutoloopBallReturnToSessionStore()
-        soloLoopRunner.start(settings: SoloTimingSettings.autoloopSettingsFromSessionStore()) { startRepSolo() }
+        soloLoopRunner.start(settings: SoloTimingSettings.soloAutoloopSettings(wallController: soloWallCalibration)) { startRepSolo() }
     }
 
     private func stopSoloAutoloop() {
@@ -718,7 +762,8 @@ struct AwayFromPressureDisplaySessionView: View {
     /// Solo: partner-only exit arrows — auto-log the correct “away” direction (opposite of pressure).
     private func applySoloAwayFromPressureAutoExitIfNeeded(repIndex: Int, pressureGate: Gate) {
         guard mode == .solo, !mode.requiresPhoneDisplayRelay else { return }
-        guard case .awaitingExitLog(let r, let pg) = engine.phase, r == repIndex, pg == pressureGate else { return }
+        guard case .waitingForNextRep = engine.phase else { return }
+        guard engine.currentRepIndex == repIndex else { return }
         logExit(repIndex: repIndex, gate: pressureGate.opposite)
     }
 
@@ -744,6 +789,7 @@ struct AwayFromPressureDisplaySessionView: View {
     }
 
     private func saveDecisionForRep(log: AwayFromPressureRepLog) {
+        recordSoloLifetimeRepIfNeeded(repIndex: log.repIndex)
         guard let sessionId = CurrentSessionStore.shared.sessionId,
               let sec = log.decisionTimeSeconds else { return }
         if mode.requiresPhoneDisplayRelay, log.repIndex < 3, let pass = log.passTriggeredAt {
@@ -770,6 +816,33 @@ struct AwayFromPressureDisplaySessionView: View {
             createdAt: log.exitLoggedAt
         )
         SupabaseDecisionService.shared.saveDecision(decision)
+    }
+
+    private func recordSoloLifetimeRepIfNeeded(repIndex: Int) {
+        guard mode == .solo else { return }
+        guard soloLifetimeRecordedRepIndices.insert(repIndex).inserted else { return }
+        if SoloTimeBasedSession.isActive {
+            SoloTimeBasedSession.recordRepCompleted()
+        }
+        soloLifetimeRepDisplayCount = SoloLifetimeRepCounter.recordRep(for: .awayFromPressure)
+    }
+
+    private var soloFreeModeEndAction: (() -> Void)? {
+        guard mode == .solo, SoloTimeBasedSession.config == .free else { return nil }
+        return { finishSoloTimeBasedSession() }
+    }
+
+    private func startSoloSessionTimerIfNeeded() {
+        SoloTimeBasedDisplaySessionSupport.startTimerIfNeeded(mode: mode, timer: soloSessionTimer)
+    }
+
+    private func finishSoloTimeBasedSession() {
+        guard mode == .solo, SoloTimeBasedSession.isActive, !showSoloTimedComplete else { return }
+        soloTimedCompleteElapsed = soloSessionTimer.elapsedSeconds()
+        soloTimedCompleteReps = SoloTimeBasedSession.sessionRepCount
+        soloSessionTimer.stop()
+        stopSoloAutoloop()
+        showSoloTimedComplete = true
     }
 
     private var isMarkerVisible: Bool {
@@ -1083,16 +1156,26 @@ struct AwayFromPressureDisplaySessionView: View {
         _ = tryCommitPartnerCoachNextRep(repIndex: idx)
     }
 
-    private func afpAllowsPassTrigger(repIndex: Int) -> Bool {
+    private func afpAllowsPassTrigger(repIndex: Int, at passTime: Date = Date()) -> Bool {
         guard repIndex == engine.currentRepIndex else { return false }
         switch engine.phase {
         case .beepedAwaitingPass(let r, _):
-            return r == repIndex
+            guard r == repIndex else { return false }
         case .armedScanning(let r, _, _):
-            return r == repIndex
+            guard r == repIndex else { return false }
+            if mode == .solo { return false }
         default:
             return false
         }
+        if mode == .solo {
+            return SoloUnifiedStimulusTiming.acceptsSoloPassInteraction(
+                at: passTime,
+                beepTime: soloRepBeepWallTime,
+                returnTime: soloWallCalibration.calibratedReturnTime,
+                activity: .awayFromPressure
+            )
+        }
+        return true
     }
 
     private func afpAllowsExitLogged(repIndex: Int) -> Bool {
@@ -1119,18 +1202,20 @@ struct AwayFromPressureDisplaySessionView: View {
 
     private func cancelSoloAfpStimulusAfterBeepWork() {
         soloStimulusAfterBeepToken = UUID()
+        soloRepBeepWallTime = nil
     }
 
     private func playBeep() {
         if mode == .solo {
             cancelSoloAfpStimulusAfterBeepWork()
+            let beepWall = Date()
+            soloRepBeepWallTime = beepWall
             if case .beepedAwaitingPass(let r, _) = engine.phase {
-                PBAFlowDebugLog.beep(repId: r, timestamp: Date())
+                PBAFlowDebugLog.beep(repId: r, timestamp: beepWall)
             }
             sendBeepArmed(repIndex: engine.currentRepIndex)
-            let delay = SoloUnifiedStimulusTiming.stimulusDelayAfterBeepForSolo(
-                returnTime: soloWallCalibration.calibratedReturnTime
-            )
+            let returnTime = max(0.05, soloWallCalibration.calibratedReturnTime)
+            let delay = SoloUnifiedStimulusTiming.stimulusDelayAfterBeepForSolo(returnTime: returnTime)
             let repAtBeep = engine.currentRepIndex
             let token = soloStimulusAfterBeepToken
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
@@ -1138,6 +1223,20 @@ struct AwayFromPressureDisplaySessionView: View {
                 if case .beepedAwaitingPass(let r, _) = self.engine.phase, r == repAtBeep {
                     self.repController.openDecisionWindow()
                 }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + returnTime) {
+                guard self.soloStimulusAfterBeepToken == token else { return }
+                guard case .beepedAwaitingPass(let r, _) = self.engine.phase, r == repAtBeep else { return }
+                guard self.afpAllowsPassTrigger(repIndex: repAtBeep) else { return }
+                guard !self.repController.hasLoggedTap else { return }
+                self.repController.registerTap()
+                #if DEBUG
+                let soloPass = Date()
+                DecisionSpeedDebugLog.logSoloDisplayPassTrigger(activity: .awayFromPressure, repIndex: repAtBeep, displayWallPassTS: soloPass)
+                self.afpApplyPassTrigger(repIndex: repAtBeep, passTimestamp: soloPass)
+                #else
+                self.afpApplyPassTrigger(repIndex: repAtBeep, passTimestamp: Date())
+                #endif
             }
             DispatchQueue.main.async {
                 self.activateAudioSession()

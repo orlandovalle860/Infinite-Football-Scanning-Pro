@@ -57,7 +57,9 @@ extension AppRoute {
              .trainingModeSelection:
             return true
         case .coachRemote, .partnerPairing, .twoMinuteCoachRemote, .dribbleOrPassCoachRemote, .awayFromPressureCoachRemote, .oneTouchPassingCoachRemote,
-             .curriculum, .progress, .profileInsights, .achievements, .warmupHub, .warmup, .debugMenu:
+             .curriculum, .progress, .profileInsights, .achievements, .warmupHub, .warmup, .soloActivitySelection, .debugMenu:
+            return false
+        case .soloSessionDuration:
             return false
         }
     }
@@ -68,16 +70,16 @@ extension AppRouter {
     @MainActor
     func pushRespectingCoachRemotePadGate(_ route: AppRoute, coachRemotePrompt: CoachRemoteRequiredPromptController) {
         if CoachRemoteSessionStartGate.shouldBlock(route) {
-            if CoachRemoteSessionStartGate.iPadDisplayCoachRelayLinkIsLive() {
-                return
-            }
             let mode = PBASessionFlowPolicy.lastSelectedTrainingMode()
             #if DEBUG
             print("NAV MODE (pad gate):", mode)
             #endif
-            // Solo (and non–Coach Remote modes): open local training — never the join-code sheet.
+            // Solo / Wall: local iPad training — never blocked by coach relay presence or join-code sheet.
             if !mode.needsCoachRemoteJoinCodeFlow {
                 push(route)
+                return
+            }
+            if CoachRemoteSessionStartGate.iPadDisplayCoachRelayLinkIsLive() {
                 return
             }
             coachRemotePrompt.present(pendingRoute: nil)

@@ -1276,6 +1276,13 @@ struct MainAppView: View {
             AchievementsView(profileManager: profileManager)
                 .environmentObject(playerStore)
                 .environmentObject(router)
+        case .soloActivitySelection:
+            SoloActivitySelectionView()
+                .environmentObject(router)
+                .environmentObject(coachRemoteRequiredPrompt)
+        case .soloSessionDuration(let activity):
+            SoloSessionDurationSelectionView(activity: activity)
+                .environmentObject(router)
         case .warmupHub:
             WarmupHubView()
                 .environmentObject(router)
@@ -3749,13 +3756,7 @@ struct IntroView: View {
         guard !isNavigatingToTraining else { return }
         isNavigatingToTraining = true
         PBASessionFlowPolicy.persistTrainingMode(.solo)
-        let route: AppRoute
-        if needsBaselineAssessment {
-            route = PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest)
-        } else {
-            route = routeForTrainNowActivity(continueTrainingCardActivity)
-        }
-        router.pushRespectingCoachRemotePadGate(route, coachRemotePrompt: coachRemoteRequiredPrompt)
+        router.push(.soloActivitySelection)
         isNavigatingToTraining = false
     }
 

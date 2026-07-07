@@ -197,4 +197,13 @@ struct DribbleOrPassRepPlan {
         case .right: return right
         }
     }
+
+    /// Solo anti-repeat fingerprint (full gate layout + correct answer).
+    var soloStimulusFingerprint: String {
+        "\(up)|\(down)|\(left)|\(right)|\(expectedCorrectGate.rawValue)"
+    }
+
+    var soloStimulusDebugLabel: String {
+        "correct=\(expectedCorrectGate.rawValue) up=\(up) down=\(down) left=\(left) right=\(right)"
+    }
 }

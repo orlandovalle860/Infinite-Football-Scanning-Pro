@@ -30,7 +30,8 @@ final class AwayFromPressureEngine: ObservableObject {
 
     private let config: AwayFromPressureConfig
     private let trainingMode: TrainingMode
-    private let plan: [AwayFromPressureRepPlan]
+    private var plan: [AwayFromPressureRepPlan]
+    private var soloStimulusPicker = SoloStimulusAntiRepeatPicker<String>()
     private(set) var currentRepIndex: Int = 0
     private var passTriggeredAt: Date?
     private var startedAtForCurrentRep: Date?
@@ -88,6 +89,8 @@ final class AwayFromPressureEngine: ObservableObject {
             }
             return
         }
+
+        assignSoloStimulusIfNeeded(at: repIndex)
 
         let p = plan[repIndex]
         passTriggeredAt = nil
@@ -441,6 +444,7 @@ final class AwayFromPressureEngine: ObservableObject {
     func restartBlockFromBeginning() {
         cancelTimers()
         cueTimingDebugVisibleAt = nil
+        soloStimulusPicker.reset()
         currentRepIndex = 0
         passTriggeredAt = nil
         startedAtForCurrentRep = nil
@@ -609,6 +613,18 @@ final class AwayFromPressureEngine: ObservableObject {
         case .medium: return 0.85
         case .slow: return 0.4
         }
+    }
+
+    private func assignSoloStimulusIfNeeded(at repIndex: Int) {
+        guard trainingMode == .solo else { return }
+        var candidates: [AwayFromPressureRepPlan] = []
+        candidates.reserveCapacity(8)
+        for _ in 0..<8 {
+            candidates.append(AwayFromPressureRepPlanner.generateRandomRep(repIndex: repIndex))
+        }
+        guard let picked = soloStimulusPicker.pick(from: candidates, key: \.soloStimulusFingerprint) else { return }
+        plan[repIndex] = picked
+        SoloStimulusDebugLog.log(repNumber: repIndex + 1, stimulus: picked.soloStimulusDebugLabel)
     }
 }
 

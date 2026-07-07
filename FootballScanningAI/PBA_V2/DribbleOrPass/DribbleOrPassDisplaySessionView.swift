@@ -49,6 +49,14 @@ struct DribbleOrPassDisplaySessionView: View {
     @ObservedObject private var partnerRelaySession: PartnerRelayDisplaySession
     @StateObject private var soloLoopRunner = SoloLoopRunner()
     @State private var soloStimulusAfterBeepToken = UUID()
+    /// Solo: wall time when the current rep's beep fired; anchors pass tolerance window.
+    @State private var soloRepBeepWallTime: Date?
+    @State private var soloLifetimeRepDisplayCount = SoloLifetimeRepCounter.totalReps(for: .dribbleOrPass)
+    @State private var soloLifetimeRecordedRepIndices = Set<Int>()
+    @StateObject private var soloSessionTimer = SoloSessionTimerController()
+    @State private var showSoloTimedComplete = false
+    @State private var soloTimedCompleteElapsed: TimeInterval = 0
+    @State private var soloTimedCompleteReps = 0
     @State private var isSoloRunning = false
 
 
@@ -61,7 +69,7 @@ struct DribbleOrPassDisplaySessionView: View {
         self.mode = mode
         self.settingsViewModel = settingsViewModel
         self.profileManager = profileManager
-        let repCount = TrainingPartnerConnectionCoordinator.shared.partnerBlockTotalReps(
+        let repCount = SoloTimeBasedSession.blockRepCount(
             activityId: ActivityKind.dribbleOrPass.sessionActivityActivityId,
             soloFallback: 12,
             mode: mode
@@ -77,11 +85,15 @@ struct DribbleOrPassDisplaySessionView: View {
     }
 
     private var blockTotalReps: Int {
-        TrainingPartnerConnectionCoordinator.shared.partnerBlockTotalReps(
+        SoloTimeBasedSession.blockRepCount(
             activityId: ActivityKind.dribbleOrPass.sessionActivityActivityId,
             soloFallback: 12,
             mode: mode
         )
+    }
+
+    private var effectiveUsesAutoLoop: Bool {
+        SoloTimeBasedDisplaySessionSupport.effectiveUsesAutoLoop(mode: mode)
     }
 
     private var showsBetweenRepPlayerText: Bool {
@@ -96,8 +108,14 @@ struct DribbleOrPassDisplaySessionView: View {
             }
             statusOverlay
                 .opacity(statusOverlayOpacity)
-            if !(mode == .solo && soloWallCalibration.isCalibrating), showsBetweenRepPlayerText {
+            if mode != .solo, showsBetweenRepPlayerText {
                 repCountOverlay
+            }
+            if mode == .solo, !soloWallCalibration.isCalibrating, soloSessionTimer.isVisible {
+                SoloSessionTimerCornerBadge(
+                    text: soloSessionTimer.displayText,
+                    onLongPressEnd: soloFreeModeEndAction
+                )
             }
             SoloWallCalibrationGetReadyOverlay(mode: mode, calibration: soloWallCalibration)
             if mode == .partner, showExitLogButtons, let repIndex = repIndexForExit {
@@ -121,7 +139,7 @@ struct DribbleOrPassDisplaySessionView: View {
                 preloadBeep: { preloadBeepAssetsForInstantReveal() },
                 onCompletedThreePass: onSoloWallCalibrationFinished
             ) { return }
-            if mode == .solo, !mode.usesAutoLoop {
+            if mode == .solo, !effectiveUsesAutoLoop {
                 handleWallSoloTrigger()
             }
         }
@@ -142,6 +160,17 @@ struct DribbleOrPassDisplaySessionView: View {
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
+        }
+        .navigationDestination(isPresented: $showSoloTimedComplete) {
+            SoloTimeBasedSessionCompleteView(
+                elapsedSeconds: soloTimedCompleteElapsed,
+                repCount: soloTimedCompleteReps,
+                onDone: {
+                    SoloTimeBasedSession.clear()
+                    showSoloTimedComplete = false
+                    router.popToRoot()
+                }
+            )
         }
         .onReceive(NotificationCenter.default.publisher(for: .twoMinuteMessageReceived).receive(on: RunLoop.main), perform: handleDribbleOrPassCoachRelayMessage)
         .onReceive(NotificationCenter.default.publisher(for: .partnerSoftReconnectRepRestart).receive(on: RunLoop.main)) { _ in
@@ -181,10 +210,22 @@ struct DribbleOrPassDisplaySessionView: View {
                     abs(CurrentSessionStore.shared.calibrationFactor(for: calId) - 1.0) > 0.001
                 DispatchQueue.main.async {
                     if mode == .solo {
-                        showSoloSummary = true
+                        if SoloTimeBasedSession.isActive {
+                            finishSoloTimeBasedSession()
+                        } else {
+                            showSoloSummary = true
+                            navigateToBlockSummary = true
+                        }
+                    } else {
+                        navigateToBlockSummary = true
                     }
-                    navigateToBlockSummary = true
                 }
+            }
+            if mode == .solo, SoloTimeBasedSession.isActive, soloSessionTimer.pendingEndAfterCurrentRep,
+               case .waitingForNextRep = newPhase {
+                finishSoloTimeBasedSession()
+            } else if case .waitingForNextRep = newPhase {
+                SoloTimeBasedDisplaySessionSupport.notifyQuickRepAdvanceIfNeeded(mode: mode, soloLoopRunner: soloLoopRunner)
             }
             syncRepController(with: newPhase)
             if case .armedScanning = newPhase {
@@ -192,10 +233,10 @@ struct DribbleOrPassDisplaySessionView: View {
             }
             if case .beepedAwaitingPass = newPhase { playBeep() }
             if mode == .solo, !mode.requiresPhoneDisplayRelay,
-               case .awaitingExitLog(let ri) = newPhase,
-               case .cueVisible(let oldR, _) = oldPhase, oldR == ri {
+               case .waitingForNextRep = newPhase,
+               case .cueVisible(let oldR, _) = oldPhase {
                 DispatchQueue.main.async {
-                    self.applySoloDribbleOrPassAutoExitIfNeeded(repIndex: ri)
+                    self.applySoloDribbleOrPassAutoExitIfNeeded(repIndex: oldR)
                 }
             }
         }
@@ -263,11 +304,14 @@ struct DribbleOrPassDisplaySessionView: View {
             }
             let pid = playerStore.selectedPlayerId ?? profileManager.currentProfile?.id
             wedgeStyle = WedgeDifficultyEngine.currentStyle(playerId: pid)
+            if mode == .solo {
+                soloLifetimeRepDisplayCount = SoloLifetimeRepCounter.totalReps(for: .dribbleOrPass)
+            }
             activateAudioSession()
             preloadBeepAssetsForInstantReveal()
             AnalyticsManager.shared.track(.trainingSessionStarted, playerId: playerStore.selectedPlayerId)
             registerSupabaseDribbleOrPassBlockSession()
-            if mode.usesAutoLoop {
+            if effectiveUsesAutoLoop {
                 syncRepController(with: engine.phase)
                 isSoloRunning = true
                 if !soloWallCalibration.isCalibrating {
@@ -353,7 +397,7 @@ struct DribbleOrPassDisplaySessionView: View {
             waitForPartnerReady: mode.requiresPhoneDisplayRelay,
             partnerReady: partnerReadyForCountdown,
             suppressCoachMessagesDuringCountdown: $blockCoachDrillDuringSessionCountdown,
-            isEnabled: !mode.usesAutoLoop
+            isEnabled: !effectiveUsesAutoLoop
         )
         .onReceive(NotificationCenter.default.publisher(for: .relayForegroundReconnectCompleted)) { _ in
             guard mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket else { return }
@@ -672,16 +716,26 @@ struct DribbleOrPassDisplaySessionView: View {
         _ = tryCommitPartnerCoachNextRep(repIndex: idx)
     }
 
-    private func dopAllowsPassTrigger(repIndex: Int) -> Bool {
+    private func dopAllowsPassTrigger(repIndex: Int, at passTime: Date = Date()) -> Bool {
         guard repIndex == engine.currentRepIndex else { return false }
         switch engine.phase {
         case .beepedAwaitingPass(let r):
-            return r == repIndex
+            guard r == repIndex else { return false }
         case .armedScanning(let r, _):
-            return r == repIndex
+            guard r == repIndex else { return false }
+            if mode == .solo { return false }
         default:
             return false
         }
+        if mode == .solo {
+            return SoloUnifiedStimulusTiming.acceptsSoloPassInteraction(
+                at: passTime,
+                beepTime: soloRepBeepWallTime,
+                returnTime: soloWallCalibration.calibratedReturnTime,
+                activity: .dribbleOrPass
+            )
+        }
+        return true
     }
 
     private func dopAllowsExitLogged(repIndex: Int) -> Bool {
@@ -780,30 +834,30 @@ struct DribbleOrPassDisplaySessionView: View {
         }
     }
 
-    /// Replaces manual wall taps when `mode.usesAutoLoop` — same ``handleWallSoloTrigger`` path; beep and cues still come from `engine` phase changes.
+    /// Replaces manual wall taps when `effectiveUsesAutoLoop` — same ``handleWallSoloTrigger`` path; beep and cues still come from `engine` phase changes.
     private func startRepSolo() {
         guard isSoloRunning else { return }
         handleWallSoloTrigger()
     }
 
     private func startSoloLoop() {
+        startSoloSessionTimerIfNeeded()
         runNextSoloRep()
     }
 
     private func runNextSoloRep() {
-        guard isSoloRunning, mode.usesAutoLoop else { return }
+        guard isSoloRunning, effectiveUsesAutoLoop else { return }
         tryStartSoloAutoloop()
     }
 
     private func tryStartSoloAutoloop() {
-        guard mode.usesAutoLoop else { return }
+        guard effectiveUsesAutoLoop else { return }
         guard !soloWallCalibration.isCalibrating else { return }
         guard hasCompletedPassTempoCalibration else { return }
         guard !blockCoachDrillDuringSessionCountdown else { return }
         guard !soloLoopRunner.isRunning else { return }
         if case .blockComplete = engine.phase { return }
-        SoloTimingSettings.applySoloAutoloopBallReturnToSessionStore()
-        soloLoopRunner.start(settings: SoloTimingSettings.autoloopSettingsFromSessionStore()) { startRepSolo() }
+        soloLoopRunner.start(settings: SoloTimingSettings.soloAutoloopSettings(wallController: soloWallCalibration)) { startRepSolo() }
     }
 
     private func stopSoloAutoloop() {
@@ -967,7 +1021,8 @@ struct DribbleOrPassDisplaySessionView: View {
     /// Solo: no partner-only exit buttons — still complete the rep so the block can advance (see One-Touch solo autoloop).
     private func applySoloDribbleOrPassAutoExitIfNeeded(repIndex: Int) {
         guard mode == .solo, !mode.requiresPhoneDisplayRelay else { return }
-        guard case .awaitingExitLog(let r) = engine.phase, r == repIndex else { return }
+        guard case .waitingForNextRep = engine.phase else { return }
+        guard engine.currentRepIndex == repIndex else { return }
         guard let plan = engine.currentPlan else { return }
         logExit(repIndex: repIndex, gate: plan.expectedCorrectGate)
     }
@@ -1037,7 +1092,7 @@ struct DribbleOrPassDisplaySessionView: View {
                 onInlineCalibrationFinished: onSoloWallCalibrationFinished
             )
         }
-        if mode.usesAutoLoop {
+        if effectiveUsesAutoLoop {
             isSoloRunning = true
             if !soloWallCalibration.isCalibrating {
                 startSoloLoop()
@@ -1067,6 +1122,7 @@ struct DribbleOrPassDisplaySessionView: View {
     }
 
     private func saveDecisionForRep(result: DribbleOrPassRepResult) {
+        recordSoloLifetimeRepIfNeeded(repIndex: result.repIndex)
         guard let sessionId = CurrentSessionStore.shared.sessionId else { return }
         if mode.requiresPhoneDisplayRelay, result.repIndex < 3 {
             let updated = PartnerPassTempoCalibrationStore.updateRollingAverageTravelTime(
@@ -1097,6 +1153,36 @@ struct DribbleOrPassDisplaySessionView: View {
             createdAt: Date()
         )
         SupabaseDecisionService.shared.saveDecision(decision)
+    }
+
+    private func recordSoloLifetimeRepIfNeeded(repIndex: Int) {
+        guard mode == .solo else { return }
+        guard soloLifetimeRecordedRepIndices.insert(repIndex).inserted else { return }
+        if SoloTimeBasedSession.isActive {
+            SoloTimeBasedSession.recordRepCompleted()
+        }
+        soloLifetimeRepDisplayCount = SoloLifetimeRepCounter.recordRep(for: .dribbleOrPass)
+    }
+
+    private var soloFreeModeEndAction: (() -> Void)? {
+        guard mode == .solo, SoloTimeBasedSession.config == .free else { return nil }
+        return { finishSoloTimeBasedSession() }
+    }
+
+    private func startSoloSessionTimerIfNeeded() {
+        guard mode == .solo, SoloTimeBasedSession.isActive, let config = SoloTimeBasedSession.config else { return }
+        guard !soloSessionTimer.isVisible else { return }
+        soloSessionTimer.start(choice: config)
+    }
+
+    private func finishSoloTimeBasedSession() {
+        guard mode == .solo, SoloTimeBasedSession.isActive, !showSoloTimedComplete else { return }
+        isSoloRunning = false
+        stopSoloAutoloop()
+        soloTimedCompleteElapsed = soloSessionTimer.elapsedSeconds()
+        soloTimedCompleteReps = SoloTimeBasedSession.sessionRepCount
+        soloSessionTimer.stop()
+        showSoloTimedComplete = true
     }
 
     private var hasGatesVisible: Bool {
@@ -1199,18 +1285,20 @@ struct DribbleOrPassDisplaySessionView: View {
 
     private func cancelSoloDopStimulusAfterBeepWork() {
         soloStimulusAfterBeepToken = UUID()
+        soloRepBeepWallTime = nil
     }
 
     private func playBeep() {
         if mode == .solo {
             cancelSoloDopStimulusAfterBeepWork()
+            let beepWall = Date()
+            soloRepBeepWallTime = beepWall
             if case .beepedAwaitingPass(let r) = engine.phase {
-                PBAFlowDebugLog.beep(repId: r, timestamp: Date())
+                PBAFlowDebugLog.beep(repId: r, timestamp: beepWall)
             }
             sendBeepArmed(repIndex: engine.currentRepIndex)
-            let delay = SoloUnifiedStimulusTiming.stimulusDelayAfterBeepForSolo(
-                returnTime: soloWallCalibration.calibratedReturnTime
-            )
+            let returnTime = max(0.05, soloWallCalibration.calibratedReturnTime)
+            let delay = SoloUnifiedStimulusTiming.stimulusDelayAfterBeepForSolo(returnTime: returnTime)
             let repAtBeep = engine.currentRepIndex
             let token = soloStimulusAfterBeepToken
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
@@ -1218,6 +1306,20 @@ struct DribbleOrPassDisplaySessionView: View {
                 if case .beepedAwaitingPass(let r) = self.engine.phase, r == repAtBeep {
                     self.repController.openDecisionWindow()
                 }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + returnTime) {
+                guard self.soloStimulusAfterBeepToken == token else { return }
+                guard case .beepedAwaitingPass(let r) = self.engine.phase, r == repAtBeep else { return }
+                guard self.dopAllowsPassTrigger(repIndex: repAtBeep) else { return }
+                guard !self.repController.hasLoggedTap else { return }
+                self.repController.registerTap()
+                #if DEBUG
+                let soloPass = Date()
+                DecisionSpeedDebugLog.logSoloDisplayPassTrigger(activity: .dribbleOrPass, repIndex: repAtBeep, displayWallPassTS: soloPass)
+                self.dopApplyPassTrigger(repIndex: repAtBeep, passTimestamp: soloPass)
+                #else
+                self.dopApplyPassTrigger(repIndex: repAtBeep, passTimestamp: Date())
+                #endif
             }
             DispatchQueue.main.async {
                 self.activateAudioSession()

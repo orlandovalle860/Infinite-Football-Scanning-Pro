@@ -2,7 +2,7 @@
 //  OneTouchPassingConfig.swift
 //  FootballScanningAI
 //
-//  PBA V2 — Activity 4: Difficulty presets only (no sliders). CHECK delay uses unified scan timing; reveal style / cue duration vary by difficulty.
+//  PBA V2 — Activity 4: Difficulty presets only (no sliders). Scan→beep uses unified timing; reveal style / cue duration vary by difficulty.
 //
 
 import Foundation
@@ -19,14 +19,14 @@ struct OneTouchPassingConfig {
     let revealStyle: OneTouchRevealStyle
     let revealSpacingSeconds: Double
     let cueVisibleSeconds: Double
-    /// Curriculum loop (1...3); for logging only — does **not** scale scan→CHECK delay.
+    /// Curriculum loop (1...3); for logging only — does **not** scale scan→beep delay.
     let curriculumLoopLevel: Int
 
     static func defaultConfig(for difficulty: TestDifficulty) -> OneTouchPassingConfig {
         defaultConfig(for: difficulty, loopLevel: 1)
     }
 
-    /// Loop scaling applies to reveal style / cue duration / spacing — **not** scan→CHECK timing.
+    /// Loop scaling applies to reveal style / cue duration / spacing — **not** scan→beep timing.
     static func defaultConfig(for difficulty: TestDifficulty, loopLevel: Int) -> OneTouchPassingConfig {
         let base: OneTouchPassingConfig
         switch difficulty {

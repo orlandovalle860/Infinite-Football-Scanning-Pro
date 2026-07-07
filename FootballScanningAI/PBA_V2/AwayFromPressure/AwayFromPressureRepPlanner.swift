@@ -10,9 +10,17 @@ import Foundation
 struct AwayFromPressureRepPlan {
     let repIndex: Int
     let pressureGate: Gate
+
+    var soloStimulusFingerprint: String { pressureGate.rawValue }
+    var soloStimulusDebugLabel: String { "pressure=\(pressureGate.rawValue)" }
 }
 
 enum AwayFromPressureRepPlanner {
+    /// Solo: random pressure gate for this rep.
+    static func generateRandomRep(repIndex: Int) -> AwayFromPressureRepPlan {
+        AwayFromPressureRepPlan(repIndex: repIndex, pressureGate: Gate.allCases.randomElement() ?? .up)
+    }
+
     static func generatePlan(forBlockSize repCount: Int) -> [AwayFromPressureRepPlan] {
         let full = generatePlan()
         guard repCount > 0 else { return [] }

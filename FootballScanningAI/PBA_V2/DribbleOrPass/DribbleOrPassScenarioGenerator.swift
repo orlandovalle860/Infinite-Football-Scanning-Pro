@@ -8,6 +8,19 @@
 import Foundation
 
 enum DribbleOrPassScenarioGenerator {
+    /// Solo: one fresh scenario archetype per rep (gate contents randomized within archetype).
+    static func generateRandomRep(repIndex: Int) -> DribbleOrPassRepPlan {
+        let builders: [() -> DribbleOrPassRepPlan] = [
+            { forwardDribble(repIndex: repIndex) },
+            { forwardPass(repIndex: repIndex) },
+            { lateralPassLeft(repIndex: repIndex) },
+            { lateralPassRight(repIndex: repIndex) },
+            { lateralDribbleLeft(repIndex: repIndex) },
+            { lateralDribbleRight(repIndex: repIndex) }
+        ]
+        return builders.randomElement()!()
+    }
+
     static func generatePlan() -> [DribbleOrPassRepPlan] {
         var scenarios: [DribbleOrPassRepPlan] = []
 

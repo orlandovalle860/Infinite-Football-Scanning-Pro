@@ -27,7 +27,9 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
     @Published private(set) var repDecisions: [RepDecision] = []
 
     private let config: TwoMinuteTestConfig
-    private let plan: [RepPlan]
+    private let trainingMode: TrainingMode
+    private var plan: [RepPlan]
+    private var soloStimulusPicker = SoloStimulusAntiRepeatPicker<String>()
     private(set) var currentRepIndex: Int = 0
     private var passTriggeredAt: Date?
     private var startedAtForCurrentRep: Date?
@@ -40,8 +42,9 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
     private var passTriggeredByRep: [Int: Date] = [:]
     private var directionLoggedByRep: [Int: Date] = [:]
 
-    init(config: TwoMinuteTestConfig, repPlans: [RepPlan] = TwoMinuteRepPlanner.generatePlan()) {
+    init(config: TwoMinuteTestConfig, trainingMode: TrainingMode = .solo, repPlans: [RepPlan] = TwoMinuteRepPlanner.generatePlan()) {
         self.config = config
+        self.trainingMode = trainingMode
         self.plan = repPlans
     }
 
@@ -65,6 +68,8 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
             if repIndex >= plan.count { commitPhase(.complete) }
             return
         }
+
+        assignSoloStimulusIfNeeded(at: repIndex)
 
         let p = plan[repIndex]
         passTriggeredAt = nil
@@ -405,6 +410,7 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
     func restartBlockFromBeginning() {
         cancelTimers()
         cueTimingDebugVisibleAt = nil
+        soloStimulusPicker.reset()
         currentRepIndex = 0
         passTriggeredAt = nil
         startedAtForCurrentRep = nil
@@ -514,6 +520,18 @@ final class TwoMinuteCriticalScanEngine: ObservableObject {
         guard total > 0 else { return 70 }
         let accuracy = Double(correct) / Double(total)
         return DecisionTimingModel.decisionScore(accuracy: accuracy, windows: windows, activity: .twoMinuteTest)
+    }
+
+    private func assignSoloStimulusIfNeeded(at repIndex: Int) {
+        guard trainingMode == .solo else { return }
+        var candidates: [RepPlan] = []
+        candidates.reserveCapacity(8)
+        for _ in 0..<8 {
+            candidates.append(TwoMinuteRepPlanner.generateRandomRep(repIndex: repIndex))
+        }
+        guard let picked = soloStimulusPicker.pick(from: candidates, key: \.soloStimulusFingerprint) else { return }
+        plan[repIndex] = picked
+        SoloStimulusDebugLog.log(repNumber: repIndex + 1, stimulus: picked.soloStimulusDebugLabel)
     }
 }
 

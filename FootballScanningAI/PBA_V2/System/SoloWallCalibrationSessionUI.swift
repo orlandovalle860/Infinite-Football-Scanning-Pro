@@ -2,7 +2,7 @@
 //  SoloWallCalibrationSessionUI.swift
 //  FootballScanningAI
 //
-//  Shared inline solo wall calibration: top-of-chain input routing + single “Get Ready” overlay for all PBA display activities.
+//  Shared inline solo wall calibration: top-of-chain input routing + guided overlay for all PBA display activities.
 //
 
 import SwiftUI
@@ -31,7 +31,7 @@ enum SoloWallCalibrationInput {
     }
 }
 
-/// One shared look for all activities while inline 3-pass wall timing is running.
+/// Guided two-tap wall calibration overlay (all solo PBA display activities).
 struct SoloWallCalibrationGetReadyOverlay: View {
     let mode: TrainingMode
     @ObservedObject var calibration: SoloWallCalibrationController
@@ -40,10 +40,17 @@ struct SoloWallCalibrationGetReadyOverlay: View {
         Group {
             if mode == .solo, calibration.isCalibrating {
                 GeometryReader { geo in
-                    Text("Get Ready")
-                        .font(.system(size: 28, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.7))
-                        .position(x: geo.size.width / 2, y: geo.size.height * 0.35)
+                    VStack(spacing: 14) {
+                        Text(calibration.promptText)
+                            .font(.system(size: 26, weight: .semibold))
+                            .foregroundColor(.white)
+                            .multilineTextAlignment(.center)
+                        Text(calibration.repCounterText)
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundColor(.white.opacity(0.72))
+                    }
+                    .frame(maxWidth: min(geo.size.width - 48, 360))
+                    .position(x: geo.size.width / 2, y: geo.size.height * 0.35)
                 }
                 .allowsHitTesting(false)
                 .zIndex(55)

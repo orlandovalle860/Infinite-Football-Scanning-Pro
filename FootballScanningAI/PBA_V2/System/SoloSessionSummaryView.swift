@@ -81,6 +81,7 @@ struct SoloSessionSummaryView: View {
 
                 Button("Recalibrate") {
                     UserDefaults.standard.removeObject(forKey: AppStorageKeys.soloReturnTime)
+                    SoloWallCalibrationLaunchIntent.setForceInlineCalibration()
                     router.replace(with: recalibrationRoute)
                 }
                 .foregroundColor(.secondary)

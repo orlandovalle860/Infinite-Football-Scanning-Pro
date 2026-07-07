@@ -43,6 +43,10 @@ enum AppRoute: Hashable {
     case oneTouchPassing(mode: TrainingMode)
     case awayFromPressure(mode: TrainingMode)
     case twoMinuteTest(mode: TrainingMode)
+    /// Solo home: choose activity before session start.
+    case soloActivitySelection
+    /// Solo: choose session duration before activity setup.
+    case soloSessionDuration(activity: ActivityKind)
     /// Tester Tools entry route; UI is DEBUG-only in ``ContentView`` (toolbar still gated).
     case debugMenu
 }

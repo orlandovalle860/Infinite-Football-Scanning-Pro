@@ -2,14 +2,14 @@
 //  UnifiedScanToBeepTiming.swift
 //  FootballScanningAI
 //
-//  PBA V2 — Next rep → scan-end cue (beep, or CHECK for OTP) uses one random delay range for all difficulties.
+//  PBA V2 — Next rep → scan-end beep uses one random delay range for all difficulties.
 //
 
 import Foundation
 
 /// Shared scan-window timing: **not** difficulty-based and **not** curriculum-loop–scaled.
 enum UnifiedScanToBeepTiming {
-    /// Seconds from entering the scan phase until the beep (or CHECK cue for One-Touch Passing).
+    /// Seconds from entering the scan phase until the beep.
     static let delayRangeSeconds: ClosedRange<Double> = 2.0...4.0
 
     static func randomDelaySeconds() -> Double {

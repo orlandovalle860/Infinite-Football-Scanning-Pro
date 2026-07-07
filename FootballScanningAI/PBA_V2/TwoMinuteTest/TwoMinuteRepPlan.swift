@@ -41,4 +41,7 @@ extension Gate {
 struct RepPlan: Codable {
     let repIndex: Int
     let ballGate: Gate
+
+    var soloStimulusFingerprint: String { ballGate.rawValue }
+    var soloStimulusDebugLabel: String { "ball=\(ballGate.rawValue)" }
 }

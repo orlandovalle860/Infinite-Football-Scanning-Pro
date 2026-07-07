@@ -10,6 +10,26 @@ import Foundation
 enum OneTouchPassingScenarioGenerator {
     static let totalReps = 12
 
+    /// Solo: random green-pattern archetype (1 / 2 / 3 greens or emergency down-only).
+    static func generateRandomRep(repIndex: Int) -> OneTouchRepPlan {
+        switch Int.random(in: 0..<4) {
+        case 0:
+            let gate = Gate.allCases.randomElement() ?? .up
+            return OneTouchRepPlan(repIndex: repIndex, greenDirections: [gate])
+        case 1:
+            let pairs: [[Gate]] = [
+                [.up, .left], [.up, .right], [.down, .left], [.down, .right],
+                [.left, .right], [.up, .down]
+            ]
+            return OneTouchRepPlan(repIndex: repIndex, greenDirections: Set(pairs.randomElement() ?? [.up, .left]))
+        case 2:
+            let redGate = Gate.allCases.randomElement() ?? .left
+            return OneTouchRepPlan(repIndex: repIndex, greenDirections: Set(Gate.allCases).subtracting([redGate]))
+        default:
+            return OneTouchRepPlan(repIndex: repIndex, greenDirections: [.down])
+        }
+    }
+
     static func generatePlan(forBlockSize repCount: Int) -> [OneTouchRepPlan] {
         let full = generatePlan()
         guard repCount > 0 else { return [] }

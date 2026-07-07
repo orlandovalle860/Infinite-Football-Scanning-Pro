@@ -20,6 +20,14 @@ struct OneTouchRepPlan {
     }
 
     func isGreen(_ gate: Gate) -> Bool { greenDirections.contains(gate) }
+
+    var soloStimulusFingerprint: String {
+        greenDirections.map(\.rawValue).sorted().joined(separator: ",")
+    }
+
+    var soloStimulusDebugLabel: String {
+        "greens=\(soloStimulusFingerprint)"
+    }
 }
 
 /// Result of one rep. Uses DecisionSpeed from DribbleOrPass (same thresholds: fast <1.2, medium 1.2–2.0, slow >2.0).

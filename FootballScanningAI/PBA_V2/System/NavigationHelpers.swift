@@ -22,7 +22,7 @@ extension UINavigationController {
 /// When set to true, the top view dismisses. That view’s parent appears and also sees the flag, so it dismisses too—cascading back to root. Root clears the flag in onAppear.
 final class PopToRootTrigger: ObservableObject {
     @Published var request = false
-    /// Player home (`PlayerDashboardView`) has pushed a local `navigationDestination` while `AppRouter.path` is still empty — show global Home overlay.
+    /// Player home has pushed a local `navigationDestination` while `AppRouter.path` is still empty — show global Home overlay.
     @Published var isPlayerHomeLocalNavigationActive = false
 }
 

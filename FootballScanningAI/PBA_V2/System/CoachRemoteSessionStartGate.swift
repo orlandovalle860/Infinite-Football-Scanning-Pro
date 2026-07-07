@@ -57,7 +57,7 @@ extension AppRoute {
              .trainingModeSelection:
             return true
         case .coachRemote, .partnerPairing, .twoMinuteCoachRemote, .dribbleOrPassCoachRemote, .awayFromPressureCoachRemote, .oneTouchPassingCoachRemote,
-             .curriculum, .progress, .profileInsights, .achievements, .warmupHub, .warmup, .soloActivitySelection, .debugMenu:
+             .warmupHub, .warmup, .soloActivitySelection, .debugMenu:
             return false
         case .soloSessionDuration:
             return false

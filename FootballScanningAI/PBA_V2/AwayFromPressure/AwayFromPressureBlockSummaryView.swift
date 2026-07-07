@@ -30,9 +30,7 @@ struct AwayFromPressureBlockSummaryView: View {
     @State private var showSessionFeedback = false
     @State private var showDetails = false
     @State private var navigateToNewBlock = false
-    @State private var navigateToCurriculum = false
     @State private var navigateToTwoMinute = false
-    @State private var navigateToProgress = false
     @State private var sessionResultForSummary: SessionResult?
     @State private var isNewPersonalBestForSummary = false
     @State private var newPersonalBestsFromBlock: [NewPersonalBest] = []
@@ -274,10 +272,7 @@ struct AwayFromPressureBlockSummaryView: View {
     }
 
     private var sessionFeedbackCoachSentence: String {
-        if let s = sessionResult {
-            return CoachInsightGenerator.coachInsight(for: s, previous: previousSessionForComparison)
-        }
-        return coachMessage
+        coachMessage
     }
 
     var body: some View {
@@ -459,22 +454,8 @@ struct AwayFromPressureBlockSummaryView: View {
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
         }
-        .navigationDestination(isPresented: $navigateToCurriculum) {
-            PBACurriculumView(settingsViewModel: settingsViewModel, profileManager: profileManager, progressStore: progressStore, playerStore: playerStore, popToRootTrigger: popToRootTrigger)
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(popToRootTrigger)
-                .environmentObject(router)
-        }
         .navigationDestination(isPresented: $navigateToTwoMinute) {
             TwoMinuteRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(popToRootTrigger)
-                .environmentObject(router)
-        }
-        .navigationDestination(isPresented: $navigateToProgress) {
-            PBAProgressView(settingsViewModel: settingsViewModel, profileManager: profileManager)
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
@@ -639,13 +620,6 @@ struct AwayFromPressureBlockSummaryView: View {
                             .font(.caption)
                             .foregroundColor(.white.opacity(0.7))
 
-                        Button { navigateToCurriculum = true } label: {
-                            Text("Back to Curriculum")
-                                .font(.subheadline)
-                                .foregroundColor(.white.opacity(0.8))
-                        }
-                        .buttonStyle(PlainButtonStyle())
-
                         Button {
                             navigateToTwoMinute = true
                         } label: {
@@ -655,14 +629,6 @@ struct AwayFromPressureBlockSummaryView: View {
                         }
                         .buttonStyle(PlainButtonStyle())
 
-                        Button {
-                            navigateToProgress = true
-                        } label: {
-                            Text("View Progress")
-                                .font(.subheadline)
-                                .foregroundColor(.white.opacity(0.8))
-                        }
-                        .buttonStyle(PlainButtonStyle())
                     }
                     .padding(.top, 24)
                 }

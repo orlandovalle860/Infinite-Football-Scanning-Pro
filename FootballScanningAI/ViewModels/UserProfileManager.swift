@@ -152,7 +152,6 @@ class UserProfileManager: ObservableObject {
         }
         var profile = profiles[index]
         var newBests: [NewPersonalBest] = []
-        let progressBefore = GuidedCurriculumEngine.currentProgress(playerId: result.playerID)
         let isFirstSessionToday = isFirstSessionOfDay(for: profile, at: result.date)
 
         // Decision speed (any block with avg time; lower is better)
@@ -200,8 +199,6 @@ class UserProfileManager: ObservableObject {
             )
         }
         PlayerFeedbackEngine.logFeedbackDebug(for: result)
-        // Keep guided curriculum stage current immediately after each scored session save.
-        let progressAfter = GuidedCurriculumEngine.evaluateAndAdvance(playerId: result.playerID, sessions: profile.sessionResults)
         profile.sessionStreakCount += 1
         profile.longestSessionStreak = max(profile.longestSessionStreak, profile.sessionStreakCount)
         profile.updatePersonalBest(session: result)
@@ -214,7 +211,7 @@ class UserProfileManager: ObservableObject {
         let xpEarned = xpEarnedForSession(
             result: result,
             hasNewPersonalBest: !newBests.isEmpty,
-            isStageProgression: didProgressStage(before: progressBefore, after: progressAfter),
+            isStageProgression: didAdvance,
             isFirstSessionToday: isFirstSessionToday
         )
         profile.totalXP += xpEarned
@@ -578,10 +575,6 @@ class UserProfileManager: ObservableObject {
     private func isFirstSessionOfDay(for profile: UserProfile, at date: Date) -> Bool {
         let cal = Calendar.current
         return !profile.sessionResults.contains { cal.isDate($0.date, inSameDayAs: date) }
-    }
-
-    private func didProgressStage(before: GuidedCurriculumProgress, after: GuidedCurriculumProgress) -> Bool {
-        return before.stage != after.stage || before.loop != after.loop
     }
 
     private func xpEarnedForSession(

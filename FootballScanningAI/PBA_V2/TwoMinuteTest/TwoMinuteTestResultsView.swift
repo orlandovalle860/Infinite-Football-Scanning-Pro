@@ -34,7 +34,6 @@ struct TwoMinuteTestResultsView: View {
     @State private var navigateToAccountPrompt = false
     @State private var navigateToEmailAuth = false
     @State private var navigateToCreateProfile = false
-    @State private var navigateToPlayerReport = false
     @State private var showQuickCalibration = false
     @State private var shareSheetPayload: BlockShareSheetPayload?
     private let plannedTestReps: Int = 10
@@ -187,9 +186,6 @@ struct TwoMinuteTestResultsView: View {
                 twoMinuteTestResult: profileManager.profiles.isEmpty ? result : nil,
                 onComplete: onDismissCover
             )
-        }
-        .navigationDestination(isPresented: $navigateToPlayerReport) {
-            PlayerReportView(content: PlayerReportGenerator.report(from: result))
         }
         .fullScreenCover(isPresented: $showQuickCalibration) {
             PassTempoCalibrationScreen { calibrated in
@@ -403,17 +399,6 @@ struct TwoMinuteTestResultsView: View {
                 .tint(.white)
             }
 
-            if trainingMode != .solo {
-                Button {
-                    navigateToPlayerReport = true
-                } label: {
-                    Text("View Player Report")
-                        .font(.subheadline)
-                        .foregroundColor(.white.opacity(0.9))
-                }
-                .buttonStyle(.plain)
-            }
-
             Button {
                 popToRootTrigger.request = true
                 onDismissCover?()
@@ -591,11 +576,6 @@ struct TwoMinuteTestResultsView: View {
             return
         }
         let playerId = profileManager.currentProfile?.id ?? playerStore.selectedPlayerId
-        let isNewPlayerForCurriculum: Bool = {
-            guard let pid = playerId else { return false }
-            let existing = profileManager.profiles.first(where: { $0.id == pid })?.sessionResults ?? []
-            return !existing.contains { [.awayFromPressure, .dribbleOrPass, .oneTouchPassing].contains($0.activityType) }
-        }()
         let speedBucket = UniversalBlockSummaryHeadline.resolve(
             fast: result.fastCount,
             medium: result.mediumCount,
@@ -677,9 +657,6 @@ struct TwoMinuteTestResultsView: View {
                 forwardOpportunityCount: result.forwardOpportunityCount
             )
             profileManager.addSessionResult(sessionResult)
-            if isNewPlayerForCurriculum {
-                _ = GuidedCurriculumEngine.assignBaselineStage(playerId: pid, baseline: sessionResult)
-            }
         }
     }
 }

@@ -670,12 +670,18 @@ struct MainAppView: View {
     @State private var showWhatsNewControlsPrompt = false
     /// One-time Solo vs Coach Remote (partner) choice; skipped when a stored training mode already exists (see ``PBASessionFlowPolicy.migrateTrainingModeOnboardingIfNeeded()``).
     @AppStorage(AppStorageKeys.hasLaunchedBefore) private var hasLaunchedBefore = false
+    @State private var showFirstSessionLoginPrompt = false
+    @State private var loginPromptShownThisSession = false
 
     private var resolvedAppRole: AppRole { AppRole.resolved(from: appRoleRaw) }
 
     private var showFirstLaunchTrainingModeSelection: Binding<Bool> {
         Binding(
-            get: { !hasLaunchedBefore && resolvedAppRole != .coachRemote },
+            get: {
+                !hasLaunchedBefore
+                    && resolvedAppRole != .coachRemote
+                    && FirstSessionOnboardingStore.hasCompletedFirstSession
+            },
             set: { _ in }
         )
     }
@@ -749,12 +755,6 @@ struct MainAppView: View {
                 playerHomeRoot
             } else if shouldWaitForRemoteHydration {
                 launchBootstrapPlaceholder
-            } else if !hasSeenIntro {
-                // One-time first-launch intro only.
-                IntroOnboardingView(
-                    settingsViewModel: settingsViewModel,
-                    profileManager: profileManager
-                )
             } else if playerStore.players.isEmpty, profileManager.profiles.isEmpty,
                       Config.isSupabaseConfigured, authManager.currentSession != nil {
                 // Signed in with baseline done remotely but no local profiles yet (reinstall / coach device): pick or add a player — not the first-run 2-min intro.
@@ -791,7 +791,6 @@ struct MainAppView: View {
             if resolvedAppRole == .coachRemote || iPhoneFirstLaunchUseCoachHubForConnection { return "coach_remote_root" }
             if iPadPlayerLiveCoachLinkTakesRoot { return "ipad_player_coach_link_root" }
             if shouldWaitForRemoteHydration { return "bootstrap_wait_remote_hydration" }
-            if !hasSeenIntro { return "intro_first_launch" }
             if hasCompletedInitialTest, playerStore.players.isEmpty, profileManager.profiles.isEmpty,
                Config.isSupabaseConfigured, authManager.currentSession != nil {
                 return "player_selection_signed_in_no_local"
@@ -902,6 +901,7 @@ struct MainAppView: View {
     private func mainAppOnAppear() {
         router.resetNavigationToHomeOnFirstMainAppLaunch()
         PBASessionFlowPolicy.migrateTrainingModeOnboardingIfNeeded()
+        FirstSessionOnboardingStore.migrateExistingInstallsIfNeeded()
 #if DEBUG
         print("DEBUG SUPABASE_URL:", Bundle.main.object(forInfoDictionaryKey: "SUPABASE_URL") ?? "nil")
         print("DEBUG SUPABASE_ANON_KEY:", Bundle.main.object(forInfoDictionaryKey: "SUPABASE_ANON_KEY") ?? "nil")
@@ -940,6 +940,32 @@ struct MainAppView: View {
         refreshCoachingTrainingNudgesIfNeeded()
         showDashboardAudienceRolePrompt = false
         showWhatsNewControlsPrompt = false
+        evaluateDeferredLoginPromptIfNeeded()
+    }
+
+    private func presentFirstSessionLoginPromptIfNeeded() {
+        guard authManager.currentSession == nil else { return }
+        guard !loginPromptShownThisSession else { return }
+        loginPromptShownThisSession = true
+        showFirstSessionLoginPrompt = true
+    }
+
+    private func evaluateDeferredLoginPromptIfNeeded() {
+        guard FirstSessionOnboardingStore.shouldShowReturnDayLoginPrompt(
+            isAuthenticated: authManager.currentSession != nil,
+            loginPromptShownThisSession: loginPromptShownThisSession
+        ) else { return }
+        presentFirstSessionLoginPromptIfNeeded()
+    }
+
+    private func handleFirstSessionAuthenticated() {
+        showFirstSessionLoginPrompt = false
+        hydratePlayersIfNeeded()
+    }
+
+    private func handleFirstSessionLoginDeclined() {
+        FirstSessionOnboardingStore.recordLoginPromptDeclined()
+        showFirstSessionLoginPrompt = false
     }
 
     /// Split from `body` so the SwiftUI type checker can finish in reasonable time.
@@ -1087,6 +1113,15 @@ struct MainAppView: View {
                 FirstLaunchModeSelectionView(onComplete: {})
                     .interactiveDismissDisabled()
             }
+            .fullScreenCover(isPresented: $showFirstSessionLoginPrompt) {
+                FirstSessionLoginPromptView(
+                    profileManager: profileManager,
+                    playerStore: playerStore,
+                    onAuthenticated: handleFirstSessionAuthenticated,
+                    onNotNow: handleFirstSessionLoginDeclined
+                )
+                .environmentObject(progressStore)
+            }
     }
 
     private var mainAppSceneAndAuthObservers: some View {
@@ -1115,6 +1150,21 @@ struct MainAppView: View {
 
     private var mainAppRoutingObservers: some View {
         mainAppSceneAndAuthObservers
+            .onChange(of: scenePhase) { _, newPhase in
+                if newPhase == .active {
+                    evaluateDeferredLoginPromptIfNeeded()
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .firstSessionTrainingCompleted)) { _ in
+                presentFirstSessionLoginPromptIfNeeded()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .requestDeferredLoginPrompt)) { _ in
+                guard FirstSessionOnboardingStore.shouldPromptLoginBeforeProgress(
+                    isAuthenticated: authManager.currentSession != nil,
+                    loginPromptShownThisSession: loginPromptShownThisSession
+                ) else { return }
+                presentFirstSessionLoginPromptIfNeeded()
+            }
             .onChange(of: hasHydratedPlayersForSession) { _, v in
                 logLaunchRouting(reason: "hasHydratedPlayersForSession=\(v)")
             }
@@ -1248,33 +1298,6 @@ struct MainAppView: View {
                     .environmentObject(router)
             }
             .environmentObject(router)
-        case .curriculum:
-            PBACurriculumView(
-                settingsViewModel: settingsViewModel,
-                profileManager: profileManager,
-                progressStore: progressStore,
-                playerStore: playerStore,
-                popToRootTrigger: popToRootTrigger
-            )
-            .environmentObject(progressStore)
-            .environmentObject(playerStore)
-            .environmentObject(popToRootTrigger)
-            .environmentObject(router)
-        case .progress:
-            PlayerImprovementProgressView(profileManager: profileManager, settingsViewModel: settingsViewModel)
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(popToRootTrigger)
-                .environmentObject(router)
-        case .profileInsights:
-            PlayerProfileProgressInsightsView(profileManager: profileManager, settingsViewModel: settingsViewModel)
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(router)
-        case .achievements:
-            AchievementsView(profileManager: profileManager)
-                .environmentObject(playerStore)
-                .environmentObject(router)
         case .soloActivitySelection:
             SoloActivitySelectionView()
                 .environmentObject(router)
@@ -1476,7 +1499,7 @@ struct MainAppView: View {
     }
 }
 
-/// SCREEN 1 — INTRO. First launch: iPhone defaults to Coach Remote story; iPad keeps display vs remote choice.
+/// Legacy intro (display role / coach remote copy). Not shown at launch; copy may be reused post-session later.
 struct IntroOnboardingView: View {
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var profileManager: UserProfileManager
@@ -1726,25 +1749,12 @@ struct IntroView: View {
     @State private var upgradedStatus: PlayerStatus?
     @State private var showPlayersSheet = false
     @State private var showBeepSelector = false
-    @State private var activeProgressModal: ProgressModalType?
-    @State private var progressModalScale: CGFloat = 0.92
-    @State private var progressModalOpacity: Double = 0
     @AppStorage(hasSeenPlayerSwitcherTooltipKey) private var hasSeenPlayerSwitcherTooltip = false
     // Programmatic navigation so buttons reliably push (NavigationLink in ScrollView can miss taps).
     @State private var isStartTrainingPressed = false
     /// Prevents double-tap from scheduling two pushes (avoids freeze / duplicate navigation after completing a session).
     @State private var isNavigatingToTraining = false
     @State private var snapshotMetricInfoToShow: (title: String, message: String)?
-    /// Latest session_summary for Daily Goal card (Last Score / Target). Fetched when player changes.
-    @State private var dashboardData: HomeDashboardData?
-    @State private var guidedProgress = GuidedCurriculumProgress(
-        stage: 1,
-        loop: 1,
-        nextActivity: .awayFromPressure,
-        focus: "Decide away from pressure quickly — your first decision is what we score."
-    )
-    @State private var currentPlayerIdentity: PlayerIdentity?
-    @State private var trendingIdentity: PlayerIdentity?
     @State private var showSignOutConfirmation = false
     @State private var showSwitchPlayerConfirmation = false
 
@@ -1758,32 +1768,6 @@ struct IntroView: View {
     @State private var highlightPrimaryAction: Bool = false
     @State private var isStartSessionPressed = false
     @State private var homeLogoWatermark: UIImage?
-
-    private enum ProgressModalType: Identifiable {
-        case levelUp(previousTier: String, newTier: String, previousAvg: Double?, newAvg: Double?, previousAccuracy: Int?, newAccuracy: Int?)
-        case stageUnlocked(stage: Int, activity: ActivityKind)
-        case curriculumComplete(decisionSpeedChange: String?, accuracyChange: String?, forwardThinkingChange: String?, recommendedActivity: ActivityKind)
-        case adaptiveWedgeDifficulty(level: Int)
-        case badgeTierUnlocked(event: BadgeTierUnlockEvent)
-        case identityChanged(identity: PlayerIdentity)
-
-        var id: String {
-            switch self {
-            case .levelUp(_, let newTier, _, _, _, _):
-                return "levelup_\(newTier)"
-            case .stageUnlocked(let stage, let activity):
-                return "stage_\(stage)_\(activity.rawValue)"
-            case .curriculumComplete(_, _, _, let recommendedActivity):
-                return "curriculum_complete_\(recommendedActivity.rawValue)"
-            case .adaptiveWedgeDifficulty(let level):
-                return "adaptive_wedge_difficulty_\(level)"
-            case .badgeTierUnlocked(let event):
-                return "badge_tier_unlocked_\(event.track.rawValue)_\(event.level)"
-            case .identityChanged(let identity):
-                return "identity_changed_\(identity.rawValue)"
-            }
-        }
-    }
 
     private var playerId: UUID? { playerStore.selectedPlayerId }
     private var last5: [SessionRecord] { progressStore.last5TrainingBlocks(playerId: playerId) }
@@ -2166,10 +2150,7 @@ struct IntroView: View {
     }
 
     private var coachInsightBody: String {
-        guard let latest = latestFocusSession else {
-            return "Complete your next block to unlock a personalized coaching insight."
-        }
-        return CoachInsightGenerator.coachInsight(for: latest, previous: previousFocusSessionRecord)
+        "Complete your next block to keep building decision speed."
     }
 
     private func sessionRecord(from session: SessionResult) -> SessionRecord {
@@ -2212,8 +2193,8 @@ struct IntroView: View {
         TrainingRecommendation.recommend(progressStore: progressStore, playerId: playerId, last5: last5, hasCompletedInitialTest: hasCompletedInitialTest, lastAFPSessionResult: lastAFPSessionResult, decisionConsistency: introViewDecisionConsistency)
     }
 
-    /// Guided next activity from curriculum stage progression.
-    private var pinnedActivity: ActivityKind { guidedProgress.nextActivity }
+    /// Recommended next activity from training recommendation engine.
+    private var pinnedActivity: ActivityKind { trainingRecommendation.activity }
 
     /// Activity shown in the yellow card.
     private var continueTrainingCardActivity: ActivityKind {
@@ -2293,7 +2274,7 @@ struct IntroView: View {
     /// Ordered list of 3 activities for Recommended Daily Training (guided activity first).
     private var dailyPlanBlocks: [ActivityKind] {
         let trainingActivities: [ActivityKind] = [.awayFromPressure, .dribbleOrPass, .oneTouchPassing]
-        let recommended = guidedProgress.nextActivity
+        let recommended = trainingRecommendation.activity
         guard trainingActivities.contains(recommended) else {
             return trainingActivities
         }
@@ -2302,7 +2283,7 @@ struct IntroView: View {
     }
 
     /// Focus line for guided next training card.
-    private var focusText: String { guidedProgress.focus }
+    private var focusText: String { trainingRecommendation.focusLine }
     #if DEBUG
     private var wedgeDifficultyLevel: Int { WedgeDifficultyEngine.currentLevel(playerId: playerId) }
     #endif
@@ -2311,13 +2292,7 @@ struct IntroView: View {
     private var needsBaselineAssessment: Bool {
         if hasCompletedInitialTest { return false }
         let hasTrainingSessions = progressStore.sessions.contains { $0.playerId == playerId }
-        let baselineCompleted = GuidedCurriculumEngine.hasCompletedBaseline(playerId: playerId)
-        return !hasTrainingSessions && !baselineCompleted
-    }
-
-    /// Skill progression: next activity and message (accuracy, reaction time, decision speed score mastery).
-    private var skillProgressionRecommendation: SkillProgressionRecommendation? {
-        SkillProgressionEngine.recommendedNextActivity(progressStore: progressStore, playerId: playerId)
+        return !hasTrainingSessions
     }
 
     /// Guided mastery stage for the current recommended focus (perception path order: AFP=1, DOP=2, OTP=3).
@@ -2353,32 +2328,10 @@ struct IntroView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if Config.isSupabaseConfigured, authManager.currentSession == nil {
-                Button {
-                    showLoginSheet = true
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "icloud")
-                        Text("Sign in")
-                            .font(.subheadline.weight(.medium))
-                    }
-                    .foregroundColor(.white.opacity(0.9))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .background(Color.white.opacity(0.08))
-                }
-                .buttonStyle(.plain)
-            }
-            homePlayerBar
-                .padding(.horizontal, 20)
-                .padding(.top, 10)
-                .padding(.bottom, 12)
-
             Spacer()
 
             homeMainTrainingSection
                 .padding(.horizontal, 28)
-                .offset(y: 40)
 
             Spacer()
         }
@@ -2400,57 +2353,6 @@ struct IntroView: View {
                 }
             }
 #endif
-            if !isPadPlayerPresentationMode {
-                ToolbarItem(placement: .topBarLeading) {
-                    Menu {
-                        Button("Switch to Coach Remote") {
-                            let old = appRoleRaw
-                            appRoleRaw = AppRole.coachRemote.rawValue
-                            router.popToRoot()
-                            AppRoleDebug.log("role_change reason=home_menu_coach old=\(old) new=\(AppRole.coachRemote.rawValue) routing=coach_remote_root")
-                        }
-                    } label: {
-                        Image(systemName: "arrow.left.arrow.right.circle")
-                            .font(.body)
-                            .foregroundColor(.white.opacity(0.75))
-                    }
-                    .accessibilityLabel("Switch device role")
-                }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    router.push(.profileInsights)
-                } label: {
-                    Image(systemName: "chart.line.uptrend.xyaxis")
-                        .font(.body)
-                        .foregroundColor(.white.opacity(0.75))
-                }
-                .accessibilityLabel("Profile, progress and insights")
-            }
-            if Config.isSupabaseConfigured, authManager.currentSession != nil {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showSwitchPlayerConfirmation = true
-                    } label: {
-                        Image(systemName: "person.2")
-                            .font(.body)
-                            .foregroundColor(.white.opacity(0.75))
-                    }
-                    .accessibilityLabel("Switch Player")
-                    .disabled(signOutUXPhase != .idle)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showSignOutConfirmation = true
-                    } label: {
-                        Image(systemName: "rectangle.portrait.and.arrow.right")
-                            .font(.body)
-                            .foregroundColor(.white.opacity(0.75))
-                    }
-                    .accessibilityLabel("Use a Different Account")
-                    .disabled(signOutUXPhase != .idle)
-                }
-            }
         }
         .alert("Switch Player?", isPresented: $showSwitchPlayerConfirmation) {
             Button("Cancel", role: .cancel) {}
@@ -2506,450 +2408,14 @@ struct IntroView: View {
                 statusUpgradeToast(status: s)
             }
         }
-        .overlay {
-            if let modal = activeProgressModal {
-                progressModalView(modal)
-                    .scaleEffect(progressModalScale)
-                    .opacity(progressModalOpacity)
-                    .onAppear {
-                        progressModalScale = 0.92
-                        progressModalOpacity = 0
-                        withAnimation(.easeOut(duration: 0.2)) {
-                            progressModalScale = 1.0
-                            progressModalOpacity = 1.0
-                        }
-                        triggerProgressHaptic()
-                    }
-            }
-        }
-        .task(id: playerId?.uuidString) {
-            dashboardData = await HomeDashboardDataService.shared.fetchDashboardData(playerId: playerId)
-            refreshGuidedProgress()
-        }
         .onAppear {
             showsTopToggle = false
             checkStatusUpgrade()
             popToRootTrigger.request = false
             profileManager.ensureWeeklyRolloverIfNeeded()
-            refreshGuidedProgress()
-        }
-        .onChange(of: playerId?.uuidString) {
-            refreshGuidedProgress()
         }
         .onDisappear { showsTopToggle = true }
     }
-
-    private func refreshGuidedProgress() {
-        let previousStage = loadLastSeenStage()
-        let previousLoop = loadLastSeenLoop()
-        let previousTier = loadLastSeenTier()
-        let previousIdentity = PlayerIdentityEngine.loadLastIdentity(playerId: playerId)
-        let previousStats = rollingPerformanceStats()
-        let selectedProfileSessions = profileManager.profile(id: playerId)?.sessionResults ?? []
-        let newIdentity = PlayerIdentityEngine.confirmedIdentity(from: selectedProfileSessions, previousIdentity: previousIdentity)
-        currentPlayerIdentity = newIdentity ?? previousIdentity
-        trendingIdentity = PlayerIdentityEngine.trendingTowardIdentity(from: selectedProfileSessions, currentIdentity: currentPlayerIdentity)
-        let wedgeDifficultyIncreased = WedgeDifficultyEngine.evaluateAndAdvanceIfNeeded(playerId: playerId, sessions: selectedProfileSessions)
-        let wedgeDifficultyLevel = WedgeDifficultyEngine.currentLevel(playerId: playerId)
-        guidedProgress = GuidedCurriculumEngine.evaluateAndAdvance(
-            playerId: playerId,
-            sessions: selectedProfileSessions
-        )
-        let newStats = rollingPerformanceStats()
-        evaluateProgressModals(
-            previousStage: previousStage,
-            previousLoop: previousLoop,
-            previousTier: previousTier,
-            previousIdentity: previousIdentity,
-            newIdentity: newIdentity,
-            previousStats: previousStats,
-            newStats: newStats,
-            sessions: selectedProfileSessions,
-            wedgeDifficultyIncreased: wedgeDifficultyIncreased,
-            wedgeDifficultyLevel: wedgeDifficultyLevel
-        )
-        saveLastSeenStage(guidedProgress.stage)
-        saveLastSeenLoop(guidedProgress.loop)
-        if let tier = newStats.tier {
-            saveLastSeenTier(tier)
-        }
-        if let newIdentity {
-            PlayerIdentityEngine.saveIdentity(newIdentity, playerId: playerId)
-        }
-        #if DEBUG
-        let selected = playerId?.uuidString ?? "nil"
-        let currentProfileId = profileManager.currentProfile?.id.uuidString ?? "nil"
-        let afpSessions = selectedProfileSessions.filter { $0.activityType == .awayFromPressure }
-        let afpPlayerIds = afpSessions.map { $0.playerID.uuidString }.joined(separator: ",")
-        let lastRecord = progressStore.last(pinnedActivity, playerId: playerId)
-        let latestScored = localLatestScoredSession
-        let snapshotFirst = recentSessionsForSnapshot.first
-        let filteredForPlayer = progressStore.sessions.filter { $0.playerId == playerId }
-        let nilPlayerSessions = progressStore.sessions.filter { $0.playerId == nil }.count
-        print("[PBA-Debug] Home refresh: selectedPlayerId=\(selected), currentProfileId=\(currentProfileId), guided={\(GuidedCurriculumEngine.debugState(playerId: playerId))}")
-        print("[PBA-Debug] Home refresh data: pinnedActivity=\(pinnedActivity.rawValue), lastRecord.playerId=\(lastRecord?.playerId?.uuidString ?? "nil"), latestScored.playerId=\(latestScored?.playerId?.uuidString ?? "nil"), snapshotFirst.playerId=\(snapshotFirst?.playerID.uuidString ?? "nil"), homeDecisionSpeedScore=\(homeDecisionSpeedScore.map(String.init) ?? "nil"), selectedPlayerSessions=\(filteredForPlayer.count), nilPlayerSessions=\(nilPlayerSessions), afpSessionCount=\(afpSessions.count), afpPlayerIds=[\(afpPlayerIds)]")
-        #endif
-    }
-
-    private struct RollingStats {
-        let avgTime: Double?
-        let accuracyPercent: Int?
-        let tier: String?
-    }
-
-    private func rollingPerformanceStats() -> RollingStats {
-        let sessions = profileManager.profile(id: playerId)?.sessionResults ?? []
-        let training = sessions.filter { [.awayFromPressure, .dribbleOrPass, .oneTouchPassing].contains($0.activityType) }
-        let recent = Array(training.prefix(5))
-        let times = recent.compactMap(\.avgDecisionTime)
-        let avg = times.isEmpty ? nil : times.reduce(0, +) / Double(times.count)
-        let validAccSessions = recent.filter { $0.totalReps > 0 }
-        let acc: Int? = {
-            guard !validAccSessions.isEmpty else { return nil }
-            let avgAcc = validAccSessions.reduce(0.0) { $0 + (Double($1.correctCount) / Double($1.totalReps)) } / Double(validAccSessions.count)
-            return Int(round(avgAcc * 100.0))
-        }()
-        let tier: String? = {
-            guard let avg else { return nil }
-            if avg < 0.90 { return "Elite" }
-            if avg <= 1.10 { return "Strong" }
-            if avg <= 1.20 { return "Developing" }
-            return "Emerging"
-        }()
-        return RollingStats(avgTime: avg, accuracyPercent: acc, tier: tier)
-    }
-
-    private func tierRank(_ tier: String) -> Int {
-        switch tier {
-        case "Emerging": return 0
-        case "Developing": return 1
-        case "Strong": return 2
-        case "Elite": return 3
-        default: return -1
-        }
-    }
-
-    private func evaluateProgressModals(previousStage: Int?, previousLoop: Int?, previousTier: String?, previousIdentity: PlayerIdentity?, newIdentity: PlayerIdentity?, previousStats: RollingStats, newStats: RollingStats, sessions: [SessionResult], wedgeDifficultyIncreased: Bool, wedgeDifficultyLevel: Int) {
-        activeProgressModal = nil
-    }
-
-    private func recentAverageDecisionTime(from sessions: [SessionResult]) -> Double? {
-        let training = sessions.filter { [.awayFromPressure, .dribbleOrPass, .oneTouchPassing].contains($0.activityType) }
-        let recent = Array(training.prefix(3)).compactMap(\.avgDecisionTime)
-        guard !recent.isEmpty else { return nil }
-        return recent.reduce(0, +) / Double(recent.count)
-    }
-
-    private func earlyAverageDecisionTime(from sessions: [SessionResult]) -> Double? {
-        let training = sessions.filter { [.awayFromPressure, .dribbleOrPass, .oneTouchPassing].contains($0.activityType) }
-        let early = Array(training.suffix(3)).compactMap(\.avgDecisionTime)
-        guard !early.isEmpty else { return nil }
-        return early.reduce(0, +) / Double(early.count)
-    }
-
-    private func recentAccuracyPercent(from sessions: [SessionResult]) -> Double? {
-        let training = Array(sessions.filter { [.awayFromPressure, .dribbleOrPass, .oneTouchPassing].contains($0.activityType) }.prefix(3))
-        let valid = training.filter { $0.totalReps > 0 }
-        guard !valid.isEmpty else { return nil }
-        return valid.reduce(0.0) { $0 + (Double($1.correctCount) / Double($1.totalReps) * 100.0) } / Double(valid.count)
-    }
-
-    private func earlyAccuracyPercent(from sessions: [SessionResult]) -> Double? {
-        let training = Array(sessions.filter { [.awayFromPressure, .dribbleOrPass, .oneTouchPassing].contains($0.activityType) }.suffix(3))
-        let valid = training.filter { $0.totalReps > 0 }
-        guard !valid.isEmpty else { return nil }
-        return valid.reduce(0.0) { $0 + (Double($1.correctCount) / Double($1.totalReps) * 100.0) } / Double(valid.count)
-    }
-
-    private func recentForwardThinkingPercent(from sessions: [SessionResult]) -> Double? {
-        let training = Array(sessions.filter { [.awayFromPressure, .dribbleOrPass, .oneTouchPassing].contains($0.activityType) }.prefix(3))
-        let values = training.compactMap { s -> Double? in
-            guard let opp = s.forwardOpportunityCount, opp > 0, let choices = s.forwardChoiceCount else { return nil }
-            return Double(choices) / Double(opp) * 100.0
-        }
-        guard !values.isEmpty else { return nil }
-        return values.reduce(0, +) / Double(values.count)
-    }
-
-    private func earlyForwardThinkingPercent(from sessions: [SessionResult]) -> Double? {
-        let training = Array(sessions.filter { [.awayFromPressure, .dribbleOrPass, .oneTouchPassing].contains($0.activityType) }.suffix(3))
-        let values = training.compactMap { s -> Double? in
-            guard let opp = s.forwardOpportunityCount, opp > 0, let choices = s.forwardChoiceCount else { return nil }
-            return Double(choices) / Double(opp) * 100.0
-        }
-        guard !values.isEmpty else { return nil }
-        return values.reduce(0, +) / Double(values.count)
-    }
-
-    private func metricChangeText(oldValue: Double?, newValue: Double?, unit: String, lowerIsBetter: Bool) -> String? {
-        guard let oldValue, let newValue else { return nil }
-        let delta = newValue - oldValue
-        let improved = lowerIsBetter ? (delta < 0) : (delta > 0)
-        let symbol = improved ? "▲" : "▼"
-        if unit == "s" {
-            return String(format: "%@ %.2f%@ → %.2f%@", symbol, oldValue, unit, newValue, unit)
-        }
-        return String(format: "%@ %.0f%@ → %.0f%@", symbol, oldValue, unit, newValue, unit)
-    }
-
-    private func progressModalView(_ modal: ProgressModalType) -> some View {
-        VStack(spacing: 12) {
-            switch modal {
-            case .levelUp:
-                Text("Session Update")
-                    .font(.headline.weight(.bold))
-                    .foregroundColor(.yellow)
-                Text("Keep training to log more reps.")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.9))
-                    .multilineTextAlignment(.center)
-                Button("Continue") {
-                    dismissProgressModal()
-                }
-                .font(.subheadline.weight(.semibold))
-                .foregroundColor(.black)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(Color.yellow)
-                .cornerRadius(12)
-            case .stageUnlocked(let stage, let activity):
-                Text("Stage Unlocked")
-                    .font(.headline.weight(.bold))
-                    .foregroundColor(.yellow)
-                Text(RecommendationEngine.activityTitle(activity))
-                    .font(.title3.weight(.semibold))
-                    .foregroundColor(.white)
-                Text(stageUnlockMessage(for: stage))
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.9))
-                    .multilineTextAlignment(.center)
-                if !canStartLocalTrainingFromHome {
-                    Button("OK") {
-                        dismissProgressModal()
-                    }
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.black)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(Color.yellow)
-                    .cornerRadius(12)
-                    Text("Your coach starts training from Coach Remote on a phone.")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.8))
-                        .multilineTextAlignment(.center)
-                } else {
-                    Button("Start Stage \(stage)") {
-                        dismissProgressModal()
-                        router.pushRespectingCoachRemotePadGate(routeForTrainNowActivity(activity), coachRemotePrompt: coachRemoteRequiredPrompt)
-                    }
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.black)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(Color.yellow)
-                    .cornerRadius(12)
-                    Button("Keep Training") {
-                        dismissProgressModal()
-                    }
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.85))
-                }
-            case .curriculumComplete(_, _, _, let recommendedActivity):
-                Text("Curriculum Complete")
-                    .font(.headline.weight(.bold))
-                    .foregroundColor(.yellow)
-                Text("You completed all 3 stages.")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.92))
-                    .multilineTextAlignment(.center)
-                Text("Next Focus: \(RecommendationEngine.activityTitle(recommendedActivity))")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.white)
-                    .multilineTextAlignment(.center)
-                if !canStartLocalTrainingFromHome {
-                    Button("OK") {
-                        dismissProgressModal()
-                    }
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.black)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(Color.yellow)
-                    .cornerRadius(12)
-                    Text("Your coach starts the next focus from Coach Remote.")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.8))
-                        .multilineTextAlignment(.center)
-                } else {
-                    Button("Start Next Focus") {
-                        dismissProgressModal()
-                        router.pushRespectingCoachRemotePadGate(routeForTrainNowActivity(recommendedActivity), coachRemotePrompt: coachRemoteRequiredPrompt)
-                    }
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.black)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(Color.yellow)
-                    .cornerRadius(12)
-                    Button("Keep Training") {
-                        dismissProgressModal()
-                    }
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.85))
-                }
-            case .adaptiveWedgeDifficulty:
-                Text("Your training just got sharper.")
-                    .font(.headline.weight(.bold))
-                    .foregroundColor(.yellow)
-                Text("You're reacting faster, so cues will be slightly less obvious.\nThis will help you read earlier and decide quicker.")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.92))
-                    .multilineTextAlignment(.center)
-                Button("Keep Training") {
-                    dismissProgressModal()
-                }
-                .font(.subheadline.weight(.semibold))
-                .foregroundColor(.black)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(Color.yellow)
-                .cornerRadius(12)
-            case .badgeTierUnlocked(let event):
-                Text("Level Up!")
-                    .font(.headline.weight(.bold))
-                    .foregroundColor(.yellow)
-                Image(systemName: event.track.icon)
-                    .font(.system(size: 28, weight: .semibold))
-                    .foregroundColor(.yellow)
-                Text("\(event.track.title) \(romanNumeral(event.level))")
-                    .font(.title3.weight(.semibold))
-                    .foregroundColor(.white)
-                Text("New tier unlocked")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.92))
-                    .multilineTextAlignment(.center)
-                Button("Keep Training") {
-                    dismissProgressModal()
-                }
-                .font(.subheadline.weight(.semibold))
-                .foregroundColor(.black)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(Color.yellow)
-                .cornerRadius(12)
-            case .identityChanged(let identity):
-                Text("New Identity")
-                    .font(.headline.weight(.bold))
-                    .foregroundColor(.yellow)
-                Text(identity.title)
-                    .font(.title3.weight(.semibold))
-                    .foregroundColor(.white)
-                Text(identity.changeMessage)
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.92))
-                    .multilineTextAlignment(.center)
-                Button("Keep Training") {
-                    dismissProgressModal()
-                }
-                .font(.subheadline.weight(.semibold))
-                .foregroundColor(.black)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(Color.yellow)
-                .cornerRadius(12)
-            }
-        }
-        .padding(20)
-        .frame(maxWidth: 420)
-        .background(Color.black.opacity(0.9))
-        .cornerRadius(16)
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(Color.yellow.opacity(0.35), lineWidth: 1)
-        )
-        .padding(.horizontal, 24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black.opacity(0.35).ignoresSafeArea())
-        .onTapGesture {}
-    }
-
-    private func stageUnlockMessage(for stage: Int) -> String {
-        switch stage {
-        case 2: return "You're ready to choose actions under pressure."
-        case 3: return "You're ready to decide before expected arrival."
-        default: return "You've unlocked the next challenge."
-        }
-    }
-
-    private func romanNumeral(_ level: Int) -> String {
-        switch level {
-        case 1: return "I"
-        case 2: return "II"
-        case 3: return "III"
-        case 4: return "IV"
-        default: return "I"
-        }
-    }
-
-    private func dismissProgressModal() {
-        withAnimation(.easeIn(duration: 0.16)) {
-            progressModalOpacity = 0
-            progressModalScale = 0.96
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
-            activeProgressModal = nil
-            refreshGuidedProgress()
-        }
-    }
-
-    private func progressKey(_ base: String) -> String {
-        let pid = playerId?.uuidString ?? "global"
-        return "\(base)_\(pid)"
-    }
-
-    private func loadLastSeenTier() -> String? {
-        UserDefaults.standard.string(forKey: progressKey("pba_last_seen_tier"))
-    }
-
-    private func saveLastSeenTier(_ tier: String) {
-        UserDefaults.standard.set(tier, forKey: progressKey("pba_last_seen_tier"))
-    }
-
-    private func loadLastSeenStage() -> Int? {
-        let v = UserDefaults.standard.integer(forKey: progressKey("pba_last_seen_stage"))
-        return v == 0 ? nil : v
-    }
-
-    private func saveLastSeenStage(_ stage: Int) {
-        UserDefaults.standard.set(stage, forKey: progressKey("pba_last_seen_stage"))
-    }
-
-    private func loadLastSeenLoop() -> Int? {
-        let v = UserDefaults.standard.integer(forKey: progressKey("pba_last_seen_loop"))
-        return v == 0 ? nil : v
-    }
-
-    private func saveLastSeenLoop(_ loop: Int) {
-        UserDefaults.standard.set(loop, forKey: progressKey("pba_last_seen_loop"))
-    }
-
-    private func triggerProgressHaptic() {
-#if canImport(UIKit)
-        let generator = UIImpactFeedbackGenerator(style: .light)
-        generator.prepare()
-        generator.impactOccurred()
-#endif
-    }
-
-#if DEBUG
-    private func resetCurriculumForSelectedPlayer() {
-        guidedProgress = GuidedCurriculumEngine.resetCurriculumForPlayer(
-            playerId: playerId,
-            baselineCompleted: false
-        )
-        refreshGuidedProgress()
-    }
-#endif
 
     /// 1. Current Focus card (top): single dominant guided CTA with stage + path context.
     private var dailyGoalCard: some View {
@@ -3014,9 +2480,6 @@ struct IntroView: View {
                             .font(.subheadline.weight(.semibold))
                             .foregroundColor(.yellow)
                         Spacer()
-                        Text("Loop \(guidedProgress.loop)")
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.7))
                     }
                     Text("Focus: \(focusText)")
                         .font(.caption)
@@ -3152,7 +2615,7 @@ struct IntroView: View {
 
     /// 3. Progress Trend: last 7 decision_speed_score values (oldest → newest). Uses Supabase when available and non-empty, else local ProgressStore so recent blocks show immediately.
     private var progressTrendSection: some View {
-        let trend = (dashboardData?.trendScores).flatMap { $0.isEmpty ? nil : $0 } ?? localTrendScores
+        let trend = localTrendScores
         return VStack(alignment: .leading, spacing: 10) {
             Text("Progress Trend")
                 .font(.subheadline.weight(.medium))
@@ -3184,9 +2647,9 @@ struct IntroView: View {
 
     /// 4. Performance Breakdown: Accuracy %, Average Reaction Time, Fast Decision %. Uses Supabase when available and non-empty, else local ProgressStore so recent blocks show immediately.
     private var performanceBreakdownSection: some View {
-        let acc = dashboardData?.accuracy ?? localLatestScoredSession.flatMap { s in s.decisionsCompleted > 0 ? Double(s.correct) / Double(s.decisionsCompleted) : nil }
-        let avgReactionMs = dashboardData?.avgReactionMs ?? localLatestScoredSession.flatMap { $0.avgLatency }.map { $0 * 1000 }
-        let fastPercent = dashboardData?.fastPercent ?? localFastPercent
+        let acc = localLatestScoredSession.flatMap { s in s.decisionsCompleted > 0 ? Double(s.correct) / Double(s.decisionsCompleted) : nil }
+        let avgReactionMs = localLatestScoredSession.flatMap { $0.avgLatency }.map { $0 * 1000 }
+        let fastPercent = localFastPercent
         let avgSeconds = avgReactionMs.map { $0 / 1000.0 }
         let decisionZone: String? = avgSeconds.map { t in
             if t < 0.90 { return "Early" }
@@ -3682,6 +3145,10 @@ struct IntroView: View {
                 #endif
             }
 
+            if let homeMessage = PostSessionFeedbackStore.homeTrainingMessage() {
+                homeTrainingMessageView(homeMessage)
+            }
+
             if showsHomeStartSession {
                 Button {
                     performStartSession()
@@ -3725,6 +3192,21 @@ struct IntroView: View {
             .accessibilityLabel("Quick warmup")
         }
         .frame(maxWidth: 420)
+        .frame(maxWidth: .infinity)
+    }
+
+    private func homeTrainingMessageView(_ message: HomeTrainingMessage) -> some View {
+        VStack(spacing: 6) {
+            Text(message.primary)
+                .font(.footnote.weight(.medium))
+                .foregroundColor(.white.opacity(0.55))
+            if let secondary = message.secondary {
+                Text(secondary)
+                    .font(.footnote.weight(.medium))
+                    .foregroundColor(.white.opacity(0.5))
+            }
+        }
+        .multilineTextAlignment(.center)
         .frame(maxWidth: .infinity)
     }
 
@@ -3892,20 +3374,9 @@ struct IntroView: View {
             Text("More")
                 .font(.subheadline.weight(.semibold))
                 .foregroundColor(.white.opacity(0.9))
-            otherActivityRow(title: "View Path", subtitle: "See curriculum stages") {
-                router.push(.curriculum)
-            }
-            if homeTrainingModeSegment == .partner {
-                otherActivityRow(title: "View Progress", subtitle: "Check trends and report card") {
-                    router.push(.progress)
-                }
-                otherActivityRow(title: "Achievements", subtitle: "See earned and locked badges") {
-                    router.push(.achievements)
-                }
-                if canStartLocalTrainingFromHome {
-                    otherActivityRow(title: "Train \(ActivityKind.twoMinuteTest.displayName)", subtitle: "Train again and track your progress") {
-                        router.pushRespectingCoachRemotePadGate(PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest), coachRemotePrompt: coachRemoteRequiredPrompt)
-                    }
+            if homeTrainingModeSegment == .partner, canStartLocalTrainingFromHome {
+                otherActivityRow(title: "Train \(ActivityKind.twoMinuteTest.displayName)", subtitle: "Train again") {
+                    router.pushRespectingCoachRemotePadGate(PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest), coachRemotePrompt: coachRemoteRequiredPrompt)
                 }
             }
             if !isPadPlayerPresentationMode {
@@ -3916,11 +3387,6 @@ struct IntroView: View {
             otherActivityRow(title: "Scan Warmups", subtitle: "Open warmup activities") {
                 router.push(.warmupHub)
             }
-#if DEBUG
-            otherActivityRow(title: "Reset curriculum for selected player", subtitle: "Debug: clear guided stage/loop/recommendation") {
-                resetCurriculumForSelectedPlayer()
-            }
-#endif
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -3966,77 +3432,9 @@ struct IntroView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// Navigation card to progress/trends. Does not repeat Decision Speed Score (shown in top card).
-    private var homeProgressAndScoreSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Player Progress")
-                .font(.headline.weight(.semibold))
-                .foregroundColor(.white)
-            Text("See your trends and improvements.")
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.8))
-            Button {
-                router.push(.progress)
-            } label: {
-                Text("View Progress")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundColor(.white.opacity(0.9))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(Color.white.opacity(0.08))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                    )
-                    .cornerRadius(12)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(PlainButtonStyle())
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
+    private var homeProgressAndScoreSection: some View { EmptyView() }
 
-    /// Other activities in a smaller list. These are secondary to the guided Next Training action.
-    private var otherActivitiesSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Other Activities (Secondary)")
-                .font(.subheadline.weight(.semibold))
-                .foregroundColor(.white.opacity(0.9))
-
-            VStack(spacing: 8) {
-                otherActivityRow(title: "View Path", subtitle: "See full progression and current stage") {
-                    router.push(.curriculum)
-                }
-                otherActivityRow(title: "Coach Remote", subtitle: "Open remote controls for partner training") {
-                    router.push(.coachRemote)
-                }
-                otherActivityRow(title: ActivityKind.twoMinuteTest.displayName, subtitle: "Train first-touch decisions under pressure") {
-                    router.pushRespectingCoachRemotePadGate(PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest), coachRemotePrompt: coachRemoteRequiredPrompt)
-                }
-                otherActivityRow(title: "Personal Bests", subtitle: "Fastest decision speed, AFP first-decision accuracy, forward intent") {
-                    router.push(.progress)
-                }
-                Button {
-                    router.push(.warmupHub)
-                } label: {
-                    HStack {
-                        Text("Scan Warmups")
-                            .font(.footnote.weight(.medium))
-                            .foregroundColor(.white.opacity(0.9))
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.caption2)
-                            .foregroundColor(.white.opacity(0.5))
-                    }
-                    .padding(.vertical, 8)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(PlainButtonStyle())
-            }
-            .padding(.vertical, 4)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
+    private var otherActivitiesSection: some View { EmptyView() }
 
     private func otherActivityRow(title: String, subtitle: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -4060,26 +3458,7 @@ struct IntroView: View {
         .buttonStyle(PlainButtonStyle())
     }
 
-    private var curriculumPreviewCard: some View {
-        Button {
-            #if DEBUG
-            print("[Home] Perception Training Path card tapped → pushing AppRoute.curriculum")
-            #endif
-            router.push(.curriculum)
-        } label: {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Perception Training Path")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.white)
-                pathRow("Playing Away From Pressure", sublabel: pathSublabel(.awayFromPressure), activity: .awayFromPressure, isRecommended: continueTrainingCardActivity == .awayFromPressure)
-                pathRow("Dribble or Pass", sublabel: pathSublabel(.dribbleOrPass), activity: .dribbleOrPass, isRecommended: continueTrainingCardActivity == .dribbleOrPass)
-                pathRow("One-Touch Passing", sublabel: pathSublabel(.oneTouchPassing), activity: .oneTouchPassing, isRecommended: continueTrainingCardActivity == .oneTouchPassing)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(PlainButtonStyle())
-    }
+    private var curriculumPreviewCard: some View { EmptyView() }
 
     private func pathSublabel(_ activity: ActivityKind) -> String {
         guard progressStore.isUnlocked(activity: activity, playerId: playerId) else { return "Locked" }
@@ -4173,18 +3552,7 @@ struct IntroView: View {
     /// Recommended Next Activity from skill progression (mastery: accuracy, reaction time, decision speed score). Shown only after 2-Minute Test.
     @ViewBuilder
     private var recommendedNextActivityCard: some View {
-        if let rec = skillProgressionRecommendation {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Recommended Next Activity")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.white)
-                Text(rec.message)
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.9))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
+        EmptyView()
     }
 
     /// Primary stat at top of Home: Decision Speed (average), Best, and Elite Academy benchmark.
@@ -4218,26 +3586,7 @@ struct IntroView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var progressCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Progress")
-                .font(.subheadline.weight(.semibold))
-                .foregroundColor(.white)
-            Text("See your trends and improvements.")
-                .font(.footnote)
-                .foregroundColor(.white.opacity(0.8))
-            Button {
-                router.push(.progress)
-            } label: {
-                Text("View Progress")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundColor(.white.opacity(0.9))
-                    .frame(maxWidth: .infinity)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(PlainButtonStyle())
-        }
-    }
+    private var progressCard: some View { EmptyView() }
 
     /// Home screen: no checkmarks; only highlight the recommended next activity (●). Others show ○.
     private func pathRow(_ title: String, sublabel: String, activity: ActivityKind, isRecommended: Bool) -> some View {

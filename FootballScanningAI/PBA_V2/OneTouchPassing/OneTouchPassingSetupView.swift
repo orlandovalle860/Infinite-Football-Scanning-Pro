@@ -18,9 +18,7 @@ struct OneTouchPassingSetupView: View {
     @State private var showInstructions = false
     @State private var navigateToSession = false
 
-    private var loopLevel: Int {
-        GuidedCurriculumEngine.currentProgress(playerId: playerStore.selectedPlayerId).loop
-    }
+    private var loopLevel: Int { 1 }
 
     private var config: OneTouchPassingConfig {
         OneTouchPassingConfig.defaultConfig(for: adaptivePlan.recommendedDifficulty, loopLevel: loopLevel, levelModifiers: profileManager.pendingLevelDifficulty)

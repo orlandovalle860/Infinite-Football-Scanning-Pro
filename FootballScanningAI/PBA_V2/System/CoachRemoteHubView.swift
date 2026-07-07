@@ -69,8 +69,11 @@ struct CoachRemoteHubView: View {
     ]
 
     private var recommendedActivity: CoachRemoteActivityItem {
-        let nextKind = GuidedCurriculumEngine.currentProgress(playerId: profileManager.currentProfile?.id).nextActivity
-        return Self.activityItems.first(where: { $0.activityKind == nextKind }) ?? Self.activityItems[0]
+        if let last = ActivityKind(rawValue: lastUsedActivityKey),
+           let match = Self.activityItems.first(where: { $0.activityKind == last }) {
+            return match
+        }
+        return Self.activityItems[0]
     }
 
     private var otherActivities: [CoachRemoteActivityItem] {

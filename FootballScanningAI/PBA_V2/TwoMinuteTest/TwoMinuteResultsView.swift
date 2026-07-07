@@ -21,17 +21,13 @@ struct TwoMinuteResultsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var didSave = false
     @State private var showRenameSheet = false
-    @State private var navigateToCurriculum = false
     @State private var navigateToAwayFromPressure = false
-    @State private var navigateToProgress = false
     @State private var navigateToCreateProfile = false
     @State private var sessionResultForSummary: SessionResult?
     @State private var isNewPersonalBestForSummary = false
     @State private var newPersonalBestsFromBlock: [NewPersonalBest] = []
     @State private var xpEarnedFromBlock: Int = 0
     @State private var newlyUnlockedBadgesFromBlock: [PlayerBadge] = []
-    @State private var baselineRecommendation: GuidedCurriculumProgress?
-    @State private var showBaselineRecommendation = false
     @State private var earlySessionStreakForSummary: Int?
     @State private var earlyRepBestStreakForSummary: Int?
 
@@ -119,14 +115,10 @@ struct TwoMinuteResultsView: View {
     private var rightExits: Int { exitCounts[.right] ?? 0 }
     /// Profile for this test (stored with record).
     private var evaluatedProfile: PlayerProfile {
-        ProfileEvaluator.profile(
-            speedBucket: speedBucket,
-            bias: biasString,
-            forwardCorrect: forwardCorrect,
-            leftExits: leftExits,
-            rightExits: rightExits,
-            totalExits: totalExits
-        )
+        if speedBucket == .slow { return .latePlanner }
+        if biasString != "Balanced" { return .predictable }
+        if forwardTotal > 0, Double(forwardCorrect) / Double(forwardTotal) < 0.5 { return .safePlayer }
+        return .gameReady
     }
     private var twoMinutePerRepBucketLabels: [String] {
         let accuracy = logs.isEmpty ? 0 : Double(earlyDecisions) / Double(logs.count)
@@ -191,9 +183,7 @@ struct TwoMinuteResultsView: View {
 
     var body: some View {
         Group {
-            if showBaselineRecommendation, let rec = baselineRecommendation, let baseline = sessionResult {
-                baselineRecommendationContent(recommendation: rec, baseline: baseline)
-            } else if let s = sessionResultForSummary {
+            if let s = sessionResultForSummary {
                 SessionSummaryScreenView(
                     session: s,
                     playerName: profileManager.currentProfile?.name ?? playerStore.selectedPlayer?.name ?? "Player",
@@ -233,7 +223,6 @@ struct TwoMinuteResultsView: View {
                 tieBreakApplied: headlineSpeedResolution.tieBreakApplied
             )
             #endif
-            let wasNewPlayer = !(profileManager.currentProfile?.sessionResults.contains { [.awayFromPressure, .dribbleOrPass, .oneTouchPassing].contains($0.activityType) } ?? false)
             guard let sessionId = CurrentSessionStore.shared.sessionId else {
                 let record = SessionRecord(
                     id: UUID(),
@@ -261,13 +250,7 @@ struct TwoMinuteResultsView: View {
                     earlySessionStreakForSummary = EarlySessionStreakStore.current(for: result.playerID)
                     let bestEarly = BestEarlyStreakStore.recordIfNewBest(maxConsecutiveEarlyRepStreakTwoMinute, playerId: result.playerID)
                     earlyRepBestStreakForSummary = bestEarly > 0 ? bestEarly : nil
-                    if wasNewPlayer {
-                        let rec = GuidedCurriculumEngine.assignBaselineStage(playerId: result.playerID, baseline: result)
-                        baselineRecommendation = rec
-                        showBaselineRecommendation = true
-                    } else {
-                        sessionResultForSummary = result
-                    }
+                    sessionResultForSummary = result
                 }
                 didSave = true
                 return
@@ -320,32 +303,12 @@ struct TwoMinuteResultsView: View {
                 earlySessionStreakForSummary = EarlySessionStreakStore.current(for: result.playerID)
                 let bestEarly = BestEarlyStreakStore.recordIfNewBest(maxConsecutiveEarlyRepStreakTwoMinute, playerId: result.playerID)
                 earlyRepBestStreakForSummary = bestEarly > 0 ? bestEarly : nil
-                if wasNewPlayer {
-                    let rec = GuidedCurriculumEngine.assignBaselineStage(playerId: result.playerID, baseline: result)
-                    baselineRecommendation = rec
-                    showBaselineRecommendation = true
-                } else {
-                    sessionResultForSummary = result
-                }
+                sessionResultForSummary = result
             }
             didSave = true
         }
-        .navigationDestination(isPresented: $navigateToCurriculum) {
-            PBACurriculumView(settingsViewModel: settingsViewModel, profileManager: profileManager, progressStore: progressStore, playerStore: playerStore, popToRootTrigger: popToRootTrigger)
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(popToRootTrigger)
-                .environmentObject(router)
-        }
         .navigationDestination(isPresented: $navigateToAwayFromPressure) {
             AwayFromPressureRoleSelectionView(settingsViewModel: settingsViewModel, profileManager: profileManager)
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(popToRootTrigger)
-                .environmentObject(router)
-        }
-        .navigationDestination(isPresented: $navigateToProgress) {
-            PBAProgressView(settingsViewModel: settingsViewModel, profileManager: profileManager)
                 .environmentObject(progressStore)
                 .environmentObject(playerStore)
                 .environmentObject(popToRootTrigger)
@@ -364,86 +327,6 @@ struct TwoMinuteResultsView: View {
         .sheet(isPresented: $showRenameSheet) {
             renamePlayerSheet
         }
-    }
-
-    @ViewBuilder
-    private func baselineRecommendationContent(recommendation: GuidedCurriculumProgress, baseline: SessionResult) -> some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text("Your Starting Point")
-                .font(.system(size: 30, weight: .bold, design: .rounded))
-                .foregroundColor(.white)
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Session Summary")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.yellow)
-                Text("Decision window: \(baseline.avgDecisionWindowSeconds.map { DecisionTimingModel.summaryText(windowSeconds: $0) } ?? "—")")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.9))
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Based on your first session, we recommend starting with:")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.9))
-                Text("Stage \(recommendation.stage) of 3")
-                    .font(.title3.weight(.bold))
-                    .foregroundColor(.yellow)
-                Text(recommendation.nextActivity.displayName)
-                    .font(.headline)
-                    .foregroundColor(.white)
-                Text("Focus: \(recommendation.focus)")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.85))
-            }
-
-            if CoachRemoteSessionStartGate.isPadPlayerRole() {
-                Text("Your coach starts training from Coach Remote on a phone.")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.85))
-                    .fixedSize(horizontal: false, vertical: true)
-                Text("Use the coach remote to start the next block.")
-                    .font(.body.weight(.medium))
-                    .foregroundColor(.white.opacity(0.92))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 4)
-            } else {
-                Button {
-                    let route: AppRoute = {
-                        switch recommendation.nextActivity {
-                        case .awayFromPressure: return PBASessionFlowPolicy.routeForActivityLaunch(.awayFromPressure)
-                        case .dribbleOrPass: return PBASessionFlowPolicy.routeForActivityLaunch(.dribbleOrPass)
-                        case .oneTouchPassing: return PBASessionFlowPolicy.routeForActivityLaunch(.oneTouchPassing)
-                        case .twoMinuteTest: return PBASessionFlowPolicy.routeForActivityLaunch(.twoMinuteTest)
-                        }
-                    }()
-                    router.pushRespectingCoachRemotePadGate(route, coachRemotePrompt: coachRemoteRequiredPrompt)
-                } label: {
-                    Text("Start Training")
-                        .font(.headline.weight(.semibold))
-                        .foregroundColor(.black)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                        .background(Color.yellow)
-                        .cornerRadius(14)
-                }
-                .buttonStyle(PlainButtonStyle())
-
-                Button {
-                    router.popToRoot()
-                } label: {
-                    Text("Go to Home")
-                        .font(.subheadline)
-                        .foregroundColor(.white.opacity(0.9))
-                }
-                .buttonStyle(PlainButtonStyle())
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color(red: 0.08, green: 0.08, blue: 0.12))
     }
 
     private var resultsContent: some View {
@@ -509,22 +392,6 @@ struct TwoMinuteResultsView: View {
                                 navigateToCreateProfile = true
                                 return
                             }
-                            navigateToCurriculum = true
-                        } label: {
-                            Text("Go to Curriculum")
-                                .font(.system(size: 18, weight: .semibold, design: .rounded))
-                                .foregroundColor(.black)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 16)
-                                .background(Color.yellow)
-                                .cornerRadius(12)
-                        }
-                        .buttonStyle(PlainButtonStyle())
-                        Button {
-                            if !UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey) {
-                                navigateToCreateProfile = true
-                                return
-                            }
                             navigateToAwayFromPressure = true
                         } label: {
                             Text("Train Away From Pressure Now")
@@ -537,19 +404,6 @@ struct TwoMinuteResultsView: View {
                             .foregroundColor(.white.opacity(0.7))
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 16)
-
-                        Button {
-                            if !UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey) {
-                                navigateToCreateProfile = true
-                                return
-                            }
-                            navigateToProgress = true
-                        } label: {
-                            Text("View Progress")
-                                .font(.subheadline)
-                                .foregroundColor(.white.opacity(0.9))
-                        }
-                        .buttonStyle(PlainButtonStyle())
 
                         Button {
                             dismiss()

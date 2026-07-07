@@ -87,6 +87,7 @@ struct TwoMinuteCriticalScanSessionView: View {
     @State private var hasPresentedSessionStartCue = false
     @State private var sessionStartCueHeight: CGFloat = 0
     @State private var showSoloTimedComplete = false
+    @State private var pendingFirstSessionLoginPrompt = false
     @State private var isSoloSessionEnding = false
     @State private var soloTimedCompleteElapsed: TimeInterval = 0
     @State private var soloTimedCompleteReps = 0
@@ -219,6 +220,10 @@ struct TwoMinuteCriticalScanSessionView: View {
                     SoloTimeBasedSession.clear()
                     showSoloTimedComplete = false
                     router.popToRoot()
+                    if pendingFirstSessionLoginPrompt {
+                        pendingFirstSessionLoginPrompt = false
+                        NotificationCenter.default.post(name: .firstSessionTrainingCompleted, object: nil)
+                    }
                 }
             )
             .fullScreenCover(item: $testResultItem) { item in
@@ -740,16 +745,26 @@ struct TwoMinuteCriticalScanSessionView: View {
                     activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId
                 )
             }
+            let wasFirstSession = FirstSessionOnboardingStore.markFirstSessionCompletedIfNeeded()
+            if wasFirstSession {
+                AuthFlowOnboardingSync.markLocalBaselineCompleted()
+                pendingFirstSessionLoginPrompt = true
+            }
             DispatchQueue.main.async {
                 if mode == .solo, SoloTimeBasedSession.isActive {
                     finishSoloTimeBasedSession()
+                } else if wasFirstSession {
+                    self.testResultItem = nil
+                    self.router.popToRoot()
+                    NotificationCenter.default.post(name: .firstSessionTrainingCompleted, object: nil)
+                    AnalyticsManager.shared.track(.twoMinuteTestCompleted, playerId: self.playerStore.selectedPlayerId)
                 } else {
-                    testResultItem = TwoMinuteResultItem(
-                        result: TwoMinuteTestResult.from(logs: engine.repLogs, difficulty: config.difficulty),
-                        logs: engine.repLogs,
+                    self.testResultItem = TwoMinuteResultItem(
+                        result: TwoMinuteTestResult.from(logs: self.engine.repLogs, difficulty: self.config.difficulty),
+                        logs: self.engine.repLogs,
                         showTimingAdaptationFeedback: false
                     )
-                    AnalyticsManager.shared.track(.twoMinuteTestCompleted, playerId: playerStore.selectedPlayerId)
+                    AnalyticsManager.shared.track(.twoMinuteTestCompleted, playerId: self.playerStore.selectedPlayerId)
                 }
             }
         }

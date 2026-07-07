@@ -84,10 +84,8 @@ struct SessionSummaryScreenView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var shareSheetPayload: BlockShareSheetPayload?
-    @State private var showPlayerReport = false
     @State private var navigateToRoleSelection = false
     @State private var roleSelectionTarget: ActivityKind = .awayFromPressure
-    @State private var navigateToProgress = false
     @State private var animatedXPEarned: Int = 0
     @State private var showBadgeUnlockAnimation = false
     @State private var almostTherePrompt: SessionAlmostTherePrompt?
@@ -201,19 +199,6 @@ struct SessionSummaryScreenView: View {
 
     private var levelTrainingDifficulty: DifficultySettings {
         getDifficulty(for: summaryPlayerProgression.currentLevel)
-    }
-
-    private var sessionPlayerReport: PlayerReport {
-        generatePlayerReport(
-            playerName: playerName,
-            progression: summaryPlayerProgression,
-            score: decisionScoreValue,
-            accuracy: coreSummary.accuracy,
-            decisionWindow: session.avgDecisionWindowSeconds ?? 0,
-            trendWindow: progressionWindowTrend,
-            trendAccuracy: progressionAccuracyTrend,
-            recommendation: levelTrainingRecommendation
-        )
     }
 
     init(
@@ -350,21 +335,7 @@ struct SessionSummaryScreenView: View {
             return "\(accuracyPercentValue)% · \(window)"
         }
     }
-    private var progressionMessage: String? {
-        let progress = GuidedCurriculumEngine.currentProgress(playerId: session.playerID)
-        let accuracy = Double(accuracyPercentValue)
-        let avg = session.avgDecisionTime ?? 9
-        let forwardPct = forwardThinkingStats?.percent
-        switch progress.stage {
-        case 1:
-            if accuracy >= 65, avg <= 1.35 { return "You're close to Stage 2." }
-        case 2:
-            if accuracy >= 65, avg <= 1.20, (forwardPct ?? 0) >= 35 { return "You're close to Stage 3." }
-        default:
-            if accuracy >= 70, avg <= 1.05 { return "You're close to the next loop." }
-        }
-        return nil
-    }
+    private var progressionMessage: String? { nil }
 
     /// Display-only Decision Speed Score (0–100); same formula as stored session score.
     private var displayDecisionSpeedScore: Int? { session.estimatedDecisionSpeedScore }
@@ -871,18 +842,8 @@ struct SessionSummaryScreenView: View {
             runFeedbackAnimations()
             evaluateAlmostTherePrompt()
         }
-        .sheet(isPresented: $showPlayerReport) {
-            SessionPlayerReportView(report: sessionPlayerReport)
-        }
         .navigationDestination(isPresented: $navigateToRoleSelection) {
             roleSelectionDestination(for: roleSelectionTarget)
-        }
-        .navigationDestination(isPresented: $navigateToProgress) {
-            PBAProgressView(settingsViewModel: settingsViewModel, profileManager: profileManager)
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(popToRootTrigger)
-                .environmentObject(router)
         }
     }
 
@@ -947,16 +908,6 @@ struct SessionSummaryScreenView: View {
                 lateCount: session.speedCounts.slow,
                 levelUpScale: levelUpScale
             )
-
-            if !recentProgressionSessions.isEmpty {
-                ProgressionView(
-                    sessions: recentProgressionSessions,
-                    scoreTrend: progressionScoreTrend,
-                    windowTrend: progressionWindowTrend,
-                    accuracyTrend: progressionAccuracyTrend,
-                    insight: progressionInsight
-                )
-            }
 
             if let next = coachNextRecommendation {
                 VStack(alignment: .leading, spacing: 10) {
@@ -1143,19 +1094,6 @@ struct SessionSummaryScreenView: View {
                         RoundedRectangle(cornerRadius: 14)
                             .stroke(Color.yellow.opacity(0.55), lineWidth: 1)
                     )
-            }
-            .buttonStyle(PlainButtonStyle())
-
-            Button {
-                showPlayerReport = true
-            } label: {
-                Text("View player report")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.white.opacity(0.95))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .background(Color.white.opacity(0.1))
-                    .cornerRadius(14)
             }
             .buttonStyle(PlainButtonStyle())
 

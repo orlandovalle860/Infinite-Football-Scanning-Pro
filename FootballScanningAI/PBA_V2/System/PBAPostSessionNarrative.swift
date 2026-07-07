@@ -34,7 +34,7 @@ struct PBAPostSessionNarrative: Equatable {
             progressLines: [progressPlaceholderNote],
             coachInsight: "Every rep trains habits that show up under pressure — keep stacking quality reps.",
             nextStepTitle: "Next step",
-            nextStepBody: "Train again to build consistency, or explore the next activity in your curriculum when you're ready.",
+            nextStepBody: "Train again to build consistency.",
             usesProgressPlaceholder: true
         )
     }
@@ -50,8 +50,7 @@ enum PBAPostSessionNarrativeBuilder {
         progressStore: ProgressStore
     ) -> PBAPostSessionNarrative {
         let activityTitle = session.activityType.displayName
-        let insight = CoachInsightGenerator.insightPackage(for: session, previous: previousSession)
-        let headline = primaryMetricHeadlineLead(session: session, baseHeadline: insight.headline)
+        let headline = primaryMetricHeadline(for: session)
 
         var lines: [String] = []
         var placeholder = false
@@ -65,9 +64,8 @@ enum PBAPostSessionNarrativeBuilder {
             placeholder = true
         }
 
-        let insightText = coachInsightBlock(for: session, coachFieldMeaning: insight.fieldMeaning)
-        let next = nextStepRecommendation(session: session, progressStore: progressStore, previous: previousSession)
-        let nextBody = next.body
+        let insightText = coachInsightBlock(for: session)
+        let next = nextStepRecommendation(session: session, previous: previousSession)
 
         return PBAPostSessionNarrative(
             headlineInsight: headline,
@@ -75,7 +73,7 @@ enum PBAPostSessionNarrativeBuilder {
             progressLines: lines,
             coachInsight: insightText,
             nextStepTitle: next.title,
-            nextStepBody: nextBody,
+            nextStepBody: next.body,
             usesProgressPlaceholder: placeholder
         )
     }
@@ -92,10 +90,9 @@ enum PBAPostSessionNarrativeBuilder {
         let accPct = result.totalReps > 0 ? Int(round(Double(result.correctCount) / Double(result.totalReps) * 100)) : 0
         let window = result.avgDecisionWindowSeconds ?? 0
 
-        let insight = CoachInsightGenerator.insightPackage(forTwoMinute: result, previous: previousTwoMinute)
         let headline = previousTwoMinute == nil
             ? headlineForFirstTwoMinute(playerType: playerType, accuracyPercent: accPct, decisionWindowSeconds: window)
-            : insight.headline
+            : primaryMetricHeadline(for: twoMinuteSyntheticSession(result: result, playerId: playerId))
 
         var lines: [String] = []
         var placeholder = false
@@ -111,10 +108,8 @@ enum PBAPostSessionNarrativeBuilder {
         }
 
         let synForInsight = twoMinuteSyntheticSession(result: result, playerId: playerId)
-        let coachText = coachInsightBlock(for: synForInsight, coachFieldMeaning: insight.fieldMeaning)
-
-        let next = nextStepTwoMinute(result: result, previous: previousTwoMinute, progressStore: progressStore, playerType: playerType, playerId: playerId)
-        let nextBody = next.body
+        let coachText = coachInsightBlock(for: synForInsight)
+        let next = nextStepTwoMinute(result: result, previous: previousTwoMinute)
 
         return PBAPostSessionNarrative(
             headlineInsight: headline,
@@ -122,7 +117,7 @@ enum PBAPostSessionNarrativeBuilder {
             progressLines: lines,
             coachInsight: coachText.trimmingCharacters(in: .whitespacesAndNewlines),
             nextStepTitle: next.title,
-            nextStepBody: nextBody,
+            nextStepBody: next.body,
             usesProgressPlaceholder: placeholder
         )
     }
@@ -147,8 +142,7 @@ enum PBAPostSessionNarrativeBuilder {
 
         let headline: String
         if let cur = currentSessionResult {
-            let pkg = CoachInsightGenerator.insightPackage(for: cur, previous: previousSessionRecord)
-            headline = primaryMetricHeadlineLead(session: cur, baseHeadline: pkg.headline)
+            headline = primaryMetricHeadline(for: cur)
         } else if let ps = previousScore, let cs = decisionSpeedScore {
             let d = cs - ps
             if d >= 5 {
@@ -200,15 +194,12 @@ enum PBAPostSessionNarrativeBuilder {
         let nextFallback = trainingCompleteNextStep(
             activity: activity,
             accuracyPercent: accPct,
-            avgSeconds: avgSeconds,
             correct: correct,
-            total: total,
-            previous: previousSessionRecord
+            total: total
         )
         if let cur = currentSessionResult {
-            let insight = CoachInsightGenerator.insightPackage(for: cur, previous: previousSessionRecord)
-            let coachText = coachInsightBlock(for: cur, coachFieldMeaning: insight.fieldMeaning)
-            let nextBody = CoachInsightGenerator.nextStepPackage(for: cur, previous: previousSessionRecord).instruction
+            let coachText = coachInsightBlock(for: cur)
+            let nextBody = simpleNextStep(for: cur, previous: previousSessionRecord)
             return PBAPostSessionNarrative(
                 headlineInsight: headline,
                 progressSectionTitle: "Compared to your last \(activityName) block",
@@ -250,8 +241,7 @@ enum PBAPostSessionNarrativeBuilder {
         )
     }
 
-    /// Activity-aware primary + secondary trend lines (B). No score / percentile.
-    private static func trendLinesDecisionTimeAndCorrect(session: SessionResult, previous: SessionRecord, activityTitle: String, block: Bool) -> [String] {
+  private static func trendLinesDecisionTimeAndCorrect(session: SessionResult, previous: SessionRecord, activityTitle: String, block: Bool) -> [String] {
         let suffix = block ? "block" : "session"
         var decisionWindowLine: String?
         if let c = session.avgDecisionWindowSeconds, let p = previous.avgDecisionWindowSeconds {
@@ -314,50 +304,40 @@ enum PBAPostSessionNarrativeBuilder {
         return Int(round(Double(session.correctCount) / Double(session.totalReps) * 100))
     }
 
-    private static func primaryMetricHeadlineLead(session: SessionResult, baseHeadline: String) -> String {
+    private static func primaryMetricHeadline(for session: SessionResult) -> String {
         let acc = accuracyPercent(session)
-        let window = session.avgDecisionWindowSeconds ?? -0.9
         switch session.activityType {
         case .awayFromPressure:
-            if acc >= 85 { return "First-decision accuracy is improving — \(baseHeadline)" }
-            if acc < 70 { return "Opposite-direction choices are the focus — \(baseHeadline)" }
-            return baseHeadline
+            if acc >= 85 { return "First-decision accuracy is improving" }
+            if acc < 70 { return "Focus on opposite-direction choices under pressure" }
+            return "Solid away-from-pressure block"
         case .dribbleOrPass:
-            if acc >= 82 { return "Choice quality is strong — \(baseHeadline)" }
-            if acc < 70 { return "Fix decision quality first — \(baseHeadline)" }
-            return baseHeadline
+            if acc >= 82 { return "Choice quality is strong" }
+            if acc < 70 { return "Fix decision quality first" }
+            return "Good dribble-or-pass reps"
         case .oneTouchPassing:
-            if window >= 0.53 { return "One-touch timing is ahead of arrival — \(baseHeadline)" }
-            if window < 0.0 { return "One-touch timing is still late — \(baseHeadline)" }
-            return baseHeadline
+            let window = session.avgDecisionWindowSeconds ?? -0.9
+            if window >= 0.53 { return "One-touch timing is ahead of arrival" }
+            if window < 0.0 { return "One-touch timing is still late" }
+            return "Keep sharpening one-touch decisions"
         case .twoMinuteTest:
-            if acc >= 80, window >= 0.51 { return "Balanced session: timing and choices both improved — \(baseHeadline)" }
-            return baseHeadline
+            if acc >= 80 { return "Balanced session: timing and choices both on track" }
+            return "Keep building scanning habits"
         }
     }
 
-    /// Narrative anchor + `CoachInsightGenerator` field meaning can both resolve to the same coach line (e.g. “Speed of play is speed of thought.”).
-    /// Dedupe so the insight card doesn’t show the same sentence twice.
-    private static func coachInsightBlock(for session: SessionResult, coachFieldMeaning: String) -> String {
-        let anchor = maybeNarrativeAnchor(activity: session.activityType, sessionId: session.id, context: .fieldMeaning)
-        let field = coachFieldMeaning.trimmingCharacters(in: .whitespacesAndNewlines)
+    private static func coachInsightBlock(for session: SessionResult) -> String {
         let ctx = gameContextLine(for: session.activityType).trimmingCharacters(in: .whitespacesAndNewlines)
-
-        var parts: [String] = []
-        func appendIfDistinct(_ raw: String) {
-            let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !t.isEmpty else { return }
-            if parts.contains(where: { $0.caseInsensitiveCompare(t) == .orderedSame }) {
-                return
-            }
-            parts.append(t)
+        let acc = accuracyPercent(session)
+        let performance: String
+        if acc >= 80 {
+            performance = "Strong decision quality this session."
+        } else if acc >= 65 {
+            performance = "Decent foundation — aim for earlier, clearer choices."
+        } else {
+            performance = "Reset and look for one clear picture before the ball arrives."
         }
-        if let anchor {
-            appendIfDistinct(anchor)
-        }
-        appendIfDistinct(field)
-        appendIfDistinct(ctx)
-        return parts.joined(separator: " ")
+        return "\(performance) \(ctx)".trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func gameContextLine(for activity: ActivityKind) -> String {
@@ -373,18 +353,30 @@ enum PBAPostSessionNarrativeBuilder {
         }
     }
 
-    private static func nextStepRecommendation(session: SessionResult, progressStore: ProgressStore, previous: SessionRecord?) -> (title: String, body: String) {
-        _ = progressStore
-        let next = CoachInsightGenerator.nextStepPackage(for: session, previous: previous)
-        return ("Next step", next.instruction)
+    private static func nextStepRecommendation(session: SessionResult, previous: SessionRecord?) -> (title: String, body: String) {
+        ("Next step", simpleNextStep(for: session, previous: previous))
     }
 
-    private static func nextStepTwoMinute(result: TwoMinuteTestResult, previous: SessionRecord?, progressStore: ProgressStore, playerType: PlayerType, playerId: UUID?) -> (title: String, body: String) {
-        _ = playerType
-        _ = progressStore
-        _ = playerId
-        let next = CoachInsightGenerator.nextStepPackage(forTwoMinute: result, previous: previous)
-        return ("Next step", next.instruction)
+    private static func nextStepTwoMinute(result: TwoMinuteTestResult, previous: SessionRecord?) -> (title: String, body: String) {
+        let syn = twoMinuteSyntheticSession(result: result, playerId: nil)
+        return ("Next step", simpleNextStep(for: syn, previous: previous))
+    }
+
+    private static func simpleNextStep(for session: SessionResult, previous: SessionRecord?) -> String {
+        let acc = accuracyPercent(session)
+        if let prev = previous, session.correctCount < prev.correct {
+            return "Run another block and commit to your first decision before pressure arrives."
+        }
+        switch session.activityType {
+        case .awayFromPressure:
+            return acc >= 75 ? "Train again to lock in first-touch escapes under pressure." : "Slow the picture down — pick the opposite gate earlier."
+        case .dribbleOrPass:
+            return acc >= 75 ? "Keep stacking reps with forward intent when space is there." : "Prioritize correct choices before speed."
+        case .oneTouchPassing:
+            return "Train again and decide before the pass arrives."
+        case .twoMinuteTest:
+            return "Start a training block or retest when you want a fresh baseline."
+        }
     }
 
     private static func trainingCompleteGameLine(activity: ActivityKind) -> String {
@@ -394,59 +386,17 @@ enum PBAPostSessionNarrativeBuilder {
     private static func trainingCompleteNextStep(
         activity: ActivityKind,
         accuracyPercent: Int,
-        avgSeconds: Double?,
         correct: Int,
-        total: Int,
-        previous: SessionRecord?
+        total: Int
     ) -> (title: String, body: String) {
         let synthetic = SessionResult(
-            playerID: previous?.playerId ?? UUID(),
+            playerID: UUID(),
             activityType: activity,
             correctCount: correct,
             totalReps: max(total, 1),
-            speedCounts: SessionSpeedCounts(fast: 0, medium: 0, slow: 0),
-            avgDecisionTime: avgSeconds,
-            difficulty: previous?.difficulty
+            speedCounts: SessionSpeedCounts(fast: 0, medium: 0, slow: 0)
         )
         _ = accuracyPercent
-        let next = CoachInsightGenerator.nextStepPackage(for: synthetic, previous: previous)
-        return ("Next step", next.instruction)
-    }
-
-    private enum NarrativeAnchorContext {
-        case fieldMeaning
-        case nextStep
-    }
-
-    private static func maybeNarrativeAnchor(activity: ActivityKind, sessionId: UUID, context: NarrativeAnchorContext) -> String? {
-        guard shouldUseNarrativeAnchor(sessionId: sessionId, salt: context == .fieldMeaning ? 401 : 409, threshold: 35) else {
-            return nil
-        }
-        switch (activity, context) {
-        case (.awayFromPressure, .fieldMeaning):
-            return "The window closes before the ball gets to you."
-        case (.dribbleOrPass, .fieldMeaning):
-            return "Speed of play is speed of thought."
-        case (.oneTouchPassing, .fieldMeaning):
-            return "One-touch only works if your decision is made before expected arrival."
-        case (.twoMinuteTest, .fieldMeaning):
-            return "Decide before expected arrival."
-        case (.awayFromPressure, .nextStep):
-            return "Decide before expected arrival"
-        case (.dribbleOrPass, .nextStep):
-            return "The window closes before the ball gets to you"
-        case (.oneTouchPassing, .nextStep):
-            return "Speed of play is speed of thought"
-        case (.twoMinuteTest, .nextStep):
-            return "Decide before expected arrival"
-        }
-    }
-
-    private static func shouldUseNarrativeAnchor(sessionId: UUID, salt: Int, threshold: Int) -> Bool {
-        var hasher = Hasher()
-        hasher.combine(sessionId)
-        hasher.combine(salt)
-        let value = abs(hasher.finalize()) % 100
-        return value < threshold
+        return ("Next step", simpleNextStep(for: synthetic, previous: nil))
     }
 }

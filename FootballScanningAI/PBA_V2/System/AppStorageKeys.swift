@@ -10,6 +10,8 @@ import Foundation
 enum AppStorageKeys {
     /// After the user picks Solo vs Coach Remote (partner) once, subsequent launches go straight to Home.
     static let hasLaunchedBefore = "pba.hasLaunchedBefore"
+    /// True after the user's first training session completes (delayed login funnel).
+    static let hasCompletedFirstSession = FirstSessionOnboardingStore.hasCompletedFirstSessionKey
     /// Kept in sync with ``PBASessionFlowPolicy.pbaLastSelectedTrainingModeKey`` via ``PBASessionFlowPolicy.persistTrainingMode(_:)``.
     static let lastMode = "lastMode"
     /// One-Touch Passing Solo: cached wall return time (seconds) after inline calibration. Enables instant start on following sessions.

@@ -28,8 +28,6 @@ struct OneTouchPassingBlockSummaryView: View {
     @State private var showSessionFeedback = false
     @State private var showDetails = false
     @State private var navigateToNewBlock = false
-    @State private var navigateToCurriculum = false
-    @State private var navigateToProgress = false
     @State private var sessionResultForSummary: SessionResult?
     @State private var isNewPersonalBestForSummary = false
     @State private var newPersonalBestsFromBlock: [NewPersonalBest] = []
@@ -215,10 +213,7 @@ struct OneTouchPassingBlockSummaryView: View {
     }
 
     private var sessionFeedbackCoachSentence: String {
-        if let s = sessionResult {
-            return CoachInsightGenerator.coachInsight(for: s, previous: previousSessionForComparison)
-        }
-        return coachMessage
+        coachMessage
     }
 
     var body: some View {
@@ -377,20 +372,6 @@ struct OneTouchPassingBlockSummaryView: View {
                 .environmentObject(popToRootTrigger)
                 .environmentObject(router)
         }
-        .navigationDestination(isPresented: $navigateToCurriculum) {
-            PBACurriculumView(settingsViewModel: settingsViewModel, profileManager: profileManager, progressStore: progressStore, playerStore: playerStore, popToRootTrigger: popToRootTrigger)
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(popToRootTrigger)
-                .environmentObject(router)
-        }
-        .navigationDestination(isPresented: $navigateToProgress) {
-            PBAProgressView(settingsViewModel: settingsViewModel, profileManager: profileManager)
-                .environmentObject(progressStore)
-                .environmentObject(playerStore)
-                .environmentObject(popToRootTrigger)
-                .environmentObject(router)
-        }
     }
 
     private var blockSummaryContent: some View { partnerBlockSummaryFullContent }
@@ -487,18 +468,6 @@ struct OneTouchPassingBlockSummaryView: View {
                                 .padding(.vertical, 16)
                                 .background(Color.yellow)
                                 .cornerRadius(12)
-                        }
-                        .buttonStyle(PlainButtonStyle())
-                        Button { navigateToCurriculum = true } label: {
-                            Text("Back to Curriculum")
-                                .font(.subheadline)
-                                .foregroundColor(.white.opacity(0.8))
-                        }
-                        .buttonStyle(PlainButtonStyle())
-                        Button { navigateToProgress = true } label: {
-                            Text("View Progress")
-                                .font(.subheadline)
-                                .foregroundColor(.white.opacity(0.8))
                         }
                         .buttonStyle(PlainButtonStyle())
                     }

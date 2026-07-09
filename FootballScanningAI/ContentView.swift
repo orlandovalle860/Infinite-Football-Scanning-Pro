@@ -294,7 +294,7 @@ struct SplashView: View {
         ZStack {
             Color.black
 
-            Image("vpLaunchMark")
+            Image("vpSplashMark")
                 .resizable()
                 .scaledToFit()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

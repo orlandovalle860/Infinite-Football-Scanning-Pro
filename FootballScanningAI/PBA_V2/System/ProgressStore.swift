@@ -78,6 +78,15 @@ final class ProgressStore: ObservableObject {
         objectWillChange.send()
     }
 
+#if DEBUG
+    /// DEBUG: wipe all local session history (first-time user simulation).
+    func clearAllSessionsForDebugReset() {
+        sessions = []
+        persist()
+        recalculateProgress()
+    }
+#endif
+
     func sessions(for activity: ActivityKind) -> [SessionRecord] {
         sessions.filter { $0.activity == activity }
     }

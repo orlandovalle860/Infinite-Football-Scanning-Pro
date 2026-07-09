@@ -57,6 +57,7 @@ enum PartnerRelayCheckpointCoachUI {
         }
 
         if displayRep != coachSyncRepIndex {
+            guard !coordinator.isTransientLifecycleInterruptionActive() else { return }
             coordinator.setCheckpointDrift(displayRep: displayRep, coachRep: coachSyncRepIndex)
         } else {
             coordinator.clearCheckpointDrift()

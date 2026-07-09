@@ -38,10 +38,12 @@ final class TrainingSessionManager: ObservableObject {
     /// Creates a session in Supabase and sets sessionId, playerId, activityId, blockNumber = 1, decisions = [].
     /// Returns the session id on success; nil on failure. Call startActivityBlock() after this to log the first block.
     func startSession(activity: ActivityKind, blockSize: Int, playerId: UUID?) async -> UUID? {
+        let analyticsMode = SessionAnalyticsMode.from(trainingMode: PBASessionFlowPolicy.lastSelectedTrainingMode())
         let id = await SupabaseSessionService.shared.createSessionForDrill(
             activity: activity,
             blockSize: blockSize,
-            playerId: playerId
+            playerId: playerId,
+            mode: analyticsMode
         )
         await MainActor.run {
             if let id = id {
@@ -53,7 +55,11 @@ final class TrainingSessionManager: ObservableObject {
                 blockNumber = 1
                 decisions = []
                 currentSessionActivityId = nil
-                CurrentSessionStore.shared.setSessionIdOnly(id)
+                CurrentSessionStore.shared.setSessionIdOnly(
+                    id,
+                    mode: analyticsMode,
+                    supabaseStartedAt: Date()
+                )
             }
         }
         return id
@@ -64,17 +70,39 @@ final class TrainingSessionManager: ObservableObject {
     /// Returns the session_activity id on success.
     func startActivityBlock() async -> UUID? {
         guard let sessionId = sessionId else { return nil }
+        if let segmentId = CurrentSessionStore.shared.currentSessionActivitySegmentId {
+            let openActivityId = CurrentSessionStore.shared.currentSegmentActivityId ?? activityId
+            let reps = CurrentSessionStore.shared.currentSegmentRepCount
+            await SupabaseSessionService.shared.endSessionActivitySegment(
+                segmentId: segmentId,
+                activityId: openActivityId,
+                repCount: reps
+            )
+            await MainActor.run {
+                CurrentSessionStore.shared.clearCurrentSessionActivitySegment()
+            }
+        }
         let number = blockNumber
         let id = await SupabaseSessionService.shared.logSessionActivity(
             sessionId: sessionId,
             activityId: activityId,
             blockNumber: number
         )
+        let segmentId = await SupabaseSessionService.shared.createSessionActivitySegment(
+            sessionId: sessionId,
+            activityId: activityId
+        )
         await MainActor.run {
             if let id = id {
                 currentSessionActivityId = id
                 CurrentSessionStore.shared.setCurrentSessionActivityId(id)
                 blockNumber = number + 1
+            }
+            if let segmentId {
+                CurrentSessionStore.shared.setCurrentSessionActivitySegmentId(
+                    segmentId,
+                    activityId: activityId
+                )
             }
         }
         return id
@@ -83,15 +111,21 @@ final class TrainingSessionManager: ObservableObject {
     /// Appends a decision to the in-memory decisions array for this session.
     func recordDecision(_ decision: TrainingDecisionRecord) {
         decisions.append(decision)
+        CurrentSessionStore.shared.incrementCurrentSegmentRepCount()
     }
 
     /// Ends the current session: ends session_activity in Supabase, writes session_summary, updates/clears CurrentSessionStore, then clears manager state.
     /// Pass the SessionRecord built from your block results (e.g. from the block summary view). Uses the manager’s decisions array for the summary.
     func finishSession(record: SessionRecord, onSynced: (() -> Void)? = nil) {
-        SupabaseSessionService.shared.saveSession(record: record, decisions: decisions, onSynced: { [weak self] in
-            self?.clear()
-            onSynced?()
-        })
+        SupabaseSessionService.shared.saveSession(
+            record: record,
+            decisions: decisions,
+            sessionMode: SessionAnalyticsMode.from(trainingMode: PBASessionFlowPolicy.lastSelectedTrainingMode()),
+            onSynced: { [weak self] in
+                self?.clear()
+                onSynced?()
+            }
+        )
     }
 
     /// Resets all stored state. Called automatically after finishSession; can be called to abandon a session without saving.

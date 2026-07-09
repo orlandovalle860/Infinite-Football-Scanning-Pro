@@ -88,6 +88,11 @@ struct PartnerRelayDisplayWaitingOverlay: View {
                     Text(joinCode == nil ? "Waiting for coach..." : "Waiting to connect...")
                         .font(.title3.weight(.semibold))
                         .foregroundColor(.white.opacity(0.88))
+                    if onExitSession != nil {
+                        Text("Tap back to cancel")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.62))
+                    }
                     if joinCode != nil {
                         Text("Enter this join code on the coach device")
                             .font(.subheadline)
@@ -97,15 +102,12 @@ struct PartnerRelayDisplayWaitingOverlay: View {
                     }
                     if showTimeoutHelper {
                         VStack(spacing: 4) {
-                            Text("Having trouble connecting?")
+                            Text("Still waiting… Check connection or go back")
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundColor(.white.opacity(0.9))
-                            Text("Make sure both devices are on the same WiFi")
-                                .font(.subheadline)
-                                .foregroundColor(.white.opacity(0.8))
-                            Text("or connected to the same hotspot")
-                                .font(.subheadline)
-                                .foregroundColor(.white.opacity(0.8))
+                            Text("Make sure both devices are on the same WiFi or hotspot")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.72))
                         }
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 28)
@@ -122,13 +124,33 @@ struct PartnerRelayDisplayWaitingOverlay: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.vertical, 32)
+
+            if let onExitSession {
+                VStack {
+                    HStack {
+                        Button(action: onExitSession) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundColor(.white.opacity(0.92))
+                                .frame(width: 38, height: 38)
+                                .background(Color.white.opacity(0.12))
+                                .clipShape(Circle())
+                        }
+                        .accessibilityLabel("Back")
+                        Spacer()
+                    }
+                    Spacer()
+                }
+                .padding(.top, 72)
+                .padding(.horizontal, 14)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .allowsHitTesting(false)
+        .allowsHitTesting(onExitSession != nil)
         .onAppear {
             PartnerPersistDebug.log("PartnerRelayDisplayWaitingOverlay onAppear (join-code / waiting UI)")
             showTimeoutHelper = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
                 showTimeoutHelper = true
             }
         }
@@ -176,7 +198,25 @@ struct PartnerRelayDisplayWaitingWithSessionErrorOverlay: View {
                     Spacer(minLength: 0)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .allowsHitTesting(false)
+                if let onExitSession {
+                    VStack {
+                        HStack {
+                            Button(action: onExitSession) {
+                                Image(systemName: "chevron.left")
+                                    .font(.system(size: 18, weight: .semibold))
+                                    .foregroundColor(.white.opacity(0.92))
+                                    .frame(width: 38, height: 38)
+                                    .background(Color.white.opacity(0.12))
+                                    .clipShape(Circle())
+                            }
+                            .accessibilityLabel("Back")
+                            Spacer()
+                        }
+                        Spacer()
+                    }
+                    .padding(.top, 72)
+                    .padding(.horizontal, 14)
+                }
             } else {
                 PartnerRelayDisplayWaitingOverlay(
                     joinCode: joinCode,

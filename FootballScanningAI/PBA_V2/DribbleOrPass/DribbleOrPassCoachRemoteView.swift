@@ -10,7 +10,7 @@ import Combine
 import AVFoundation
 import MultipeerConnectivity
 
-enum DribbleOrPassCoachState {
+enum DribbleOrPassCoachState: Equatable {
     case ready
     case waitingForRepStart(repIndex: Int)
     case armedForPass(repIndex: Int)
@@ -30,6 +30,8 @@ struct DribbleOrPassCoachRemoteView: View {
     private static let partnerTransportMode = PartnerTransportPolicy.coachRemoteTransportMode
 
     @ObservedObject private var relaySharedRemoteService = TrainingPartnerConnectionCoordinator.shared.coachRelayRemoteService
+    @ObservedObject private var timedSession = TimedSessionController.shared
+    @ObservedObject private var partnerCoordinator = TrainingPartnerConnectionCoordinator.shared
     @StateObject private var multipeerRemoteService = RemoteService(transport: TwoMinuteSessionTransport.makeInitial(for: .multipeer))
 
     private var remoteService: RemoteService {
@@ -78,20 +80,48 @@ struct DribbleOrPassCoachRemoteView: View {
 
     private let totalReps = 12
 
-    /// Whether the active transport is connected (Multipeer peer name vs relay WebSocket).
+    /// Whether the active transport is connected (Multipeer peer name vs relay WebSocket + display peer).
     private var coachSessionConnected: Bool {
-        if TrainingPartnerConnectionCoordinator.shared.isConnected {
-            return true
-        }
-        switch Self.partnerTransportMode {
-        case .multipeer:
-            return connectionManager.connectedPeerName != nil
-        case .relayWebSocket:
-            return remoteService.connectionState == .connected && coachRelayDisplayPeerJoined
-        }
+        TrainingPartnerConnectionCoordinator.shared.isPartnerTransportLinkLive
     }
 
     var body: some View {
+        coachRemoteRootStack
+            .animation(.easeInOut(duration: 0.2), value: showReconnectRestartOverlay)
+            .padding(24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .onReceive(NotificationCenter.default.publisher(for: .twoMinuteMessageReceived)) { notification in
+                handleTwoMinuteMessageReceived(notification)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .partnerSoftReconnectRepRestart).receive(on: RunLoop.main)) { _ in
+                guard !TrainingPartnerConnectionCoordinator.shared.isPartnerSoftReconnectRepRestartSuppressed else { return }
+                applyPartnerSoftReconnectFromCoordinatorNotificationDribbleOrPass()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .partnerDisplayRepEngineBecameReady).receive(on: RunLoop.main)) { _ in
+                applyPartnerTrainAgainCoachRemoteReset()
+            }
+            .onAppear(perform: handleCoachRemoteAppear)
+            .onDisappear(perform: handleCoachRemoteDisappear)
+            .onChange(of: connectionManager.connectedPeerName) { oldName, newName in
+                guard Self.partnerTransportMode == .multipeer else { return }
+                guard oldName != nil, newName == nil else { return }
+                resetLocalUIForDisconnect(source: "connectedPeerName=nil")
+            }
+            .onChange(of: remoteService.connectionState) { oldState, newState in
+                handleRelayRemoteConnectionChange(oldState: oldState, newState: newState)
+            }
+            .onChange(of: coachSessionConnected) { wasConnected, connected in
+                handleCoachSessionConnectedChange(wasConnected: wasConnected, connected: connected)
+            }
+            .onChange(of: state) { _, newState in
+                recoverFromTimedSessionBlockCompleteIfNeeded(newState)
+            }
+            .preferredColorScheme(.dark)
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var coachRemoteRootStack: some View {
         ZStack {
             LinearGradient(
                 gradient: Gradient(colors: [
@@ -104,11 +134,7 @@ struct DribbleOrPassCoachRemoteView: View {
             .ignoresSafeArea()
             Color.clear.contentShape(Rectangle()).onTapGesture { }
             VStack(spacing: 24) {
-                switch state {
-                case .ready, .waitingForRepStart, .armedForPass, .logging:
-                    readyView
-                case .blockComplete: blockCompleteView
-                }
+                coachRemotePhaseContent
             }
             if Self.partnerTransportMode == .relayWebSocket {
                 PartnerRelayLifecycleBannerOverlay()
@@ -129,170 +155,198 @@ struct DribbleOrPassCoachRemoteView: View {
                     .allowsHitTesting(false)
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: showReconnectRestartOverlay)
-        .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onReceive(NotificationCenter.default.publisher(for: .twoMinuteMessageReceived)) { notification in
-            guard let msg = notification.object as? TwoMinuteMessage else { return }
-            if case .repStarted(let repIndex, _) = msg {
-                handleRepStartedAcknowledgement(repIndex: repIndex)
+    }
+
+    @ViewBuilder
+    private var coachRemotePhaseContent: some View {
+        switch state {
+        case .ready, .waitingForRepStart, .armedForPass, .logging:
+            readyView
+        case .blockComplete:
+            if TimedSessionDisplayIntegration.coachRemoteShowsBlockCompleteUI {
+                blockCompleteView
+            } else {
+                readyView
             }
-            if case .beepArmed(let repIndex, _) = msg {
-                handleBeepArmed(repIndex: repIndex)
-            }
-            if case .partnerSessionCheckpoint(let sourceRole, _, let repIndex, _, _, _) = msg, sourceRole == "display" {
-                handleDisplayRepSignal(repIndex: repIndex)
-            }
-            if case .sessionEnded = msg {
-                #if DEBUG
-                if Self.partnerTransportMode == .relayWebSocket {
-                    dopCoachRelayLog("sessionEnded received")
-                    CoachPersistDebug.log(
-                        "sessionEnded notification — preserve join code for quick restart (clear only on explicit end/disconnect)",
-                        joinField: coachRelayJoinCodeInput,
-                        peerJoined: coachRelayDisplayPeerJoined
-                    )
-                }
-                #endif
-                state = .ready
-                hasCompletedPassTempoCalibration = true
-                partnerCalibration.reset()
-                hasChosenCalibrationAction = true
-                shouldRunCalibration = false
-                showConnectedConfirmation = false
-                hasStartedConnectedToCalibrationTransition = false
-                clearRepStartAckWaitState()
-                resetCoachSessionInput()
-                // Stay in activity-ready state; explicit end/disconnect paths handle full reset.
-            }
-            PartnerRelayCheckpointCoachUI.handleDisplayCheckpointMessage(
-                msg,
-                relayWebSocket: Self.partnerTransportMode == .relayWebSocket,
-                expectedActivityId: ActivityKind.dribbleOrPass.sessionActivityActivityId,
-                coachSyncRepIndex: coachSyncRepIndexForCheckpoint()
-            )
         }
-        .onReceive(NotificationCenter.default.publisher(for: .partnerSoftReconnectRepRestart).receive(on: RunLoop.main)) { _ in
-            guard !TrainingPartnerConnectionCoordinator.shared.isPartnerSoftReconnectRepRestartSuppressed else { return }
-            applyPartnerSoftReconnectFromCoordinatorNotificationDribbleOrPass()
+    }
+
+    private func handleTwoMinuteMessageReceived(_ notification: Notification) {
+        guard let msg = notification.object as? TwoMinuteMessage else { return }
+        if case .repStarted(let repIndex, _) = msg {
+            handleRepStartedAcknowledgement(repIndex: repIndex)
         }
-        .onAppear {
-            didNavigateBackToCoachHubAfterDisplayDisconnect = false
-            didAttemptCoachRelayAutoReconnect = false
+        if case .beepArmed(let repIndex, _) = msg {
+            handleBeepArmed(repIndex: repIndex)
+        }
+        if case .partnerSessionCheckpoint(let sourceRole, _, let repIndex, _, _, _) = msg, sourceRole == "display" {
+            handleDisplayRepSignal(repIndex: repIndex)
+        }
+        if case .sessionEnded(let source, _) = msg,
+           !TimedSessionController.shared.isManagingSession || source != .display {
+            #if DEBUG
+            if Self.partnerTransportMode == .relayWebSocket {
+                dopCoachRelayLog("sessionEnded received")
+                CoachPersistDebug.log(
+                    "sessionEnded notification — preserve join code for quick restart (clear only on explicit end/disconnect)",
+                    joinField: coachRelayJoinCodeInput,
+                    peerJoined: coachRelayDisplayPeerJoined
+                )
+            }
+            #endif
+            state = .ready
             hasCompletedPassTempoCalibration = true
             partnerCalibration.reset()
-            showConnectedConfirmation = false
-            hasStartedConnectedToCalibrationTransition = false
             hasChosenCalibrationAction = true
             shouldRunCalibration = false
-            #if DEBUG
-            if Self.partnerTransportMode == .relayWebSocket {
-                CoachPersistDebug.log("onAppear", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+            showConnectedConfirmation = false
+            hasStartedConnectedToCalibrationTransition = false
+            clearRepStartAckWaitState()
+            resetCoachSessionInput()
+        }
+        PartnerRelayCheckpointCoachUI.handleDisplayCheckpointMessage(
+            msg,
+            relayWebSocket: Self.partnerTransportMode == .relayWebSocket,
+            expectedActivityId: ActivityKind.dribbleOrPass.sessionActivityActivityId,
+            coachSyncRepIndex: coachSyncRepIndexForCheckpoint()
+        )
+    }
+
+    private func handleCoachRemoteAppear() {
+        didNavigateBackToCoachHubAfterDisplayDisconnect = false
+        didAttemptCoachRelayAutoReconnect = false
+        hasCompletedPassTempoCalibration = true
+        partnerCalibration.reset()
+        showConnectedConfirmation = false
+        hasStartedConnectedToCalibrationTransition = false
+        hasChosenCalibrationAction = true
+        shouldRunCalibration = false
+        #if DEBUG
+        if Self.partnerTransportMode == .relayWebSocket {
+            CoachPersistDebug.log("onAppear", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+        }
+        #endif
+        TrainingPartnerConnectionCoordinator.shared.beginPartnerTrainingSessionIfNeeded()
+        let coordinator = TrainingPartnerConnectionCoordinator.shared
+        coordinator.restoreCoachTimedSessionMirrorIfNeeded()
+        coordinator.markSessionCalibrationResolved(
+            averageTravelTimeSeconds: PartnerPassTempoCalibrationStore.seededAverageTravelTimeSeconds(),
+            trainingMode: .partner
+        )
+        if Self.partnerTransportMode == .multipeer {
+            TrainingPartnerConnectionCoordinator.shared.prepareMultipeerCoachRemote(connectionManager: connectionManager)
+        }
+        if Self.partnerTransportMode == .relayWebSocket {
+            attemptCoachRelayAutoReconnectIfNeeded()
+        }
+        didBroadcastCoachSessionStart = false
+        if coachSessionConnected {
+            broadcastCoachSessionStartIfNeeded()
+        }
+        beginConnectedToCalibrationTransitionIfNeeded()
+    }
+
+    private func handleCoachRemoteDisappear() {
+        #if DEBUG
+        if Self.partnerTransportMode == .relayWebSocket {
+            CoachPersistDebug.log("onDisappear — enter", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+        }
+        CoachPersistDebug.log("onDisappear — no transport teardown from view", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+        #endif
+    }
+
+    private func handleCoachSessionConnectedChange(wasConnected: Bool, connected: Bool) {
+        if connected {
+            if !wasConnected,
+               TrainingPartnerConnectionCoordinator.shared.shouldPersistPartnerPairing,
+               let snap = coachRepIndexSnapshotAtDisconnect,
+               snap == coachSyncRepIndexForCheckpoint() {
+                triggerReconnectRestartOverlay()
             }
-            #endif
-            TrainingPartnerConnectionCoordinator.shared.beginPartnerTrainingSessionIfNeeded()
-            let coordinator = TrainingPartnerConnectionCoordinator.shared
-            coordinator.markSessionCalibrationResolved(
-                averageTravelTimeSeconds: PartnerPassTempoCalibrationStore.seededAverageTravelTimeSeconds(),
-                trainingMode: .partner
-            )
-            if Self.partnerTransportMode == .multipeer {
-                TrainingPartnerConnectionCoordinator.shared.prepareMultipeerCoachRemote(connectionManager: connectionManager)
-            }
-            if Self.partnerTransportMode == .relayWebSocket {
-                attemptCoachRelayAutoReconnectIfNeeded()
-            }
-            didBroadcastCoachSessionStart = false
-            if coachSessionConnected {
-                broadcastCoachSessionStartIfNeeded()
-            }
+            coachRepIndexSnapshotAtDisconnect = nil
+            broadcastCoachSessionStartIfNeeded()
             beginConnectedToCalibrationTransitionIfNeeded()
-        }
-        .onDisappear {
-            #if DEBUG
-            if Self.partnerTransportMode == .relayWebSocket {
-                CoachPersistDebug.log("onDisappear — enter", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
-            }
-            #endif
-            #if DEBUG
-            CoachPersistDebug.log("onDisappear — no transport teardown from view", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
-            #endif
-        }
-        .onChange(of: connectionManager.connectedPeerName) { oldName, newName in
-            guard Self.partnerTransportMode == .multipeer else { return }
-            guard oldName != nil, newName == nil else { return }
-            resetLocalUIForDisconnect(source: "connectedPeerName=nil")
-        }
-        .onChange(of: remoteService.connectionState) { oldState, newState in
-            #if DEBUG
-            if Self.partnerTransportMode == .relayWebSocket {
-                dopCoachRelayLog("WebSocket remoteService.connectionState -> \(newState.rawValue)")
-            }
-            #endif
-            guard Self.partnerTransportMode == .relayWebSocket else { return }
-            guard oldState == .connected, newState == .disconnected else { return }
-            #if DEBUG
-            CoachPersistDebug.log("onChange remoteService.connectionState connected→disconnected", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
-            #endif
-            if TrainingPartnerConnectionCoordinator.shared.shouldPersistPartnerPairing {
-                #if DEBUG
-                dopCoachRelayLog("relay socket dropped — partner training still active; no auto-join (confirm code matches iPad)")
-                CoachPersistDebug.log("keeping lastCoachRelayJoinCode (persist pairing); next screen may auto HTTP re-join", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
-                #endif
-                return
-            }
-            #if DEBUG
-            CoachPersistDebug.log("onChange disconnect — local UI reset only (pairing teardown belongs to coordinator)", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
-            #endif
-            resetLocalUIForDisconnect(source: "relayRemoteService=disconnected")
-        }
-        .onChange(of: coachSessionConnected) { wasConnected, connected in
-            if connected {
-                if !wasConnected,
-                   TrainingPartnerConnectionCoordinator.shared.shouldPersistPartnerPairing,
-                   let snap = coachRepIndexSnapshotAtDisconnect,
-                   snap == coachSyncRepIndexForCheckpoint() {
-                    triggerReconnectRestartOverlay()
-                }
-                coachRepIndexSnapshotAtDisconnect = nil
-                broadcastCoachSessionStartIfNeeded()
-                beginConnectedToCalibrationTransitionIfNeeded()
+        } else {
+            if TrainingPartnerConnectionCoordinator.shared.shouldPersistPartnerPairing, wasConnected {
+                coachRepIndexSnapshotAtDisconnect = coachSyncRepIndexForCheckpoint()
             } else {
-                if TrainingPartnerConnectionCoordinator.shared.shouldPersistPartnerPairing, wasConnected {
-                    coachRepIndexSnapshotAtDisconnect = coachSyncRepIndexForCheckpoint()
-                } else {
-                    coachRepIndexSnapshotAtDisconnect = nil
-                }
-                // iOS background / relay suspend tears down the socket while partner training stays active.
-                // Keep the broadcast flag so we do not re-send `sessionStarted` and recreate the iPad drill surface mid-block.
-                if !TrainingPartnerConnectionCoordinator.shared.shouldPersistPartnerPairing {
-                    didBroadcastCoachSessionStart = false
-                }
-                showConnectedConfirmation = false
-                hasStartedConnectedToCalibrationTransition = false
-                hasCompletedPassTempoCalibration = true
-                hasChosenCalibrationAction = true
-                shouldRunCalibration = false
+                coachRepIndexSnapshotAtDisconnect = nil
             }
+            if !TrainingPartnerConnectionCoordinator.shared.shouldPersistPartnerPairing {
+                didBroadcastCoachSessionStart = false
+            }
+            showConnectedConfirmation = false
+            hasStartedConnectedToCalibrationTransition = false
+            hasCompletedPassTempoCalibration = true
+            hasChosenCalibrationAction = true
+            shouldRunCalibration = false
         }
-        .preferredColorScheme(.dark)
-        .navigationTitle("")
-        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func recoverFromTimedSessionBlockCompleteIfNeeded(_ newState: DribbleOrPassCoachState) {
+        guard TimedSessionDisplayIntegration.coachRemoteLoopsEngineChunks else { return }
+        guard case .blockComplete = newState else { return }
+        currentRepIndex = 0
+        clearRepStartAckWaitState()
+        state = .ready
+        resetCoachSessionInput()
+    }
+
+    private func handleRelayRemoteConnectionChange(oldState: ConnectionState, newState: ConnectionState) {
+        #if DEBUG
+        if Self.partnerTransportMode == .relayWebSocket {
+            dopCoachRelayLog("WebSocket remoteService.connectionState -> \(newState.rawValue)")
+        }
+        #endif
+        guard Self.partnerTransportMode == .relayWebSocket else { return }
+        guard oldState == .connected, newState == .disconnected else { return }
+        #if DEBUG
+        CoachPersistDebug.log("onChange remoteService.connectionState connected→disconnected", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+        #endif
+        if TrainingPartnerConnectionCoordinator.shared.shouldPersistPartnerPairing {
+            #if DEBUG
+            dopCoachRelayLog("relay socket dropped — partner training still active; no auto-join (confirm code matches iPad)")
+            CoachPersistDebug.log("keeping lastCoachRelayJoinCode (persist pairing); next screen may auto HTTP re-join", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+            #endif
+            return
+        }
+        #if DEBUG
+        CoachPersistDebug.log("onChange disconnect — local UI reset only (pairing teardown belongs to coordinator)", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+        #endif
+        resetLocalUIForDisconnect(source: "relayRemoteService=disconnected")
     }
 
     private func broadcastCoachSessionStartIfNeeded() {
         guard !didBroadcastCoachSessionStart else { return }
         didBroadcastCoachSessionStart = true
+        if TrainingPartnerConnectionCoordinator.shared.shouldCoachDeferToDisplayTimedSession() {
+            return
+        }
+        TrainingPartnerConnectionCoordinator.shared.prepareCoachRemoteForBroadcastSessionStart(activity: .dribbleOrPass)
         TrainingPartnerConnectionCoordinator.shared.broadcastSessionStartedFromCoach(activity: .dribbleOrPass, totalReps: totalReps)
     }
 
     private var readyView: some View {
         VStack(spacing: 20) {
-            if !coachSessionConnected {
+            if !coachSessionConnected, timedSession.isSessionActive {
+                CoachRemoteWaitingForDisplaySessionView(
+                    headerTitle: "Coach — \(ActivityKind.dribbleOrPass.displayName)",
+                    transportConnected: false,
+                    statusMessage: "Reconnecting to session…"
+                )
+            } else if !coachSessionConnected {
                 connectionSection
             } else if showConnectedConfirmation {
                 PartnerConnectedConfirmationView()
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
+            } else if !TimedSessionDisplayIntegration.coachRemoteRepControlEnabled {
+                CoachRemoteWaitingForDisplaySessionView(
+                    headerTitle: "Coach — \(ActivityKind.dribbleOrPass.displayName)",
+                    transportConnected: coachSessionConnected,
+                    statusMessage: partnerCoordinator.isPartnerRelayReconnecting
+                        ? "Reconnecting to session…"
+                        : CoachRemoteCopy.waitingForDisplaySetup
+                )
             } else {
                 sharedSessionInput(repIndex: currentRepIndex)
             }
@@ -301,7 +355,8 @@ struct DribbleOrPassCoachRemoteView: View {
 
     private func sharedSessionInput(repIndex: Int) -> some View {
         CoachSessionView(
-            coachRemoteHeaderTitle: "Coach — Dribble or Pass (\(totalReps) reps)",
+            coachRemoteHeaderTitle: "Coach — \(ActivityKind.dribbleOrPass.displayName)",
+            showsBlockRepProgress: TimedSessionDisplayIntegration.showsCoachBlockRepProgress,
             totalReps: totalReps,
             currentRepOneBased: currentRepIndex + 1,
             preBeepDelayRange: 0.0...0.0,
@@ -327,7 +382,15 @@ struct DribbleOrPassCoachRemoteView: View {
 
     @discardableResult
     private func startNextRepIfReady() -> Bool {
-        guard currentRepIndex < totalReps else { return false }
+        guard TimedSessionDisplayIntegration.coachRemoteRepControlEnabled else { return false }
+        if TimedSessionDisplayIntegration.coachRemoteLoopsEngineChunks {
+            currentRepIndex = TimedSessionDisplayIntegration.coachRemoteWrapRepIndex(
+                currentRepIndex,
+                chunkSize: totalReps
+            )
+        } else {
+            guard currentRepIndex < totalReps else { return false }
+        }
         if case .blockComplete = state { return false }
         pendingDirectionLogRepZeroBased = nil
         let now = Date().timeIntervalSince1970
@@ -549,8 +612,8 @@ struct DribbleOrPassCoachRemoteView: View {
         let coord = TrainingPartnerConnectionCoordinator.shared
         guard let code = coord.lastCoachRelayJoinCode,
               !code.isEmpty,
-              remoteService.connectionState != .connected else {
-            CoachPersistDebug.log("auto-reconnect skipped (no code or already connected)", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+              !coord.isPartnerTransportLinkLive else {
+            CoachPersistDebug.log("auto-reconnect skipped (no code or transport live)", joinField: coachRelayJoinCodeInput, peerJoined: coord.coachRelayDisplayPeerPresent)
             return
         }
         didAttemptCoachRelayAutoReconnect = true
@@ -561,9 +624,6 @@ struct DribbleOrPassCoachRemoteView: View {
 
     private var blockCompleteView: some View {
         VStack(spacing: 20) {
-            Text("Rep \(totalReps) of \(totalReps)")
-                .font(.caption)
-                .foregroundColor(.white.opacity(0.45))
             Spacer()
             Text("Block complete")
                 .font(.title2.bold())
@@ -590,6 +650,13 @@ struct DribbleOrPassCoachRemoteView: View {
 
     /// Return to Coach Remote **Start Session** (activity grid). Does not message the display or start a new drill.
     private func coachStartNextBlockTapped() {
+        if TimedSessionDisplayIntegration.coachRemoteLoopsEngineChunks {
+            currentRepIndex = 0
+            clearRepStartAckWaitState()
+            state = .ready
+            resetCoachSessionInput()
+            return
+        }
         if coachSessionConnected {
             remoteService.send(.startNextBlock(timestamp: Date()))
         }
@@ -629,16 +696,21 @@ struct DribbleOrPassCoachRemoteView: View {
     }
 
     private func advanceCoachRepIndexAfterPass(completedRepIndex: Int) {
-        currentRepIndex = completedRepIndex + 1
         clearRepStartAckWaitState()
-        if currentRepIndex >= totalReps {
-            CoachFirstRunGuidanceStore.markCompletedFirstRun(activityId: ActivityKind.dribbleOrPass.sessionActivityActivityId)
-            state = .blockComplete
-            pendingDirectionLogRepZeroBased = nil
-        } else {
+        if let nextIndex = TimedSessionDisplayIntegration.coachRemoteNextRepIndexAfterPass(
+            completedRepIndex: completedRepIndex,
+            chunkSize: totalReps
+        ) {
+            currentRepIndex = nextIndex
             state = .ready
             resetCoachSessionInput()
+            pendingDirectionLogRepZeroBased = nil
+            return
         }
+        currentRepIndex = completedRepIndex + 1
+        CoachFirstRunGuidanceStore.markCompletedFirstRun(activityId: ActivityKind.dribbleOrPass.sessionActivityActivityId)
+        state = .blockComplete
+        pendingDirectionLogRepZeroBased = nil
     }
 
     private func triggerReconnectRestartOverlay() {
@@ -655,6 +727,14 @@ struct DribbleOrPassCoachRemoteView: View {
         state = .ready
         resetCoachSessionInput()
         triggerReconnectRestartOverlay()
+    }
+
+    private func applyPartnerTrainAgainCoachRemoteReset() {
+        guard TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive else { return }
+        currentRepIndex = 0
+        clearRepStartAckWaitState()
+        state = .ready
+        resetCoachSessionInput()
     }
 
     private func coachSyncRepIndexForCheckpoint() -> Int {
@@ -741,6 +821,11 @@ struct DribbleOrPassCoachRemoteView: View {
                 guard self.repStartHardResetToken == hardResetToken else { return }
                 guard case .waitingForRepStart(let stillWaitingRep) = state, stillWaitingRep == repIndex else { return }
                 guard pendingRepStartHardResetRepIndex == repIndex else { return }
+                if CoachRepFlowDecoupling.shouldDeferRepStartAckHardReset(repIndex: repIndex) {
+                    pendingRepStartHardResetRepIndex = nil
+                    self.scheduleRepStartAckTimeout(for: repIndex)
+                    return
+                }
                 state = .ready
                 pendingRepStartHardResetRepIndex = nil
                 resetCoachSessionInput()

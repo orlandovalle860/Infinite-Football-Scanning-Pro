@@ -52,7 +52,7 @@ struct DribbleOrPassDisplaySessionView: View {
     /// Solo: wall time when the current rep's beep fired; anchors pass tolerance window.
     @State private var soloRepBeepWallTime: Date?
     @State private var soloLifetimeRepDisplayCount = SoloLifetimeRepCounter.totalReps(for: .dribbleOrPass)
-    @State private var soloLifetimeRecordedRepIndices = Set<Int>()
+    @State private var soloLifetimeRecordedRepIndices = Set<String>()
     @StateObject private var soloSessionTimer = SoloSessionTimerController()
     @StateObject private var soloActionIdleCue = SoloActionIdleCueState()
     @State private var showSoloTimedComplete = false
@@ -83,9 +83,9 @@ struct DribbleOrPassDisplaySessionView: View {
         self.mode = mode
         self.settingsViewModel = settingsViewModel
         self.profileManager = profileManager
-        let repCount = SoloTimeBasedSession.blockRepCount(
+        let repCount = TimedSessionEnginePolicy.enginePlanBlockSize(
             activityId: ActivityKind.dribbleOrPass.sessionActivityActivityId,
-            soloFallback: 12,
+            soloFallback: TimedSessionEnginePolicy.timedSessionBlockSize,
             mode: mode
         )
         let plan = DribbleOrPassScenarioGenerator.generatePlan(forBlockSize: repCount)
@@ -98,13 +98,19 @@ struct DribbleOrPassDisplaySessionView: View {
         _partnerRelaySession = ObservedObject(wrappedValue: TrainingPartnerConnectionCoordinator.shared.relayDisplaySession)
     }
 
-    private var blockTotalReps: Int {
-        SoloTimeBasedSession.blockRepCount(
+    private var enginePlanRepCount: Int {
+        TimedSessionEnginePolicy.enginePlanBlockSize(
             activityId: ActivityKind.dribbleOrPass.sessionActivityActivityId,
-            soloFallback: 12,
+            soloFallback: TimedSessionEnginePolicy.timedSessionBlockSize,
             mode: mode
         )
     }
+
+    private var runEngineContinuously: Bool {
+        TimedSessionEnginePolicy.runEngineContinuously
+    }
+
+    private var blockTotalReps: Int { enginePlanRepCount }
 
     private var effectiveUsesAutoLoop: Bool {
         SoloTimeBasedDisplaySessionSupport.effectiveUsesAutoLoop(mode: mode)
@@ -131,7 +137,10 @@ struct DribbleOrPassDisplaySessionView: View {
                 waitForPartnerReady: mode.requiresPhoneDisplayRelay,
                 partnerReady: partnerReadyForCountdown,
                 suppressCoachMessagesDuringCountdown: $blockCoachDrillDuringSessionCountdown,
-                isEnabled: !effectiveUsesAutoLoop
+                isEnabled: TimedSessionDisplayIntegration.showsPartnerSessionStartCountdown(
+                    mode: mode,
+                    effectiveUsesAutoLoop: effectiveUsesAutoLoop
+                )
             )
             .onReceive(NotificationCenter.default.publisher(for: .relayForegroundReconnectCompleted)) { _ in
                 handleRelayForegroundReconnectCompleted()
@@ -152,6 +161,7 @@ struct DribbleOrPassDisplaySessionView: View {
         dribbleOrPassEngineSyncModifiers
             .onAppear(perform: handleDribbleOrPassOnAppear)
             .onDisappear(perform: handleDribbleOrPassOnDisappear)
+            .onTimedSessionContainerEnd { userInitiatedEndSoloSession() }
             .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { notification in
                 handleAudioSessionInterruption(notification)
             }
@@ -206,32 +216,38 @@ struct DribbleOrPassDisplaySessionView: View {
             .onChange(of: hasCompletedPassTempoCalibration) { _, completed in
                 guard completed else { return }
                 tryPresentSessionStartCue()
-                if mode == .solo {
-                    onSoloCalibrationReadyIfNeeded()
-                }
+                onSoloCalibrationReadyIfNeeded()
                 runNextSoloRep()
+                notifyPartnerTimedDrillSurfaceReadyIfNeeded()
             }
             .onChange(of: soloWallCalibration.isCalibrating) { _, isCalibrating in
                 guard !isCalibrating else { return }
                 tryPresentSessionStartCue()
+                onSoloCalibrationReadyIfNeeded()
                 runNextSoloRep()
             }
     }
 
     private var dribbleOrPassSessionContentWithCover: some View {
-        dribbleOrPassSessionStack
+        SessionScreenLayout {
+            dribbleOrPassSessionStack
+        }
             .contentShape(Rectangle())
             .onTapGesture(perform: handleDribbleOrPassTap)
             .soloSessionTimerOverlay(
-                isVisible: mode == .solo && !soloWallCalibration.isCalibrating && soloSessionTimer.isVisible,
-                text: soloSessionTimer.displayText,
+                isVisible: TimedSessionDisplayIntegration.showsSessionTimerOverlay(
+                    mode: mode,
+                    isCalibrating: soloWallCalibration.isCalibrating,
+                    localTimer: soloSessionTimer
+                ),
+                text: TimedSessionDisplayIntegration.timerDisplayText(local: soloSessionTimer),
                 onFreePlayEnd: soloFreeModeEndAction
             )
             .navigationDestination(isPresented: $navigateToBlockSummary) {
                 dribbleOrPassBlockSummaryDestination
             }
             .soloSessionCompleteOverlay(
-                isPresented: showSoloTimedComplete,
+                isPresented: showSoloTimedComplete && !TimedSessionDisplayIntegration.shouldDeferCompletionOverlay,
                 elapsedSeconds: soloTimedCompleteElapsed,
                 repCount: soloTimedCompleteReps,
                 onDone: handleSoloSessionCompleteDismiss
@@ -239,6 +255,19 @@ struct DribbleOrPassDisplaySessionView: View {
             .fullScreenCover(isPresented: passTempoCalibrationPresented) {
                 dribbleOrPassPassTempoCalibrationCover
             }
+            .soloTapToStartGate(
+                mode: mode,
+                hasCompletedCalibration: hasCompletedPassTempoCalibration,
+                isCalibrating: soloWallCalibration.isCalibrating,
+                sessionStartCueActive: sessionStartCueContent != nil,
+                localTimer: soloSessionTimer,
+                onUserStart: {
+                    if effectiveUsesAutoLoop {
+                        isSoloRunning = true
+                    }
+                    startSoloLoop()
+                }
+            )
     }
 
     @ViewBuilder
@@ -285,7 +314,7 @@ struct DribbleOrPassDisplaySessionView: View {
                 statusOverlay
                     .opacity(statusOverlayOpacity)
             }
-            if mode != .solo, showsBetweenRepPlayerText {
+            if TimedSessionDisplayIntegration.showsBlockRepProgressOverlay(mode: mode), showsBetweenRepPlayerText {
                 repCountOverlay
             }
             SoloWallCalibrationGetReadyOverlay(mode: mode, calibration: soloWallCalibration)
@@ -317,15 +346,22 @@ struct DribbleOrPassDisplaySessionView: View {
             onCompletedThreePass: onSoloWallCalibrationFinished
         ) { return }
         guard !isSoloDrillInputFrozen else { return }
+        guard !SoloSessionUserStartGate.shouldBlockSoloRepFlow(
+            mode: mode,
+            hasCompletedCalibration: hasCompletedPassTempoCalibration,
+            isCalibrating: soloWallCalibration.isCalibrating
+        ) else { return }
         if mode == .solo, !effectiveUsesAutoLoop {
             handleWallSoloTrigger()
         }
     }
 
     private func handleSoloSessionCompleteDismiss() {
-        SoloTimeBasedSession.clear()
-        showSoloTimedComplete = false
-        router.popToRoot()
+        FirstSessionOnboardingStore.completeSoloTimedFeedbackDismiss(
+            clearSession: { SoloTimeBasedSession.clear() },
+            dismissOverlay: { showSoloTimedComplete = false },
+            popToRoot: { router.popToRoot() }
+        )
     }
 
     private func handleRelayForegroundReconnectCompleted() {
@@ -349,10 +385,31 @@ struct DribbleOrPassDisplaySessionView: View {
 
     private func handleScenePhaseChange(_ newPhase: ScenePhase) {
         if newPhase == .background {
-            engine.applicationDidEnterBackground()
+            pauseSessionForBackground()
         } else if newPhase == .active {
+            SessionStartCueRepGate.noteScenePhase(newPhase)
             engine.synchronizeTimersAfterEnteringForeground()
+            if SessionStartCueRepGate.consumeDidEnterBackground() {
+                resumeSessionIfNeeded()
+            }
         }
+    }
+
+    private func pauseSessionForBackground() {
+        engine.applicationDidEnterBackground()
+    }
+
+    private func resumeSessionIfNeeded() {
+        handleRepGateForegroundReturn()
+    }
+
+    /// Idempotent: safe when `scenePhase` flips rapidly; gate consumes the pending flag once.
+    private func handleRepGateForegroundReturn() {
+        guard SessionStartCueRepGate.consumeForegroundReconciliation(instructionVisible: sessionStartCueContent != nil) else { return }
+        hasPresentedSessionStartCue = false
+        tryPresentSessionStartCue()
+        guard sessionStartCueContent == nil else { return }
+        resumeRepEngineAfterInstructionDismissed()
     }
 
     private func handleConnectedPeerNameChange(_ name: String?) {
@@ -365,6 +422,7 @@ struct DribbleOrPassDisplaySessionView: View {
         guard mode.requiresPhoneDisplayRelay else { return }
         if connected {
             beginConnectedToCalibrationTransitionIfNeeded()
+            notifyPartnerTimedDrillSurfaceReadyIfNeeded()
         } else {
             showConnectedConfirmation = false
             hasStartedConnectedToCalibrationTransition = false
@@ -385,10 +443,14 @@ struct DribbleOrPassDisplaySessionView: View {
             cue: soloActionIdleCue
         )
         guard mode.requiresPhoneDisplayRelay, old == true, new == false else { return }
-        flushPendingCoachNextRepAfterCountdown()
+        if SessionStartCueRepGate.canStartRepEngine(instructionVisible: sessionStartCueContent != nil) {
+            flushPendingCoachNextRepAfterCountdown()
+        }
+        notifyPartnerTimedDrillSurfaceReadyIfNeeded()
     }
 
     private func handleDribbleOrPassPhaseChange(oldPhase: DribbleOrPassPhase, newPhase: DribbleOrPassPhase) {
+        recordTimedRepAtEngineBoundary(oldPhase: oldPhase, newPhase: newPhase)
         if case .blockComplete = newPhase {
             isSoloRunning = false
             stopSoloAutoloop()
@@ -410,14 +472,38 @@ struct DribbleOrPassDisplaySessionView: View {
             blockSummaryShowTimingAdaptationFeedback =
                 abs(CurrentSessionStore.shared.calibrationFactor(for: calId) - 1.0) > 0.001
             DispatchQueue.main.async {
+                if TimedSessionDisplayIntegration.continueAfterEnginePlanComplete(
+                    restartEngineBlock: {
+                        self.engine.restartBlockFromBeginning()
+                        self.isSoloRunning = true
+                    },
+                    resumeReps: { self.tryStartSoloAutoloop() }
+                ) {
+                    return
+                }
+                guard TimedSessionDisplayIntegration.allowsBlockSummaryNavigation else { return }
                 if mode == .solo {
                     if SoloTimeBasedSession.isActive {
                         finishSoloTimeBasedSession()
                     } else {
                         showSoloSummary = true
+                        FirstSessionOnboardingStore.noteTrainingSessionCompleted(
+                            deferLoginUntilFeedbackDismissed: false,
+                            repCount: SoloTimeBasedDisplaySessionSupport.overlayRepCount(
+                                engineLoggedRepCount: engine.repResults.count
+                            ),
+                            elapsedSeconds: soloSessionTimer.elapsedSeconds()
+                        )
                         navigateToBlockSummary = true
                     }
                 } else {
+                    FirstSessionOnboardingStore.noteTrainingSessionCompleted(
+                        deferLoginUntilFeedbackDismissed: false,
+                        repCount: SoloTimeBasedDisplaySessionSupport.overlayRepCount(
+                            engineLoggedRepCount: engine.repResults.count
+                        ),
+                        elapsedSeconds: soloSessionTimer.elapsedSeconds()
+                    )
                     navigateToBlockSummary = true
                 }
             }
@@ -430,7 +516,8 @@ struct DribbleOrPassDisplaySessionView: View {
             isWaitingForNextRep: isWaitingForNextRep,
             cue: soloActionIdleCue
         )
-        if mode == .solo, SoloTimeBasedSession.isActive, soloSessionTimer.pendingEndAfterCurrentRep,
+        let activeTimer = TimedSessionDisplayIntegration.sessionTimer(local: soloSessionTimer)
+        if SoloTimeBasedSession.isActive, activeTimer.pendingEndAfterCurrentRep,
            case .waitingForNextRep = newPhase {
             finishSoloTimeBasedSession()
         } else if case .waitingForNextRep = newPhase {
@@ -440,7 +527,10 @@ struct DribbleOrPassDisplaySessionView: View {
         if case .armedScanning = newPhase {
             preloadBeepAssetsForInstantReveal()
         }
-        if case .beepedAwaitingPass = newPhase { playBeep() }
+        if case .beepedAwaitingPass = newPhase,
+           SessionStartCueRepGate.canStartRepEngine(instructionVisible: sessionStartCueContent != nil) {
+            playBeep()
+        }
         if mode == .solo, !mode.requiresPhoneDisplayRelay,
            case .waitingForNextRep = newPhase,
            case .cueVisible(let oldR, _) = oldPhase {
@@ -451,9 +541,28 @@ struct DribbleOrPassDisplaySessionView: View {
     }
 
     private func handleDribbleOrPassOnAppear() {
+        SessionStartCueRepGate.onDrillSurfaceAppeared()
         let coordinator = TrainingPartnerConnectionCoordinator.shared
-        hasCompletedPassTempoCalibration = false
-        if mode.requiresPhoneDisplayRelay {
+        let timedPartnerActivitySwitch = mode.requiresPhoneDisplayRelay
+            && TimedSessionDisplayIntegration.shouldSkipPartnerSessionStartCue(mode: mode)
+        if timedPartnerActivitySwitch {
+            showPassTempoCalibration = false
+            let partnerNeedsCalibration = PBASessionFlowPolicy.shouldPromptCalibration(for: .partner)
+                && !coordinator.sessionCalibrationResolved
+            if partnerNeedsCalibration {
+                CurrentSessionStore.shared.setExpectedBallTravelTimeOverrideSeconds(nil)
+                hasCompletedPassTempoCalibration = false
+                hasStartedConnectedToCalibrationTransition = false
+            } else {
+                CurrentSessionStore.shared.setExpectedBallTravelTimeOverrideSeconds(
+                    coordinator.sessionCalibrationAverageTravelTime ?? PartnerPassTempoCalibrationStore.savedAverageTravelTimeSeconds()
+                )
+                hasCompletedPassTempoCalibration = true
+                showConnectedConfirmation = false
+                hasStartedConnectedToCalibrationTransition = true
+            }
+        } else if mode.requiresPhoneDisplayRelay {
+            hasCompletedPassTempoCalibration = false
             showPassTempoCalibration = false
             let partnerNeedsCalibration = PBASessionFlowPolicy.shouldPromptCalibration(for: .partner) && !coordinator.sessionCalibrationResolved
             if partnerNeedsCalibration {
@@ -480,7 +589,9 @@ struct DribbleOrPassDisplaySessionView: View {
         }
         partnerCalibration.reset()
         showConnectedConfirmation = false
-        hasStartedConnectedToCalibrationTransition = false
+        if !timedPartnerActivitySwitch {
+            hasStartedConnectedToCalibrationTransition = false
+        }
         beginConnectedToCalibrationTransitionIfNeeded()
         #if DEBUG
         PartnerPersistDebug.log("DribbleOrPassDisplaySessionView onAppear")
@@ -521,9 +632,13 @@ struct DribbleOrPassDisplaySessionView: View {
         if effectiveUsesAutoLoop {
             tryPresentSessionStartCue()
             syncRepController(with: engine.phase)
-            isSoloRunning = true
-            if !soloWallCalibration.isCalibrating {
+            if SoloSessionUserStartGate.hasConfirmedUserStart,
+               hasCompletedPassTempoCalibration,
+               !soloWallCalibration.isCalibrating {
+                isSoloRunning = true
                 startSoloLoop()
+            } else {
+                isSoloRunning = false
             }
         } else if mode == .solo {
             isSoloRunning = false
@@ -532,6 +647,20 @@ struct DribbleOrPassDisplaySessionView: View {
             onSoloCalibrationReadyIfNeeded()
         }
         soloWallBootResolved = true
+        notifyPartnerTimedDrillSurfaceReadyIfNeeded()
+    }
+
+    private func notifyPartnerTimedDrillSurfaceReadyIfNeeded() {
+        TimedSessionDisplayIntegration.fastPathPartnerTimedDrillSurfaceIfNeeded(
+            mode: mode,
+            partnerDrillReady: TimedSessionDisplayIntegration.partnerTimedDrillSurfaceReady(
+                mode: mode,
+                coachConnectedForCalibration: coachConnectedForCalibration,
+                hasCompletedPassTempoCalibration: hasCompletedPassTempoCalibration,
+                showPassTempoCalibration: showPassTempoCalibration,
+                showConnectedConfirmation: showConnectedConfirmation
+            )
+        )
     }
 
     private func handleDribbleOrPassOnDisappear() {
@@ -540,9 +669,14 @@ struct DribbleOrPassDisplaySessionView: View {
         isSoloRunning = false
         stopSoloAutoloop()
         pendingNextRepIndex = nil
+        SessionStartCueRepGate.onDrillSurfaceDisappeared()
         #if DEBUG
         PartnerPersistDebug.log("DribbleOrPassDisplaySessionView onDisappear")
         #endif
+        // Timed container activity switch reuses the same live session; do not send end/disconnect teardown here.
+        if TimedSessionDisplayIntegration.usesSharedSession {
+            return
+        }
         if mode.requiresPhoneDisplayRelay {
             teardownPartnerTransportWhenSessionSuspends()
         }
@@ -598,6 +732,11 @@ struct DribbleOrPassDisplaySessionView: View {
             guard repController.state == .preBeep || repController.state == .decisionWindow else { return }
             guard !repController.hasLoggedTap else { return }
             repController.registerTap()
+            TimedSessionDisplayIntegration.recordSessionRepIfNeeded(
+                activityId: ActivityKind.dribbleOrPass.sessionActivityActivityId,
+                repIndex: repIndex,
+                recordedRepTokens: &soloLifetimeRecordedRepIndices
+            )
             #if DEBUG
             if sessionTransportMode == .relayWebSocket {
                 dopRelayDisplayLog("incoming passTriggered repIndex=\(repIndex)")
@@ -654,7 +793,7 @@ struct DribbleOrPassDisplaySessionView: View {
             }
             #endif
             break
-        case .sessionEnded:
+        case .sessionEnded(_, _):
             #if DEBUG
             if sessionTransportMode == .relayWebSocket {
                 dopRelayDisplayLog("sessionEnded received")
@@ -679,10 +818,13 @@ struct DribbleOrPassDisplaySessionView: View {
             break
         case .startNextBlock:
             break
+        case .timedSessionActive, .timedSessionInactive, .displayRepEngineReady, .activityChanged:
+            break
         }
     }
 
     private func flushPendingCoachNextRepAfterCountdown() {
+        guard SessionStartCueRepGate.canStartRepEngine(instructionVisible: sessionStartCueContent != nil) else { return }
         guard let idx = pendingNextRepIndex else { return }
         pendingNextRepIndex = nil
         applyPartnerCoachNextRep(repIndex: idx)
@@ -731,6 +873,11 @@ struct DribbleOrPassDisplaySessionView: View {
     }
 
     private func applyPartnerCoachNextRep(repIndex: Int) {
+        if SessionStartCueRepGate.deferCoachNextRepIfNeeded(
+            repIndex: repIndex,
+            instructionVisible: sessionStartCueContent != nil,
+            pending: &pendingNextRepIndex
+        ) { return }
         #if DEBUG
         if repIndex > partnerCoachRepGate.expectedNextCoachRepIndex {
             print("[PartnerCoach][DOP] nextRep coach ahead of displayTrackedNext: coach=\(repIndex) displayNext=\(partnerCoachRepGate.expectedNextCoachRepIndex)")
@@ -773,6 +920,11 @@ struct DribbleOrPassDisplaySessionView: View {
 
     @discardableResult
     private func tryCommitPartnerCoachNextRep(repIndex: Int) -> Bool {
+        if SessionStartCueRepGate.deferCoachNextRepIfNeeded(
+            repIndex: repIndex,
+            instructionVisible: sessionStartCueContent != nil,
+            pending: &pendingNextRepIndex
+        ) { return false }
         print("[NEXTREP] received repIndex=\(repIndex) while phase=\(engine.phase) currentRepIndex=\(engine.currentRepIndex)")
         if repIndex < partnerCoachRepGate.expectedNextCoachRepIndex {
             if repIndex + 1 == partnerCoachRepGate.expectedNextCoachRepIndex, case .waitingForNextRep = engine.phase {
@@ -836,6 +988,7 @@ struct DribbleOrPassDisplaySessionView: View {
     }
 
     private func flushPendingPartnerCoachNextRepIfNeeded() {
+        guard SessionStartCueRepGate.canStartRepEngine(instructionVisible: sessionStartCueContent != nil) else { return }
         guard let idx = pendingNextRepIndex else { return }
         guard case .waitingForNextRep = engine.phase else { return }
         _ = tryCommitPartnerCoachNextRep(repIndex: idx)
@@ -931,6 +1084,7 @@ struct DribbleOrPassDisplaySessionView: View {
     }
 
     private func handleWallSoloTrigger() {
+        guard SessionStartCueRepGate.canStartRepEngine(instructionVisible: sessionStartCueContent != nil) else { return }
         if SoloWallCalibrationInput.handleIfSoloCalibrating(
             mode: mode,
             controller: soloWallCalibration,
@@ -965,7 +1119,7 @@ struct DribbleOrPassDisplaySessionView: View {
     /// Replaces manual wall taps when `effectiveUsesAutoLoop` — same ``handleWallSoloTrigger`` path; beep and cues still come from `engine` phase changes.
     private func startRepSolo() {
         guard isSoloRunning, !isSoloDrillInputFrozen else { return }
-        guard sessionStartCueContent == nil else { return }
+        guard SessionStartCueRepGate.canStartRepEngine(instructionVisible: sessionStartCueContent != nil) else { return }
         handleWallSoloTrigger()
     }
 
@@ -987,8 +1141,13 @@ struct DribbleOrPassDisplaySessionView: View {
         guard !isSoloDrillInputFrozen else { return }
         guard !soloWallCalibration.isCalibrating else { return }
         guard hasCompletedPassTempoCalibration else { return }
+        guard !SoloSessionUserStartGate.shouldBlockSoloRepFlow(
+            mode: mode,
+            hasCompletedCalibration: hasCompletedPassTempoCalibration,
+            isCalibrating: soloWallCalibration.isCalibrating
+        ) else { return }
         guard !blockCoachDrillDuringSessionCountdown else { return }
-        guard sessionStartCueContent == nil else { return }
+        guard SessionStartCueRepGate.canStartRepEngine(instructionVisible: sessionStartCueContent != nil) else { return }
         guard !soloLoopRunner.isRunning else { return }
         if case .blockComplete = engine.phase { return }
         soloLoopRunner.start(settings: SoloTimingSettings.soloAutoloopSettings(wallController: soloWallCalibration)) { startRepSolo() }
@@ -1183,17 +1342,38 @@ struct DribbleOrPassDisplaySessionView: View {
     }
 
     private func registerSupabaseDribbleOrPassBlockSession() {
-        CurrentSessionStore.shared.resetDecisionTimingCalibrationForNewDrillBlock(
-            activityId: ActivityKind.dribbleOrPass.sessionActivityActivityId
-        )
-        Task {
-            guard let sessionId = await SupabaseSessionService.shared.createSessionForDrill(activity: .dribbleOrPass, blockSize: blockTotalReps, playerId: playerStore.selectedPlayerId ?? profileManager.currentProfile?.id) else { return }
-            let activityId = await SupabaseSessionService.shared.createSessionActivity(sessionId: sessionId, activityId: ActivityKind.dribbleOrPass.sessionActivityActivityId, blockNumber: 1)
-            await MainActor.run {
-                CurrentSessionStore.shared.setSessionIdOnly(sessionId)
-                if let activityId = activityId { CurrentSessionStore.shared.setCurrentSessionActivityId(activityId) }
+        TimedSessionDisplayIntegration.registerActivitySegment(
+            activity: .dribbleOrPass,
+            skipSessionCreation: {},
+            createSession: {
+                CurrentSessionStore.shared.resetDecisionTimingCalibrationForNewDrillBlock(
+                    activityId: ActivityKind.dribbleOrPass.sessionActivityActivityId
+                )
+                Task {
+                    guard let sessionId = await SupabaseSessionService.shared.createSessionForDrill(
+                        activity: .dribbleOrPass,
+                        blockSize: blockTotalReps,
+                        playerId: playerStore.selectedPlayerId ?? profileManager.currentProfile?.id,
+                        mode: SessionAnalyticsMode.from(trainingMode: mode)
+                    ) else { return }
+                    let block = await SupabaseSessionService.shared.openSessionActivityBlock(sessionId: sessionId, activityId: ActivityKind.dribbleOrPass.sessionActivityActivityId, blockNumber: 1)
+                    await MainActor.run {
+                        CurrentSessionStore.shared.setSessionIdOnly(
+                            sessionId,
+                            mode: SessionAnalyticsMode.from(trainingMode: mode),
+                            startAnalyticsClock: mode.requiresPhoneDisplayRelay
+                        )
+                        if let activityId = block.sessionActivityId { CurrentSessionStore.shared.setCurrentSessionActivityId(activityId) }
+                        if let segmentId = block.segmentId {
+                            CurrentSessionStore.shared.setCurrentSessionActivitySegmentId(
+                                segmentId,
+                                activityId: ActivityKind.dribbleOrPass.sessionActivityActivityId
+                            )
+                        }
+                    }
+                }
             }
-        }
+        )
     }
 
     private func runItBackFromSummary() {
@@ -1292,16 +1472,35 @@ struct DribbleOrPassDisplaySessionView: View {
     }
 
     private func recordSoloLifetimeRepIfNeeded(repIndex: Int) {
+        TimedSessionDisplayIntegration.recordSessionRepIfNeeded(
+            activityId: ActivityKind.dribbleOrPass.sessionActivityActivityId,
+            repIndex: repIndex,
+            recordedRepTokens: &soloLifetimeRecordedRepIndices
+        )
         guard mode == .solo else { return }
-        guard soloLifetimeRecordedRepIndices.insert(repIndex).inserted else { return }
-        if SoloTimeBasedSession.isActive {
-            SoloTimeBasedSession.recordRepCompleted()
-        }
         soloLifetimeRepDisplayCount = SoloLifetimeRepCounter.recordRep(for: .dribbleOrPass)
     }
 
+    private func recordTimedRepAtEngineBoundary(oldPhase: DribbleOrPassPhase, newPhase: DribbleOrPassPhase) {
+        guard case .waitingForNextRep = newPhase else { return }
+        let completedRepIndex: Int?
+        switch oldPhase {
+        case .cueVisible(let r, _), .awaitingExitLog(let r):
+            completedRepIndex = r
+        default:
+            completedRepIndex = nil
+        }
+        guard let repIndex = completedRepIndex else { return }
+        guard engine.repResults.last?.repIndex == repIndex else { return }
+        TimedSessionDisplayIntegration.recordSessionRepIfNeeded(
+            activityId: ActivityKind.dribbleOrPass.sessionActivityActivityId,
+            repIndex: repIndex,
+            recordedRepTokens: &soloLifetimeRecordedRepIndices
+        )
+    }
+
     private var soloFreeModeEndAction: (() -> Void)? {
-        guard mode == .solo, SoloTimeBasedSession.config == .free else { return nil }
+        guard mode == .solo, SoloTimeBasedSession.isActive else { return nil }
         return { userInitiatedEndSoloSession() }
     }
 
@@ -1322,27 +1521,50 @@ struct DribbleOrPassDisplaySessionView: View {
     }
 
     private func userInitiatedEndSoloSession() {
-        guard mode == .solo, SoloTimeBasedSession.isActive, !showSoloTimedComplete, !isSoloSessionEnding else { return }
-        SoloSessionEndTransition.beginUserEnd(
-            setEnding: { isSoloSessionEnding = true },
-            freeze: { freezeSoloSessionForCompletion() },
-            presentOverlay: { showSoloTimedComplete = true },
-            clearEnding: { isSoloSessionEnding = false }
+        TimedSessionDisplayIntegration.requestUserEnd(
+            mode: mode,
+            showComplete: showSoloTimedComplete,
+            isEnding: isSoloSessionEnding,
+            completionType: .earlyExit,
+            freeze: {},
+            localEnd: {
+                SoloSessionEndTransition.beginUserEnd(
+                    setEnding: { isSoloSessionEnding = true },
+                    freeze: {},
+                    presentOverlay: {
+                        finishSoloTimeBasedSession(completionType: .earlyExit)
+                    },
+                    clearEnding: { isSoloSessionEnding = false }
+                )
+            }
         )
     }
 
-    private func finishSoloTimeBasedSession() {
-        guard mode == .solo, SoloTimeBasedSession.isActive, !showSoloTimedComplete else { return }
-        freezeSoloSessionForCompletion()
-        showSoloTimedComplete = true
+    private func finishSoloTimeBasedSession(completionType: SessionCompletionType = .completed) {
+        TimedSessionDisplayIntegration.finishTimeBasedSession(
+            mode: mode,
+            showComplete: showSoloTimedComplete,
+            completionType: completionType,
+            freeze: { freezeSoloSessionForCompletion() },
+            localFinish: {
+                guard mode == .solo, SoloTimeBasedSession.isActive, !showSoloTimedComplete else { return }
+                freezeSoloSessionForCompletion()
+                CurrentSessionStore.shared.markSessionCompletionType(completionType)
+                FirstSessionOnboardingStore.prepareLoginPromptAfterSoloTimedSessionIfNeeded(
+                    repCount: soloTimedCompleteReps,
+                    elapsedSeconds: soloTimedCompleteElapsed
+                )
+                showSoloTimedComplete = true
+            }
+        )
     }
 
     private func onSoloCalibrationReadyIfNeeded() {
-        SoloTimeBasedDisplaySessionSupport.onSoloCalibrationReady(
+        TimedSessionDisplayIntegration.onCalibrationReady(
             mode: mode,
             hasCompletedCalibration: hasCompletedPassTempoCalibration,
             isCalibrating: soloWallCalibration.isCalibrating,
-            timer: soloSessionTimer,
+            localTimer: soloSessionTimer,
             tryAutoloop: { tryStartSoloAutoloop() }
         )
     }
@@ -1444,7 +1666,13 @@ struct DribbleOrPassDisplaySessionView: View {
 
     private func tryPresentSessionStartCue() {
         guard !hasPresentedSessionStartCue else { return }
-        guard let content = ActivityKind.dribbleOrPass.sessionStartCue else { return }
+        guard !TimedSessionDisplayIntegration.shouldSkipPartnerSessionStartCue(mode: mode) else { return }
+        guard let content = ActivityKind.dribbleOrPass.sessionStartCue else {
+            hasPresentedSessionStartCue = true
+            TimedSessionDisplayIntegration.markPartnerSessionStartChromeCompletedIfNeeded(mode: mode)
+            SessionStartCueRepGate.enableRepEngine()
+            return
+        }
         guard sessionStartCueDrillIsVisible else { return }
         hasPresentedSessionStartCue = true
         sessionStartCueContent = content
@@ -1453,13 +1681,23 @@ struct DribbleOrPassDisplaySessionView: View {
     /// Cue finished: clear UI and restart autoloop if a pre-cue start left the runner stuck without firing a rep.
     private func onSessionStartCueFinished() {
         sessionStartCueContent = nil
+        TimedSessionDisplayIntegration.markPartnerSessionStartChromeCompletedIfNeeded(mode: mode)
         if soloLoopRunner.isRunning {
             stopSoloAutoloop()
             if mode == .solo, effectiveUsesAutoLoop {
                 isSoloRunning = true
             }
         }
+        SessionStartCueRepGate.scheduleRepEngineResume {
+            resumeRepEngineAfterInstructionDismissed()
+        }
+    }
+
+    private func resumeRepEngineAfterInstructionDismissed() {
+        guard TimedSessionDisplayIntegration.canResumeRepEngine else { return }
+        guard SessionStartCueRepGate.claimFirstRepStart() else { return }
         tryStartSoloAutoloop()
+        flushPendingCoachNextRepAfterCountdown()
     }
 
     @ViewBuilder
@@ -1513,10 +1751,25 @@ struct DribbleOrPassDisplaySessionView: View {
                 joinCode: partnerRelaySession.joinCode,
                 activityTitle: "Dribble or Pass",
                 onExitSession: {
-                    router.popToRoot(endingPartnerSession: false)
+                    cancelWaitingForCoachAndExit()
                 }
             )
         }
+    }
+
+    private func cancelWaitingForCoachAndExit() {
+        pendingNextRepIndex = nil
+        blockCoachDrillDuringSessionCountdown = false
+        engine.invalidateAllTimers()
+        repController.resetForNewSession()
+        soloWallCalibration.cancelPendingBeeps()
+        stopSoloAutoloop()
+        TimedSessionController.shared.clear()
+        CurrentSessionStore.shared.clear()
+        TrainingPartnerConnectionCoordinator.shared.endPartnerTrainingSession(
+            reason: "display.waitingForCoach.backCancel.dribbleOrPass"
+        )
+        dismiss()
     }
 
     private func activateAudioSession() {
@@ -1606,10 +1859,10 @@ struct DribbleOrPassDisplaySessionView: View {
         hasSentSessionEnded = true
         if mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket {
             dopRelayDisplayLog("send sessionEnded (relay)")
-            partnerRelaySession.sendTwoMinuteMessage(.sessionEnded(timestamp: Date()))
+            partnerRelaySession.sendTwoMinuteMessage(.sessionEnded(source: .display, timestamp: Date()))
             return
         }
-        connectionManager.sendTwoMinuteMessage(.sessionEnded(timestamp: Date()))
+        connectionManager.sendTwoMinuteMessage(.sessionEnded(source: .display, timestamp: Date()))
     }
 
     private func sendRepStartedAck(repIndex: Int) {

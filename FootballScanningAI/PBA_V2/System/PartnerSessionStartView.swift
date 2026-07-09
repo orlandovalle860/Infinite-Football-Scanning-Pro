@@ -112,6 +112,15 @@ struct PartnerSessionStartView: View {
             }
         }
         .onAppear {
+            // Display-host surface only. Phones must join via temporary Coach Remote flow —
+            // never mint a second display join code here.
+            #if canImport(UIKit)
+            if UIDevice.current.userInterfaceIdiom == .phone {
+                AppRoleDebug.log("routing_decision reason=partner_pairing_redirect_phone_to_temporary_coach_remote")
+                router.replace(with: .coachRemote)
+                return
+            }
+            #endif
             didScheduleAutoPop = false
             TrainingPartnerConnectionCoordinator.shared.beginPartnerTrainingSessionIfNeeded()
             Task {

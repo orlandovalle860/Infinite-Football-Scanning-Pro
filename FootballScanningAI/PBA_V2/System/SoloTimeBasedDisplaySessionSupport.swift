@@ -20,16 +20,17 @@ enum SoloTimeBasedDisplaySessionSupport {
 
     static func recordRepIfNeeded(
         mode: TrainingMode,
-        recordedRepIndices: inout Set<Int>,
+        recordedRepTokens: inout Set<String>,
         repIndex: Int,
         activity: ActivityKind,
         lifetimeDisplayCount: inout Int
     ) {
+        TimedSessionDisplayIntegration.recordSessionRepIfNeeded(
+            activityId: activity.sessionActivityActivityId,
+            repIndex: repIndex,
+            recordedRepTokens: &recordedRepTokens
+        )
         guard mode == .solo else { return }
-        guard recordedRepIndices.insert(repIndex).inserted else { return }
-        if SoloTimeBasedSession.isActive {
-            SoloTimeBasedSession.recordRepCompleted()
-        }
         lifetimeDisplayCount = SoloLifetimeRepCounter.recordRep(for: activity)
     }
 
@@ -59,6 +60,7 @@ enum SoloTimeBasedDisplaySessionSupport {
         guard mode == .solo else { return }
         guard hasCompletedCalibration else { return }
         guard !isCalibrating else { return }
+        guard SoloSessionUserStartGate.hasConfirmedUserStart else { return }
         startTimerIfNeeded(mode: mode, timer: timer)
         tryAutoloop()
     }
@@ -68,12 +70,18 @@ enum SoloTimeBasedDisplaySessionSupport {
         timer: SoloSessionTimerController,
         isWaitingForNextRep: Bool
     ) -> Bool {
-        mode == .solo && SoloTimeBasedSession.isActive && timer.pendingEndAfterCurrentRep && isWaitingForNextRep
+        if TimedSessionDisplayIntegration.usesSharedSession {
+            return timer.pendingEndAfterCurrentRep && isWaitingForNextRep
+        }
+        return mode == .solo && SoloTimeBasedSession.isActive && timer.pendingEndAfterCurrentRep && isWaitingForNextRep
     }
 
     /// Best available completed-rep count for the session-complete overlay.
     static func overlayRepCount(engineLoggedRepCount: Int) -> Int {
-        max(SoloTimeBasedSession.sessionRepCount, engineLoggedRepCount)
+        if TimedSessionDisplayIntegration.usesSharedSession {
+            return TimedSessionDisplayIntegration.sharedRepCount
+        }
+        return engineLoggedRepCount
     }
 
     static func shouldBlockSoloDrillInput(isEnding: Bool, showComplete: Bool) -> Bool {

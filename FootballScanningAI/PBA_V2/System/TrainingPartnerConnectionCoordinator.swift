@@ -41,6 +41,14 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
 
     /// Display (iPad) is showing the 3–2–1–Go overlay (``SessionCountdownModifier`` with coach-message suppression). Coach UI uses this to pause idle haptics.
     @Published private(set) var isPartnerDisplayCountdownActive: Bool = false
+    /// Latest timed-session activity id mirrored from display for coach in-place sync.
+    @Published private(set) var currentTimedSessionActivityId: String?
+    /// Display finished instruction / countdown cue — coach may show TAP TO START (partner only).
+    @Published private(set) var isDisplayRepEngineReady: Bool = false
+    /// Display sent ``timedSessionActive`` — coach mirrors relay instead of rebroadcasting ``sessionStarted``.
+    @Published private(set) var displayTimedSessionAnnounced: Bool = false
+    /// Keeps the most recent non-nil activity id so coach UI stays stable during transient relay blips.
+    @Published private(set) var lastNonNilActivityId: String?
 
     /// Last join code the coach successfully used for the shared relay WebSocket. Each activity’s coach remote is a **new** SwiftUI view with empty ``@State`` for the text field — without this, switching e.g. Away From Pressure → Dribble or Pass could not auto-reconnect with the same code.
     /// Cleared when pairing ends or when coach UI explicitly clears the join form after a real disconnect.
@@ -62,6 +70,8 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
     private var coachRelayDisconnectCancellable: AnyCancellable?
     private var midSessionLinkCancellable: AnyCancellable?
     private var bannerAutoHideTask: Task<Void, Never>?
+    /// Short grace window around transient system interruptions (e.g. screenshot UI) so brief socket flaps do not force relay recycle.
+    private var transientLifecycleInterruptionUntil: Date?
 
     // MARK: - Mid-session disconnect (drill freeze + recovery)
 
@@ -158,9 +168,23 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
             queue: .main
         ) { [weak self] notification in
             guard let msg = notification.object as? TwoMinuteMessage else { return }
-            guard case .partnerTrainingEnded = msg else { return }
             Task { @MainActor in
-                self?.handleIncomingPartnerTrainingEndedFromPeer()
+                switch msg {
+                case .partnerTrainingEnded:
+                    self?.handleIncomingPartnerTrainingEndedFromPeer()
+                case .timedSessionActive(let activityId, _):
+                    self?.handleIncomingTimedSessionActiveFromDisplay(activityId: activityId)
+                case .timedSessionInactive:
+                    self?.handleIncomingTimedSessionInactiveFromDisplay()
+                case .displayRepEngineReady(let activityId, _):
+                    self?.handleIncomingDisplayRepEngineReadyFromDisplay(activityId: activityId)
+                case .sessionEnded(let source, _):
+                    self?.handleIncomingPartnerTimedSessionEnded(source: source)
+                case .activityChanged(let activityId, _):
+                    self?.handleIncomingActivityChangedFromCoach(activityId: activityId)
+                default:
+                    break
+                }
             }
         }
         didBecomeActiveObserver = NotificationCenter.default.addObserver(
@@ -169,6 +193,7 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
+                self?.noteTransientLifecycleInterruption()
                 await self?.reconnectPartnerRelayAfterForegroundIfNeeded()
             }
         }
@@ -178,6 +203,7 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
+                self?.noteTransientLifecycleInterruption()
                 LifecycleReconnectDebug.logWillResignActive()
                 self?.scheduleBannerHiddenIfReconnecting()
             }
@@ -188,6 +214,7 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
+                self?.transientLifecycleInterruptionUntil = nil
                 LifecycleReconnectDebug.logBackgroundEntered(source: "UIApplication.didEnterBackgroundNotification")
                 self?.suspendPartnerSessionForBackground()
             }
@@ -235,6 +262,7 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
     }
 
     func setCheckpointDrift(displayRep: Int, coachRep: Int) {
+        guard !isTransientLifecycleInterruptionActive() else { return }
         relayLifecycleBanner = .checkpointMismatch(
             hint: "Display reports rep \(displayRep + 1); coach is on rep \(coachRep + 1). Confirm with the player before continuing."
         )
@@ -243,6 +271,16 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
     func clearCheckpointDrift() {
         if case .checkpointMismatch = relayLifecycleBanner {
             relayLifecycleBanner = .hidden
+        }
+    }
+
+    /// True while relay reconnect / soft restore is in progress (partner training run still active).
+    var isPartnerRelayReconnecting: Bool {
+        switch relayLifecycleBanner {
+        case .reconnecting, .restoringSession:
+            return true
+        default:
+            return false
         }
     }
 
@@ -314,7 +352,10 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         if live {
             if linkDownSinceDrillUnderway {
                 let foregroundReconnectCooldownActive = partnerRelayForegroundReconnectCooldownUntil.map { Date() < $0 } ?? false
-                if !partnerRelaySuspendedForBackground, !foregroundReconnectCooldownActive, shouldPartnerSoftReconnectPreserveRep() {
+                if !partnerRelaySuspendedForBackground,
+                   !foregroundReconnectCooldownActive,
+                   !isTransientLifecycleInterruptionActive(),
+                   shouldPartnerSoftReconnectPreserveRep() {
                     if isHandlingSoftReconnect {
                         linkDownSinceDrillUnderway = false
                     } else {
@@ -478,7 +519,6 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         guard !CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
         guard isPartnerTrainingSessionActive else { return }
         relaySessionMutationToken += 1
-        CurrentSessionStore.shared.clear()
         coachRelayRemoteService.disconnect()
         coachRelayDisplayPeerPresent = false
         clearRecordedCoachRelayJoinCode()
@@ -501,6 +541,12 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
     func recyclePlayerDisplayRelaySessionKeepingPartnerRun(reason: String) async {
         guard CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
         guard isPartnerTrainingSessionActive else { return }
+        if TimedSessionController.shared.isManagingSession,
+           CurrentSessionStore.shared.sessionId != nil {
+            RelaySoftResumeDebug.logFallbackToRejoin(reason: "\(reason)_skipped_preserve_training_session")
+            await relayDisplaySession.startDisplaySessionIfNeeded()
+            return
+        }
         RelaySoftResumeDebug.logFallbackToRejoin(reason: "\(reason)_ipad_auto_recycle")
         relayDisplaySession.cancelRelayDisconnectRecycleTask()
         trackedRelaySessionId = nil
@@ -534,6 +580,11 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
     private func mintFreshIPadDisplayRelaySessionWhenForegroundReconnectStillOffline() async {
         guard CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
         guard isPartnerTrainingSessionActive else { return }
+        if TimedSessionController.shared.isManagingSession,
+           CurrentSessionStore.shared.sessionId != nil {
+            await relayDisplaySession.startDisplaySessionIfNeeded()
+            return
+        }
         let joinTrimmed = relayDisplaySession.joinCode?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if joinTrimmed.isEmpty {
             await forceRegenerateIPadDisplayRelaySessionAfterForeground(reason: "foreground_missing_join_code")
@@ -573,14 +624,18 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         lastKnownValidRelaySessionId = curId
     }
 
-    private func postRelayForegroundReconnectCompleted() async {
-        await mintFreshIPadDisplayRelaySessionWhenForegroundReconnectStillOffline()
-        await finalizeRelayForegroundReconnectNotifications()
+    private func postRelayForegroundReconnectCompleted(postCheckpointResync: Bool = true) async {
+        if postCheckpointResync {
+            await mintFreshIPadDisplayRelaySessionWhenForegroundReconnectStillOffline()
+        }
+        await finalizeRelayForegroundReconnectNotifications(postCheckpointResync: postCheckpointResync)
     }
 
     /// Posts `relayForegroundReconnectCompleted` and clears background-suspend bookkeeping (without mint/validation).
-    private func finalizeRelayForegroundReconnectNotifications() async {
-        NotificationCenter.default.post(name: .relayForegroundReconnectCompleted, object: nil)
+    private func finalizeRelayForegroundReconnectNotifications(postCheckpointResync: Bool = true) async {
+        if postCheckpointResync {
+            NotificationCenter.default.post(name: .relayForegroundReconnectCompleted, object: nil)
+        }
         partnerRelayForegroundReconnectCooldownUntil = Date().addingTimeInterval(0.75)
         partnerRelaySuspendedForBackground = false
     }
@@ -603,6 +658,23 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
                 break
             }
         }
+    }
+
+    private func noteTransientLifecycleInterruption() {
+        transientLifecycleInterruptionUntil = Date().addingTimeInterval(2.5)
+    }
+
+    /// True briefly around `willResignActive`/`didBecomeActive` to avoid treating transient system overlays as hard relay drops.
+    func shouldSuppressUnexpectedRelayRecycleNow() -> Bool {
+        guard let until = transientLifecycleInterruptionUntil else { return false }
+        if Date() < until { return true }
+        transientLifecycleInterruptionUntil = nil
+        return false
+    }
+
+    /// Screenshot / control-center style interruption — not a true iOS background suspend.
+    func isTransientLifecycleInterruptionActive() -> Bool {
+        shouldSuppressUnexpectedRelayRecycleNow() && !partnerRelaySuspendedForBackground
     }
 
     private func scheduleAutoHideRestoredBanner() {
@@ -634,24 +706,7 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
             return
         }
         awaitingSoftResumeCheckpointValidation = false
-
-        if partnerRelaySuspendedForBackground, CoachRemoteSessionStartGate.isPadPlayerRole() {
-            print("Background resume — forcing new relay session")
-            relayDisplaySession.cancelRelayDisconnectRecycleTask()
-            trackedRelaySessionId = nil
-            lastKnownValidRelaySessionId = nil
-            clearSoftResumeInterruptionState()
-            relayLifecycleBanner = .hidden
-            relayDisplaySession.stopHosting()
-            try? await Task.sleep(nanoseconds: 200_000_000)
-            await relayDisplaySession.resetSession()
-            currentJoinCode = relayDisplaySession.joinCode
-            if let rid = relayDisplaySession.relaySessionId?.trimmingCharacters(in: .whitespacesAndNewlines), !rid.isEmpty {
-                lastKnownValidRelaySessionId = rid
-            }
-            await finalizeRelayForegroundReconnectNotifications()
-            return
-        }
+        let silentTransientReconnect = isTransientLifecycleInterruptionActive()
 
         LifecycleReconnectDebug.logForegroundEntered(source: "UIApplication.didBecomeActiveNotification")
         let beforeCoach = coachRelayRemoteService.connectionState
@@ -677,7 +732,7 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
             ? (beforeDisplay != .connected)
             : (beforeCoach != .connected)
 
-        if hadDisconnect {
+        if hadDisconnect, !silentTransientReconnect {
             relayLifecycleBanner = softEligible ? .restoringSession : .reconnecting
         }
 
@@ -704,6 +759,10 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
 
         let socketDeadAfterForeground = displayHasRelaySession && afterDisplay == .disconnected && beforeDisplay == .connected
         if socketDeadAfterForeground {
+            if silentTransientReconnect {
+                await postRelayForegroundReconnectCompleted(postCheckpointResync: false)
+                return
+            }
             if CoachRemoteSessionStartGate.isPadPlayerRole() {
                 await recyclePlayerDisplayRelaySessionKeepingPartnerRun(reason: "display_socket_not_recovered_after_foreground")
             } else {
@@ -729,11 +788,13 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
             )
             if idOK {
                 clearCheckpointDrift()
-                relayLifecycleBanner = .sessionRestoredSoft
-                scheduleAutoHideSessionRestoredSoftBanner()
+                if !silentTransientReconnect {
+                    relayLifecycleBanner = .sessionRestoredSoft
+                    scheduleAutoHideSessionRestoredSoftBanner()
+                }
                 clearSoftResumeInterruptionState()
                 RelaySoftResumeDebug.logSoftResumeOutcome(success: true, reason: "display_session_id_preserved")
-                await postRelayForegroundReconnectCompleted()
+                await postRelayForegroundReconnectCompleted(postCheckpointResync: !silentTransientReconnect)
                 return
             }
             if CoachRemoteSessionStartGate.isPadPlayerRole() {
@@ -761,8 +822,10 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         if hadDisconnect, recovered {
             LifecycleReconnectDebug.logReconnectResult(context: "partner_relay", success: true, detail: displayHasRelaySession ? "display_socket_connected" : "coach_socket_connected")
             clearCheckpointDrift()
-            relayLifecycleBanner = .connectionRestored
-            scheduleAutoHideRestoredBanner()
+            if !silentTransientReconnect {
+                relayLifecycleBanner = .connectionRestored
+                scheduleAutoHideRestoredBanner()
+            }
             clearSoftResumeInterruptionState()
         } else if !hadDisconnect {
             relayLifecycleBanner = .hidden
@@ -771,8 +834,10 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
             LifecycleReconnectDebug.logReconnectResult(context: "partner_relay", success: recovered, detail: "recovery_incomplete")
             if recovered {
                 clearCheckpointDrift()
-                relayLifecycleBanner = .connectionRestored
-                scheduleAutoHideRestoredBanner()
+                if !silentTransientReconnect {
+                    relayLifecycleBanner = .connectionRestored
+                    scheduleAutoHideRestoredBanner()
+                }
                 clearSoftResumeInterruptionState()
             } else if displayHasRelaySession, afterDisplay == .disconnected {
                 if CoachRemoteSessionStartGate.isPadPlayerRole() {
@@ -789,7 +854,7 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
             }
         }
 
-        await postRelayForegroundReconnectCompleted()
+        await postRelayForegroundReconnectCompleted(postCheckpointResync: !silentTransientReconnect)
         #if DEBUG
         PartnerPersistDebug.log("UIApplication.didBecomeActive — reconnectPartnerRelayAfterForegroundIfNeeded complete")
         #endif
@@ -835,6 +900,9 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         }
         isPartnerTrainingSessionActive = true
         isPartnerDisplayCountdownActive = false
+        isDisplayRepEngineReady = false
+        displayTimedSessionAnnounced = false
+        CurrentSessionStore.shared.resetPartnerTimedSessionEndHandled()
         sessionCalibrationResolved = true
         sessionCalibrationAverageTravelTime = PartnerPassTempoCalibrationStore.seededAverageTravelTimeSeconds()
         sessionCalibrationMode = .partner
@@ -879,6 +947,11 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         let endToken = relaySessionMutationToken
         isPartnerTrainingSessionActive = false
         isPartnerDisplayCountdownActive = false
+        currentTimedSessionActivityId = nil
+        isDisplayRepEngineReady = false
+        displayTimedSessionAnnounced = false
+        lastNonNilActivityId = nil
+        TimedSessionController.shared.prepareCoachRemoteForPartnerDurationSelection()
         currentJoinCode = nil
         displaySessionState = nil
         partnerDisplaySurfaceId = UUID()
@@ -981,10 +1054,7 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
     /// should be reused and activities should skip fresh role/join flows.
     var isConnected: Bool {
         guard isPartnerTrainingSessionActive else { return false }
-        if isMultipeerPartnerConnected { return true }
-        if relayDisplaySession.isCoachPaired { return true }
-        if coachRelayRemoteService.connectionState == .connected { return true }
-        return false
+        return isPartnerTransportLinkLive
     }
 
     func markSessionCalibrationResolved(averageTravelTimeSeconds: Double?, trainingMode: TrainingMode?) {
@@ -1042,8 +1112,19 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         connectionManager.startHosting()
     }
 
+    /// Coach phone: mirror display timed-session state for rep gating (local + relay).
+    func applyCoachTimedSessionMirror(activityId: String) {
+        guard !CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
+        currentTimedSessionActivityId = activityId
+        lastNonNilActivityId = activityId
+        isDisplayRepEngineReady = false
+        TimedSessionController.shared.prepareCoachRemoteForPartnerDurationSelection()
+    }
+
     /// Coach device: notify the display to open the partner session UI for this activity (relay WebSocket and/or Multipeer).
     func broadcastSessionStartedFromCoach(activity: ActivityKind, totalReps: Int) {
+        applyCoachTimedSessionMirror(activityId: activity.sessionActivityActivityId)
+        print("[COACH OUT] sessionStarted activity=\(activity.sessionActivityActivityId)")
         let msg = TwoMinuteMessage.sessionStarted(
             activityId: activity.sessionActivityActivityId,
             totalReps: totalReps,
@@ -1055,6 +1136,340 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         if ConnectionManager.shared.connectedPeerName != nil {
             ConnectionManager.shared.sendTwoMinuteMessage(msg)
         }
+    }
+
+    /// Coach remote: ensure rep UI is armed before / when broadcasting ``sessionStarted``.
+    func prepareCoachRemoteForBroadcastSessionStart(activity: ActivityKind) {
+        applyCoachTimedSessionMirror(activityId: activity.sessionActivityActivityId)
+    }
+
+    /// Coach remote onAppear: re-enable rep UI when display session mirror is already known.
+    func restoreCoachTimedSessionMirrorIfNeeded() {
+        guard !CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
+        guard isPartnerTrainingSessionActive, let activityId = currentTimedSessionActivityId else { return }
+        lastNonNilActivityId = activityId
+        if isDisplayRepEngineReady {
+            TimedSessionController.shared.markPartnerDisplaySessionActiveFromRelay()
+        }
+    }
+
+    /// Timed partner sessions are display-led once the display has announced a live timed container.
+    /// Until then, coach must send legacy ``sessionStarted`` so the iPad can leave passive standby.
+    func shouldCoachDeferToDisplayTimedSession() -> Bool {
+        guard isPartnerTrainingSessionActive else { return false }
+        restoreCoachTimedSessionMirrorIfNeeded()
+        return displayTimedSessionAnnounced
+    }
+
+    /// Display (iPad): timed session container is live — coach tracks activity; rep UI waits for ``displayRepEngineReady``.
+    func broadcastTimedSessionActiveFromDisplay(activity: ActivityKind) {
+        let msg = TwoMinuteMessage.timedSessionActive(
+            activityId: activity.sessionActivityActivityId,
+            timestamp: Date()
+        )
+        var sent = false
+        if relayDisplaySession.socketConnectionState == .connected {
+            relayDisplaySession.sendTwoMinuteMessage(msg)
+            sent = true
+        }
+        if ConnectionManager.shared.connectedPeerName != nil {
+            ConnectionManager.shared.sendTwoMinuteMessage(msg)
+            sent = true
+        }
+        if sent {
+            print("[DISPLAY OUT] timedSessionActive activity=\(activity.sessionActivityActivityId)")
+        } else {
+            print("[DISPLAY OUT] timedSessionActive DROPPED — no relay/multipeer transport activity=\(activity.sessionActivityActivityId)")
+        }
+    }
+
+    /// Re-send timed session active after relay reconnect if display session is still live.
+    func rebroadcastTimedSessionActiveFromDisplayIfNeeded() {
+        let timed = TimedSessionController.shared
+        guard timed.mode == .partner, timed.isManagingSession, timed.isSessionActive else { return }
+        guard let activity = timed.currentActivity else { return }
+        broadcastTimedSessionActiveFromDisplay(activity: activity)
+    }
+
+    /// Display (iPad): instruction / countdown cue finished — coach may show TAP TO START.
+    func broadcastDisplayRepEngineReadyFromDisplay(activity: ActivityKind) {
+        let msg = TwoMinuteMessage.displayRepEngineReady(
+            activityId: activity.sessionActivityActivityId,
+            timestamp: Date()
+        )
+        var sent = false
+        if relayDisplaySession.socketConnectionState == .connected {
+            relayDisplaySession.sendTwoMinuteMessage(msg)
+            sent = true
+        }
+        if ConnectionManager.shared.connectedPeerName != nil {
+            ConnectionManager.shared.sendTwoMinuteMessage(msg)
+            sent = true
+        }
+        if sent {
+            print("[DISPLAY OUT] displayRepEngineReady activity=\(activity.sessionActivityActivityId)")
+        } else {
+            print("[DISPLAY OUT] displayRepEngineReady DROPPED — no relay/multipeer transport activity=\(activity.sessionActivityActivityId)")
+        }
+    }
+
+    /// Re-send rep-engine-ready after relay reconnect if the display cue already finished.
+    func rebroadcastDisplayRepEngineReadyFromDisplayIfNeeded() {
+        let timed = TimedSessionController.shared
+        guard timed.mode == .partner, timed.isManagingSession, timed.isSessionActive else { return }
+        guard SessionStartCueRepGate.shouldBroadcastDisplayRepEngineReady else { return }
+        guard let activity = timed.currentActivity else { return }
+        broadcastDisplayRepEngineReadyFromDisplay(activity: activity)
+    }
+
+    /// Display (iPad): awaiting duration selection or session ended — coach must wait.
+    func broadcastTimedSessionInactiveFromDisplay() {
+        let msg = TwoMinuteMessage.timedSessionInactive(timestamp: Date())
+        if relayDisplaySession.socketConnectionState == .connected {
+            relayDisplaySession.sendTwoMinuteMessage(msg)
+        }
+        if ConnectionManager.shared.connectedPeerName != nil {
+            ConnectionManager.shared.sendTwoMinuteMessage(msg)
+        }
+    }
+
+    /// Coach phone only: display session container live — hold rep UI until instruction cue finishes.
+    private func handleIncomingTimedSessionActiveFromDisplay(activityId: String) {
+        guard !CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
+        print("[COACH INPUT] timedSessionActive activityId=\(activityId)")
+        let sameActivity = currentTimedSessionActivityId == activityId
+        currentTimedSessionActivityId = activityId
+        lastNonNilActivityId = activityId
+        displayTimedSessionAnnounced = true
+        CurrentSessionStore.shared.resetPartnerTimedSessionEndHandled()
+        Task { await attemptCoachRelayAutoReconnectFromStoredJoinCodeIfNeeded(reason: "display_timedSessionActive") }
+        // Rebroadcast while coach already unlocked (or mid first-rep wait) must not flash
+        // "Waiting for player…" and then TAP TO START again.
+        if sameActivity, isDisplayRepEngineReady {
+            print("[COACH STATE] timedSessionActive rebroadcast — keeping repEngineReady activityId=\(activityId)")
+            return
+        }
+        isDisplayRepEngineReady = false
+        TimedSessionController.shared.prepareCoachRemoteForPartnerDurationSelection()
+        print("[COACH STATE] currentTimedSessionActivityId=\(currentTimedSessionActivityId ?? "nil") ready=false")
+    }
+
+    /// Coach phone only: display instruction cue finished — unlock TAP TO START.
+    private func handleIncomingDisplayRepEngineReadyFromDisplay(activityId: String) {
+        guard !CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
+        let repEngineWasReady = isDisplayRepEngineReady
+        if isDisplayRepEngineReady, currentTimedSessionActivityId == activityId {
+            print("[COACH STATE] displayRepEngineReady duplicate ignored activityId=\(activityId)")
+            return
+        }
+        print("[COACH INPUT] displayRepEngineReady activityId=\(activityId)")
+        currentTimedSessionActivityId = activityId
+        lastNonNilActivityId = activityId
+        isDisplayRepEngineReady = true
+        TimedSessionController.shared.markPartnerDisplaySessionActiveFromRelay()
+        print("[COACH STATE] currentTimedSessionActivityId=\(currentTimedSessionActivityId ?? "nil") ready=true")
+        Task { await attemptCoachRelayAutoReconnectFromStoredJoinCodeIfNeeded(reason: "display_repEngineReady") }
+        if !repEngineWasReady {
+            NotificationCenter.default.post(
+                name: .partnerDisplayRepEngineBecameReady,
+                object: activityId
+            )
+        }
+    }
+
+    /// Coach phone only: display not ready or session ended.
+    private func handleIncomingTimedSessionInactiveFromDisplay() {
+        guard !CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
+        if isPartnerTrainingSessionActive, currentTimedSessionActivityId != nil {
+            print("[COACH STATE] timedSessionInactive ignored — display session active id=\(currentTimedSessionActivityId!)")
+            return
+        }
+        #if DEBUG
+        print("[COACH STATE] timedSessionInactive — preserving last activity id=\(lastNonNilActivityId ?? "nil")")
+        #endif
+        isDisplayRepEngineReady = false
+        displayTimedSessionAnnounced = false
+        TimedSessionController.shared.prepareCoachRemoteForPartnerDurationSelection()
+    }
+
+    private func handleIncomingSessionEndedForCoachMirror() {
+        guard !CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
+        currentTimedSessionActivityId = nil
+        isDisplayRepEngineReady = false
+        displayTimedSessionAnnounced = false
+        TimedSessionController.shared.prepareCoachRemoteForPartnerDurationSelection()
+    }
+
+    /// Timed partner session ended — reset drill state but keep relay, join code, and ``isPartnerTrainingSessionActive``.
+    func softResetAfterTimedPartnerSessionEnd() {
+        guard isPartnerTrainingSessionActive else { return }
+        currentTimedSessionActivityId = nil
+        isDisplayRepEngineReady = false
+        displayTimedSessionAnnounced = false
+        isPartnerDisplayCountdownActive = false
+        TimedSessionController.shared.prepareCoachRemoteForPartnerDurationSelection()
+        CurrentSessionStore.shared.resetPartnerTimedSessionEndHandled()
+        #if DEBUG
+        print("[Multipeer] TrainingPartnerSession: softResetAfterTimedPartnerSessionEnd — pairing preserved")
+        PartnerPersistDebug.log("softResetAfterTimedPartnerSessionEnd — relay + join code preserved")
+        #endif
+    }
+
+    /// Broadcast timed partner session end to the peer device.
+    func broadcastPartnerTimedSessionEnded(source: PartnerSessionEndSource) {
+        let msg = TwoMinuteMessage.sessionEnded(source: source, timestamp: Date())
+        print("[RELAY OUT] sessionEnded source=\(source.rawValue)")
+        if coachRelayRemoteService.connectionState == .connected {
+            coachRelayRemoteService.send(msg, completion: nil)
+        }
+        if relayDisplaySession.socketConnectionState == .connected {
+            relayDisplaySession.sendTwoMinuteMessage(msg)
+        }
+        if ConnectionManager.shared.connectedPeerName != nil {
+            ConnectionManager.shared.sendTwoMinuteMessage(msg)
+        }
+    }
+
+    private func handleIncomingPartnerTimedSessionEnded(source: PartnerSessionEndSource) {
+        print("[RELAY IN] sessionEnded source=\(source.rawValue)")
+        if CoachRemoteSessionStartGate.isPadPlayerRole() {
+            guard source == .coach else { return }
+            guard TimedSessionController.shared.isManagingSession else { return }
+            NotificationCenter.default.post(name: .coachEndTimedSessionRequested, object: nil)
+            return
+        }
+        guard source == .display else { return }
+        guard isPartnerTrainingSessionActive else { return }
+        // Stale summary / surface-recycle sessionEnded while a new timed run is already live.
+        if isDisplayRepEngineReady, currentTimedSessionActivityId != nil {
+            print("[COACH STATE] sessionEnded from display ignored — timed session live id=\(currentTimedSessionActivityId!)")
+            return
+        }
+        guard CurrentSessionStore.shared.tryMarkPartnerTimedSessionEndHandled() else { return }
+        handleIncomingSessionEndedForCoachMirror()
+        NotificationCenter.default.post(name: .partnerTimedSessionEndedFromDisplay, object: nil)
+    }
+
+    /// Coach phone: re-join relay using the stored join code (Train Again / hub tap while socket dropped or zombie).
+    func attemptCoachRelayAutoReconnectFromStoredJoinCodeIfNeeded(reason: String) async {
+        guard !CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
+        guard isPartnerTrainingSessionActive else { return }
+        guard let code = lastCoachRelayJoinCode?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !code.isEmpty else {
+            #if DEBUG
+            print("[CoachRelay] auto-reconnect skipped reason=\(reason) — no stored join code")
+            #endif
+            return
+        }
+
+        let linkLive = isPartnerTransportLinkLive
+        guard !linkLive else {
+            #if DEBUG
+            print("[CoachRelay] auto-reconnect skipped reason=\(reason) — transport already live")
+            #endif
+            return
+        }
+
+        if coachRelayRemoteService.connectionState == .connected {
+            #if DEBUG
+            print("[CoachRelay] stale socket (connected, no peer) — disconnecting before re-join reason=\(reason)")
+            #endif
+            coachRelayRemoteService.disconnect()
+            coachRelayDisplayPeerPresent = false
+        }
+
+        #if DEBUG
+        print("[CoachRelay] auto-reconnect starting reason=\(reason) joinCode=\(code)")
+        #endif
+        do {
+            let joined = try await WebSocketSessionAPI.joinSession(joinCode: code)
+            let wsURL = try joined.webSocketURLForCoach()
+            recordRelaySessionId(joined.sessionId)
+            let config = WebSocketSessionConfig(url: wsURL, sessionId: joined.sessionId, authToken: joined.coachToken)
+            let transport = WebSocketRemoteTransport(config: config)
+            let remote = coachRelayRemoteService
+            transport.onRawTextReceived = { text in
+                TrainingPartnerConnectionCoordinator.shared.ingestCoachRelayRawControlText(text)
+                if text.lowercased().contains("peer_left") {
+                    Task { @MainActor in
+                        remote.disconnect()
+                    }
+                }
+            }
+            recordCoachRelayJoinCode(code)
+            remote.replaceTransport(transport)
+            remote.connect()
+            #if DEBUG
+            print("[CoachRelay] auto-reconnect ok reason=\(reason) — awaiting peer_joined for live link")
+            #endif
+        } catch {
+            #if DEBUG
+            print("[CoachRelay] auto-reconnect failed reason=\(reason) error=\(error.localizedDescription)")
+            #endif
+            if WebSocketSessionAPI.isInvalidOrExpiredJoinSessionError(error) {
+                recoverCoachRelayStateAfterExpiredJoinCode()
+            }
+        }
+    }
+
+    /// Coach phone: switch timed-session activity on the display (coach remote owns the picker).
+    @MainActor
+    func sendActivityChanged(to activity: ActivityKind, onRetrying: (() -> Void)? = nil) async -> Bool {
+        guard !CoachRemoteSessionStartGate.isPadPlayerRole() else { return false }
+        guard isPartnerTrainingSessionActive, displayTimedSessionAnnounced else { return false }
+        let activityId = activity.sessionActivityActivityId
+        if currentTimedSessionActivityId == activityId { return true }
+
+        applyCoachTimedSessionMirror(activityId: activityId)
+        let msg = TwoMinuteMessage.activityChanged(activityId: activityId, timestamp: Date())
+
+        let maxAttempts = 3
+        for attempt in 0..<maxAttempts {
+            if hasPartnerActivityChangeTransport {
+                transmitActivityChanged(msg, activityId: activityId)
+                return true
+            }
+            if attempt < maxAttempts - 1 {
+                onRetrying?()
+                await attemptCoachRelayAutoReconnectFromStoredJoinCodeIfNeeded(reason: "activity_changed")
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
+        return false
+    }
+
+    private var hasPartnerActivityChangeTransport: Bool {
+        coachRelayRemoteService.connectionState == .connected
+            || ConnectionManager.shared.connectedPeerName != nil
+    }
+
+    private func transmitActivityChanged(_ msg: TwoMinuteMessage, activityId: String) {
+        print("[COACH OUT] activityChanged activityId=\(activityId)")
+        if coachRelayRemoteService.connectionState == .connected {
+            coachRelayRemoteService.send(msg, completion: nil)
+        }
+        if ConnectionManager.shared.connectedPeerName != nil {
+            ConnectionManager.shared.sendTwoMinuteMessage(msg)
+        }
+    }
+
+    private func handleIncomingActivityChangedFromCoach(activityId: String) {
+        guard CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
+        guard let activity = ActivityKind.fromSessionActivityId(activityId) else { return }
+        let timed = TimedSessionController.shared
+        guard timed.mode == .partner, timed.isManagingSession, timed.isSessionActive else { return }
+        print("[DISPLAY IN] activityChanged activityId=\(activityId)")
+        NotificationCenter.default.post(name: .timedSessionSwitchActivity, object: activity)
+    }
+
+    /// Coach phone: end timed partner session — notify display to save + show summary, then return to hub.
+    func coachEndTimedSession(router: AppRouter) {
+        guard !CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
+        guard isPartnerTrainingSessionActive else { return }
+        guard CurrentSessionStore.shared.tryMarkPartnerTimedSessionEndHandled() else { return }
+        broadcastPartnerTimedSessionEnded(source: .coach)
+        softResetAfterTimedPartnerSessionEnd()
+        router.returnToCoachRemoteHubAfterSessionEnd()
     }
 
     /// Coach remote (iPhone): call after ``beginPartnerTrainingSessionIfNeeded()`` — `ConnectionManager` may skip `startBrowsing` if already connected.
@@ -1085,7 +1500,16 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
     }
 
     /// Display: call `startDisplaySessionIfNeeded()` on the shared relay.
+    /// Coach remotes (phones) must never mint a display join code — they join an existing session.
     func prepareRelayDisplayForActivity() async {
+        #if canImport(UIKit)
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            #if DEBUG
+            PartnerPersistDebug.log("prepareRelayDisplayForActivity — skipped on phone (coach remote joins; display hosts)")
+            #endif
+            return
+        }
+        #endif
         #if DEBUG
         PartnerPersistDebug.log("prepareRelayDisplayForActivity — enter (will begin session if needed + startDisplaySessionIfNeeded)")
         #endif

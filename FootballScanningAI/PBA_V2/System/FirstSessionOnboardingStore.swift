@@ -16,9 +16,72 @@ enum FirstSessionOnboardingStore {
     static let hasCompletedFirstSessionKey = "pba.hasCompletedFirstSession"
     private static let lastLoginPromptDayKey = "pba.lastLoginPromptDay"
     private static let loginPromptDeclinedDayKey = "pba.loginPromptDeclinedDay"
+    /// Set when the first session ends with a feedback overlay; login fires on overlay Done.
+    private static var pendingLoginPromptAfterFeedback = false
+
+    static let meaningfulSessionMinReps = 5
+    static let meaningfulSessionMinElapsedSeconds: TimeInterval = 15
+
+    static func isMeaningfulSession(repCount: Int, elapsedSeconds: TimeInterval) -> Bool {
+        repCount >= meaningfulSessionMinReps || elapsedSeconds >= meaningfulSessionMinElapsedSeconds
+    }
 
     static var hasCompletedFirstSession: Bool {
         UserDefaults.standard.bool(forKey: hasCompletedFirstSessionKey)
+    }
+
+    /// Records the first completed training session for any activity.
+    /// - Parameter deferLoginUntilFeedbackDismissed: `true` when post-session feedback overlay will show first.
+    /// - Returns: `true` only the first time a meaningful session completes.
+    @discardableResult
+    static func noteTrainingSessionCompleted(
+        deferLoginUntilFeedbackDismissed: Bool,
+        repCount: Int,
+        elapsedSeconds: TimeInterval
+    ) -> Bool {
+        migrateExistingInstallsIfNeeded()
+        guard isMeaningfulSession(repCount: repCount, elapsedSeconds: elapsedSeconds) else { return false }
+        guard markFirstSessionCompletedIfNeeded() else { return false }
+        AuthFlowOnboardingSync.markLocalBaselineCompleted()
+        if deferLoginUntilFeedbackDismissed {
+            pendingLoginPromptAfterFeedback = true
+        } else {
+            requestFirstSessionLoginPromptIfNeeded()
+        }
+        return true
+    }
+
+    /// Call from shared solo feedback overlay Done, after navigation home.
+    static func requestLoginPromptAfterFeedbackIfPending() {
+        guard pendingLoginPromptAfterFeedback else { return }
+        pendingLoginPromptAfterFeedback = false
+        requestFirstSessionLoginPromptIfNeeded()
+    }
+
+    static func requestFirstSessionLoginPromptIfNeeded() {
+        guard AuthManager.shared.currentSession == nil else { return }
+        NotificationCenter.default.post(name: .firstSessionTrainingCompleted, object: nil)
+    }
+
+    /// Call when presenting solo timed feedback overlay.
+    static func prepareLoginPromptAfterSoloTimedSessionIfNeeded(repCount: Int, elapsedSeconds: TimeInterval) {
+        _ = noteTrainingSessionCompleted(
+            deferLoginUntilFeedbackDismissed: true,
+            repCount: repCount,
+            elapsedSeconds: elapsedSeconds
+        )
+    }
+
+    /// Standard solo feedback dismiss: clear session state, go home, then deferred login if needed.
+    static func completeSoloTimedFeedbackDismiss(
+        clearSession: () -> Void,
+        dismissOverlay: () -> Void,
+        popToRoot: () -> Void
+    ) {
+        clearSession()
+        dismissOverlay()
+        popToRoot()
+        requestLoginPromptAfterFeedbackIfPending()
     }
 
     /// Welcome screen is no longer shown at launch — users land on Home directly.
@@ -46,7 +109,7 @@ enum FirstSessionOnboardingStore {
         PBASessionFlowPolicy.persistTrainingMode(.solo)
     }
 
-    /// Call when the first Meet the Ball session finishes. Returns `true` only once.
+    /// Marks first session complete in storage. Prefer ``noteTrainingSessionCompleted(deferLoginUntilFeedbackDismissed:)`` at session end.
     @discardableResult
     static func markFirstSessionCompletedIfNeeded() -> Bool {
         migrateExistingInstallsIfNeeded()

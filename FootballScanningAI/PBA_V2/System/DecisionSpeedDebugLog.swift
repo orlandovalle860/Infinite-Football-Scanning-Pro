@@ -10,6 +10,13 @@ import Foundation
 
 #if DEBUG
 enum DecisionSpeedDebugLog {
+    private static let enableDecisionSpeedDebug = false
+
+    private static func log(_ message: @autoclosure () -> String) {
+        guard enableDecisionSpeedDebug else { return }
+        print(message())
+    }
+
     private static var chainSeq: Int = 0
     private static func nextSeq() -> Int {
         chainSeq += 1
@@ -20,15 +27,15 @@ enum DecisionSpeedDebugLog {
 
     /// Coach remote: `embeddedTimestamp` is the same `Date()` passed into `RemoteService.sendPassTriggered` / wire payload (handler runs synchronously with `CoachRemoteFeedbackTap` action — see `CoachRemoteButtonFeedback.swift`).
     static func logCoachPassSend(activity: ActivityKind, repIndex: Int, embeddedTimestamp: Date) {
-        print("[DecisionSpeedDebug] seq=\(nextSeq()) chain=COACH_PASS_SEND activity=\(activity.rawValue) rep=\(repIndex) passEmbeddedTS=\(ts(embeddedTimestamp)) NOTE=embedded_is_Date_in_button_action_same_runLoop_as_touch_not_UITouch_timestamp")
+        log("[DecisionSpeedDebug] seq=\(nextSeq()) chain=COACH_PASS_SEND activity=\(activity.rawValue) rep=\(repIndex) passEmbeddedTS=\(ts(embeddedTimestamp)) NOTE=embedded_is_Date_in_button_action_same_runLoop_as_touch_not_UITouch_timestamp")
     }
 
     static func logCoachExitSend(activity: ActivityKind, repIndex: Int, gate: Gate, embeddedTimestamp: Date) {
-        print("[DecisionSpeedDebug] seq=\(nextSeq()) chain=COACH_DIR_SEND activity=\(activity.rawValue) rep=\(repIndex) gate=\(gate.rawValue) directionEmbeddedTS=\(ts(embeddedTimestamp)) NOTE=embedded_is_Date_immediately_before_sendExitLogged_same_as_wire")
+        log("[DecisionSpeedDebug] seq=\(nextSeq()) chain=COACH_DIR_SEND activity=\(activity.rawValue) rep=\(repIndex) gate=\(gate.rawValue) directionEmbeddedTS=\(ts(embeddedTimestamp)) NOTE=embedded_is_Date_immediately_before_sendExitLogged_same_as_wire")
     }
 
     static func logCoachIncorrectSend(activity: ActivityKind, repIndex: Int, embeddedTimestamp: Date) {
-        print("[DecisionSpeedDebug] seq=\(nextSeq()) chain=COACH_INCORRECT_SEND activity=\(activity.rawValue) rep=\(repIndex) incorrectEmbeddedTS=\(ts(embeddedTimestamp)) NOTE=same_clock_as_exitLogged")
+        log("[DecisionSpeedDebug] seq=\(nextSeq()) chain=COACH_INCORRECT_SEND activity=\(activity.rawValue) rep=\(repIndex) incorrectEmbeddedTS=\(ts(embeddedTimestamp)) NOTE=same_clock_as_exitLogged")
     }
 
     // MARK: - Display (relay ingress)
@@ -36,35 +43,35 @@ enum DecisionSpeedDebugLog {
     /// Display: message delivered on main after `WebSocketRemoteTransport.deliverTwoMinuteMessage` async; `embeddedTimestamp` is decoded from JSON (coach clock instant).
     static func logDisplayRelayIngress(activity: ActivityKind, kind: String, repIndex: Int, embeddedTimestamp: Date, displayReceiveWallTime: Date) {
         let lag = displayReceiveWallTime.timeIntervalSince(embeddedTimestamp)
-        print("[DecisionSpeedDebug] seq=\(nextSeq()) chain=DISPLAY_RELAY_INGRESS activity=\(activity.rawValue) kind=\(kind) rep=\(repIndex) embeddedTS=\(ts(embeddedTimestamp)) displayReceiveWallTS=\(ts(displayReceiveWallTime)) receiveLagAfterEmbedded=\(fmt(lag))s NOTE=relay_mainAsync_lag_NOT_in_rawDelta")
+        log("[DecisionSpeedDebug] seq=\(nextSeq()) chain=DISPLAY_RELAY_INGRESS activity=\(activity.rawValue) kind=\(kind) rep=\(repIndex) embeddedTS=\(ts(embeddedTimestamp)) displayReceiveWallTS=\(ts(displayReceiveWallTime)) receiveLagAfterEmbedded=\(fmt(lag))s NOTE=relay_mainAsync_lag_NOT_in_rawDelta")
     }
 
     /// Display: immediately before `engine.onPassTrigger` / apply pass.
     static func logDisplayBeforeEnginePass(activity: ActivityKind, repIndex: Int, embeddedPass: Date, displayWallBeforeEngine: Date) {
         let d = displayWallBeforeEngine.timeIntervalSince(embeddedPass)
-        print("[DecisionSpeedDebug] seq=\(nextSeq()) chain=DISPLAY_BEFORE_ENGINE_PASS activity=\(activity.rawValue) rep=\(repIndex) embeddedPassTS=\(ts(embeddedPass)) displayWallBeforeEngine=\(ts(displayWallBeforeEngine)) delayAfterEmbedded=\(fmt(d))s NOTE=delay_NOT_in_rawDelta")
+        log("[DecisionSpeedDebug] seq=\(nextSeq()) chain=DISPLAY_BEFORE_ENGINE_PASS activity=\(activity.rawValue) rep=\(repIndex) embeddedPassTS=\(ts(embeddedPass)) displayWallBeforeEngine=\(ts(displayWallBeforeEngine)) delayAfterEmbedded=\(fmt(d))s NOTE=delay_NOT_in_rawDelta")
     }
 
     /// Display: immediately before `engine.onExitLogged` / `onIncorrectDecision` (direction or ✕ processed on main).
     static func logDisplayBeforeEngineExit(activity: ActivityKind, repIndex: Int, embeddedDirection: Date, displayWallBeforeEngine: Date, kind: String) {
         let d = displayWallBeforeEngine.timeIntervalSince(embeddedDirection)
-        print("[DecisionSpeedDebug] seq=\(nextSeq()) chain=DISPLAY_BEFORE_ENGINE_EXIT kind=\(kind) activity=\(activity.rawValue) rep=\(repIndex) embeddedDirectionTS=\(ts(embeddedDirection)) displayWallBeforeEngine=\(ts(displayWallBeforeEngine)) delayAfterEmbedded=\(fmt(d))s NOTE=delay_NOT_in_rawDelta")
+        log("[DecisionSpeedDebug] seq=\(nextSeq()) chain=DISPLAY_BEFORE_ENGINE_EXIT kind=\(kind) activity=\(activity.rawValue) rep=\(repIndex) embeddedDirectionTS=\(ts(embeddedDirection)) displayWallBeforeEngine=\(ts(displayWallBeforeEngine)) delayAfterEmbedded=\(fmt(d))s NOTE=delay_NOT_in_rawDelta")
     }
 
     // MARK: - Engine (bucket path)
 
     /// Engine: `passTriggeredAt` set; rep is live for direction logging (after successful `onPassTrigger`).
     static func logEngineRepLive(activity: ActivityKind, repIndex: Int, passEmbeddedStored: Date) {
-        print("[DecisionSpeedDebug] seq=\(nextSeq()) chain=ENGINE_REP_LIVE activity=\(activity.rawValue) rep=\(repIndex) passTriggeredAt_set=\(ts(passEmbeddedStored))")
+        log("[DecisionSpeedDebug] seq=\(nextSeq()) chain=ENGINE_REP_LIVE activity=\(activity.rawValue) rep=\(repIndex) passTriggeredAt_set=\(ts(passEmbeddedStored))")
     }
 
     /// Solo/wall display: pass time is `Date()` at display tap (not coach-embedded).
     static func logSoloDisplayPassTrigger(activity: ActivityKind, repIndex: Int, displayWallPassTS: Date) {
-        print("[DecisionSpeedDebug] seq=\(nextSeq()) chain=SOLO_DISPLAY_PASS activity=\(activity.rawValue) rep=\(repIndex) passTS=\(ts(displayWallPassTS)) NOTE=display_Date_at_tap")
+        log("[DecisionSpeedDebug] seq=\(nextSeq()) chain=SOLO_DISPLAY_PASS activity=\(activity.rawValue) rep=\(repIndex) passTS=\(ts(displayWallPassTS)) NOTE=display_Date_at_tap")
     }
 
     static func logSoloDisplayExitTrigger(activity: ActivityKind, repIndex: Int, gate: Gate, displayWallExitTS: Date) {
-        print("[DecisionSpeedDebug] seq=\(nextSeq()) chain=SOLO_DISPLAY_EXIT activity=\(activity.rawValue) rep=\(repIndex) gate=\(gate.rawValue) exitTS=\(ts(displayWallExitTS)) NOTE=display_Date_at_tap")
+        log("[DecisionSpeedDebug] seq=\(nextSeq()) chain=SOLO_DISPLAY_EXIT activity=\(activity.rawValue) rep=\(repIndex) gate=\(gate.rawValue) exitTS=\(ts(displayWallExitTS)) NOTE=display_Date_at_tap")
     }
 
     /// Per-rep log when a rep is committed. `rawDeltaSeconds` = directionLogTimestamp − passTimestamp (engine); **network and main-queue delivery are not added** — only embedded coach timestamps.
@@ -103,7 +110,7 @@ enum DecisionSpeedDebugLog {
             line += " visualRevealTS=\(ts(v))"
         }
         line += " NOTE=rawDelta_uses_only_embedded_pass_and_direction_timestamps_processingLag_NOT_in_bucket"
-        print(line.replacingOccurrences(of: "\n", with: " "))
+        log(line.replacingOccurrences(of: "\n", with: " "))
     }
 
     /// Away From Pressure block summary: per-rep buckets + average (headline uses dominant bucket; see `[UniversalSummaryBucket-Debug]`).
@@ -123,12 +130,12 @@ enum DecisionSpeedDebugLog {
         let res = UniversalBlockSummaryHeadline.resolve(fast: f, medium: m, slow: s)
         let headline = res.bucket
         let tie = res.tieBreakApplied
-        print("[DecisionSpeedDebug] seq=\(nextSeq()) aggregate=AFP_block_summary difficulty=\(difficulty?.rawValue ?? "nil") repCount=\(times.count) avgRawDeltaSeconds=\(fmt(avg)) headlineBucketFromDominant=\(headline.rawValue) tieBreak=\(tie ? "worse_wins" : "none") NOTE=headline_matches_UniversalBlockSummaryHeadline")
-        for log in logs {
-            guard let t = log.decisionTimeSeconds else { continue }
+        log("[DecisionSpeedDebug] seq=\(nextSeq()) aggregate=AFP_block_summary difficulty=\(difficulty?.rawValue ?? "nil") repCount=\(times.count) avgRawDeltaSeconds=\(fmt(avg)) headlineBucketFromDominant=\(headline.rawValue) tieBreak=\(tie ? "worse_wins" : "none") NOTE=headline_matches_UniversalBlockSummaryHeadline")
+        for repLog in logs {
+            guard let t = repLog.decisionTimeSeconds else { continue }
             let window = DecisionTimingModel.decisionWindow(rawRepInterval: t, activity: .awayFromPressure, difficulty: difficulty)
             let b = DecisionTimingModel.speedBucket(forDecisionWindow: window, activity: .awayFromPressure, score: 70)
-            print("[DecisionSpeedDebug] aggregateRep repIndex=\(log.repIndex) rawDelta=\(fmt(t)) bucket=\(b.rawValue)")
+            log("[DecisionSpeedDebug] aggregateRep repIndex=\(repLog.repIndex) rawDelta=\(fmt(t)) bucket=\(b.rawValue)")
         }
     }
 

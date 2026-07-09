@@ -9,6 +9,21 @@
 import Foundation
 import Combine
 
+enum SessionCompletionType: String {
+    case completed
+    case earlyExit = "early_exit"
+    case abandoned
+}
+
+enum SessionAnalyticsMode: String {
+    case solo
+    case partner
+
+    static func from(trainingMode: TrainingMode) -> SessionAnalyticsMode {
+        trainingMode == .solo ? .solo : .partner
+    }
+}
+
 /// Holds the current display session id and session_activity id (iPad only). Set when session/drill starts, cleared when session ends.
 final class CurrentSessionStore: ObservableObject {
     static let shared = CurrentSessionStore()
@@ -16,7 +31,20 @@ final class CurrentSessionStore: ObservableObject {
     @Published private(set) var sessionId: UUID?
     /// Id of the row in session_activities for the current drill. Events and decisions use session_activity_id = currentSessionActivityId.
     @Published private(set) var currentSessionActivityId: UUID?
+    /// Id of the row in session_activity_segments for the current activity stint (multi-activity sessions).
+    @Published private(set) var currentSessionActivitySegmentId: UUID?
+    /// `activity_id` string for the open segment (used for segment debug logs and mismatch detection).
+    @Published private(set) var currentSegmentActivityId: String?
+    /// Reps logged in the open segment (reset when a new segment starts).
+    @Published private(set) var currentSegmentRepCount: Int = 0
     @Published private(set) var expectedBallTravelTimeOverrideSeconds: Double?
+    @Published private(set) var analyticsSessionStartedAt: Date?
+    /// Wall-clock when the Supabase `sessions` row was created (set once per session).
+    @Published private(set) var supabaseSessionStartedAt: Date?
+    @Published private(set) var analyticsMode: SessionAnalyticsMode?
+    @Published private(set) var analyticsCompletionType: SessionCompletionType?
+    /// Per-device guard: prevents handling the same timed partner session end twice locally.
+    private(set) var partnerTimedSessionEndHandled = false
 
     /// In-session only, keyed by ``ActivityKind/sessionActivityActivityId``. Omitted entries = 1.0.
     @Published private(set) var decisionTimingCalibrationFactors: [ActivityID: Double] = [:]
@@ -28,8 +56,28 @@ final class CurrentSessionStore: ObservableObject {
     private init() {}
 
     /// Call when a drill starts. Sets sessionId so the block save and decisions update the same row.
-    func setSessionIdOnly(_ id: UUID) {
+    func setSessionIdOnly(
+        _ id: UUID,
+        mode: SessionAnalyticsMode? = nil,
+        startAnalyticsClock: Bool = true,
+        supabaseStartedAt: Date? = nil
+    ) {
         sessionId = id
+        if supabaseSessionStartedAt == nil {
+            supabaseSessionStartedAt = supabaseStartedAt ?? Date()
+        }
+        analyticsSessionStartedAt = startAnalyticsClock ? Date() : analyticsSessionStartedAt
+        analyticsCompletionType = nil
+        partnerTimedSessionEndHandled = false
+        if let mode {
+            analyticsMode = mode
+        }
+    }
+
+    /// Solo local display: analytics clock begins when the player taps to start (after calibration).
+    func startAnalyticsClockIfNeeded() {
+        guard analyticsSessionStartedAt == nil else { return }
+        analyticsSessionStartedAt = Date()
     }
 
     /// Call when a drill starts after inserting into session_activities; saves the returned id so events and decisions link to the correct block.
@@ -37,9 +85,57 @@ final class CurrentSessionStore: ObservableObject {
         currentSessionActivityId = id
     }
 
+    func setCurrentSessionActivitySegmentId(_ id: UUID, activityId: String) {
+        currentSessionActivitySegmentId = id
+        currentSegmentActivityId = activityId
+        currentSegmentRepCount = 0
+    }
+
+    func incrementCurrentSegmentRepCount() {
+        currentSegmentRepCount += 1
+        #if DEBUG
+        print("[REP UPDATE] activity=\(currentSegmentActivityId ?? "?") count=\(currentSegmentRepCount)")
+        #endif
+        if let segmentId = currentSessionActivitySegmentId {
+            SupabaseSessionService.shared.syncSessionActivitySegmentRepCount(
+                segmentId: segmentId,
+                repCount: currentSegmentRepCount
+            )
+        }
+    }
+
+    func resetCurrentSegmentRepCount() {
+        currentSegmentRepCount = 0
+    }
+
+    func clearCurrentSessionActivitySegment() {
+        currentSessionActivitySegmentId = nil
+        currentSegmentActivityId = nil
+        currentSegmentRepCount = 0
+    }
+
     /// Optional per-session override from quick pass-tempo calibration on display.
     func setExpectedBallTravelTimeOverrideSeconds(_ value: Double?) {
         expectedBallTravelTimeOverrideSeconds = value
+    }
+
+    func setAnalyticsMode(_ mode: SessionAnalyticsMode) {
+        analyticsMode = mode
+    }
+
+    func markSessionCompletionType(_ type: SessionCompletionType) {
+        analyticsCompletionType = type
+    }
+
+    @discardableResult
+    func tryMarkPartnerTimedSessionEndHandled() -> Bool {
+        guard !partnerTimedSessionEndHandled else { return false }
+        partnerTimedSessionEndHandled = true
+        return true
+    }
+
+    func resetPartnerTimedSessionEndHandled() {
+        partnerTimedSessionEndHandled = false
     }
 
     func calibrationFactor(for activityId: ActivityID) -> Double {
@@ -126,7 +222,15 @@ final class CurrentSessionStore: ObservableObject {
     func clear() {
         sessionId = nil
         currentSessionActivityId = nil
+        currentSessionActivitySegmentId = nil
+        currentSegmentActivityId = nil
+        currentSegmentRepCount = 0
         expectedBallTravelTimeOverrideSeconds = nil
+        analyticsSessionStartedAt = nil
+        supabaseSessionStartedAt = nil
+        analyticsMode = nil
+        analyticsCompletionType = nil
+        partnerTimedSessionEndHandled = false
         factorStorage.removeAll()
         calibrationEarlyStreakByActivity.removeAll()
         calibrationLateStreakByActivity.removeAll()

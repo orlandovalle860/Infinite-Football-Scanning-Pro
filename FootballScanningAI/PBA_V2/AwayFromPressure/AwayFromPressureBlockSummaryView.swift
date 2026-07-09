@@ -341,6 +341,7 @@ struct AwayFromPressureBlockSummaryView: View {
                 #endif
                 return
             }
+            guard !TimedSessionDisplayIntegration.usesSharedSession else { return }
             let playerId = playerStore.selectedPlayerId
             #if DEBUG
             print("[PBA-Debug] Block completed (AFP). decisionSpeedScoreValue=\(decisionSpeedScoreValue ?? -1), activity=awayFromPressure, playerId=\(playerId?.uuidString ?? "nil"), correct=\(correctCount), decisionsCompleted=\(logs.count)")

@@ -17,9 +17,9 @@ struct AppConfig {
     /// we do **not** auto-enable tester mode there, or the Tester Tools button would reappear on every
     /// device run while `AppConfig` used to force `testerMode == true` in `#if DEBUG`.
     ///
-    /// Set `enableTesterToolsInDebugBuilds` to `true` only while you need Tester Tools or full Path unlock locally.
+    /// Set to `false` only when you want Debug runs to match TestFlight (no Tester Tools entry).
     #if DEBUG
-    private static let enableTesterToolsInDebugBuilds = false
+    private static let enableTesterToolsInDebugBuilds = true
     static var testerMode: Bool { enableTesterToolsInDebugBuilds }
     #else
     static var testerMode: Bool { false }

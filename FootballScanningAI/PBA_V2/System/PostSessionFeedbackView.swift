@@ -13,6 +13,7 @@ import UIKit
 struct PostSessionFeedbackView: View {
     let repCount: Int
     let durationSeconds: TimeInterval
+    var repTarget: Int? = nil
     let onDone: () -> Void
 
     @State private var content: PostSessionFeedbackContent?
@@ -38,73 +39,73 @@ struct PostSessionFeedbackView: View {
             )
             .ignoresSafeArea()
 
-            VStack(spacing: 32) {
-                Spacer()
+            ResponsiveScrollScreen {
+                VStack(spacing: 32) {
+                    VStack(spacing: 16) {
+                        Text("Nice work.")
+                            .font(.system(size: 36, weight: .bold, design: .rounded))
+                            .foregroundColor(.white)
 
-                VStack(spacing: 16) {
-                    Text("Nice work.")
-                        .font(.system(size: 36, weight: .bold, design: .rounded))
-                        .foregroundColor(.white)
+                        Text(subtitle)
+                            .font(.body.weight(.medium))
+                            .foregroundColor(.white.opacity(0.78))
+                            .multilineTextAlignment(.center)
 
-                    Text(subtitle)
-                        .font(.body.weight(.medium))
-                        .foregroundColor(.white.opacity(0.78))
-                        .multilineTextAlignment(.center)
-
-                    if let content {
-                        if content.isLongestSessionYet {
-                            Text("Your longest session yet")
-                                .font(.subheadline.weight(.medium))
-                                .foregroundColor(.white.opacity(0.72))
-                                .multilineTextAlignment(.center)
-                        }
-
-                        if let streakDays = content.streakDays {
-                            Text("🔥 \(streakDays)-day streak")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundColor(.white.opacity(0.88))
-                                .multilineTextAlignment(.center)
-                                .scaleEffect(streakPopScale)
-                        }
-
-                        if content.showComeBackTomorrow {
-                            Text("Come back tomorrow.")
+                        if let repTarget {
+                            Text("Target was \(repTarget)+ reps")
                                 .font(.footnote.weight(.medium))
                                 .foregroundColor(.white.opacity(0.5))
                                 .multilineTextAlignment(.center)
                         }
 
-                        if content.showExtraWorkToday {
-                            Text("You're putting in extra work today.")
-                                .font(.subheadline.weight(.medium))
-                                .foregroundColor(.white.opacity(0.72))
-                                .multilineTextAlignment(.center)
+                        if let content {
+                            if content.isLongestSessionYet {
+                                Text("Your longest session yet")
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundColor(.white.opacity(0.72))
+                                    .multilineTextAlignment(.center)
+                            }
+
+                            if let streakDays = content.streakDays {
+                                Text("🔥 \(streakDays)-day streak")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundColor(.white.opacity(0.88))
+                                    .multilineTextAlignment(.center)
+                                    .scaleEffect(streakPopScale)
+                            }
+
+                            if content.showComeBackTomorrow {
+                                Text("Come back tomorrow.")
+                                    .font(.footnote.weight(.medium))
+                                    .foregroundColor(.white.opacity(0.5))
+                                    .multilineTextAlignment(.center)
+                            }
+
+                            if content.showExtraWorkToday {
+                                Text("You're putting in extra work today.")
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundColor(.white.opacity(0.72))
+                                    .multilineTextAlignment(.center)
+                            }
                         }
                     }
-                }
-                .padding(.horizontal, 28)
-                .opacity(contentVisible ? 1 : 0)
-                .scaleEffect(contentVisible ? 1 : 0.97)
+                    .opacity(contentVisible ? 1 : 0)
+                    .scaleEffect(contentVisible ? 1 : 0.97)
 
-                Spacer()
-
-                Button(action: doneTapped) {
-                    Text("Done")
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                        .foregroundColor(.black)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 18)
-                        .background(Color.yellow)
-                        .cornerRadius(16)
+                    Button(action: doneTapped) {
+                        Text("Done")
+                            .font(.system(size: 20, weight: .bold, design: .rounded))
+                            .foregroundColor(.black)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 18)
+                            .background(Color.yellow)
+                            .cornerRadius(16)
+                    }
+                    .buttonStyle(PostSessionFeedbackDoneButtonStyle())
+                    .opacity(contentVisible ? 1 : 0)
+                    .disabled(isDismissing)
                 }
-                .buttonStyle(PostSessionFeedbackDoneButtonStyle())
-                .opacity(contentVisible ? 1 : 0)
-                .disabled(isDismissing)
-                .padding(.horizontal, 28)
-                .padding(.bottom, 40)
             }
-            .frame(maxWidth: 420)
-            .frame(maxWidth: .infinity)
         }
         .preferredColorScheme(.dark)
         .accessibilityElement(children: .contain)

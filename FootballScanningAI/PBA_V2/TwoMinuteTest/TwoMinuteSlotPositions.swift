@@ -64,8 +64,11 @@ enum TwoMinuteSlotPositions {
         let usableW = w - l - r
         let usableH = h - t - b
         let m = min(usableW, usableH)
-        let scaled = m * 0.24
-        return min(max(scaled, 120), 260)
+        let isLandscape = w > h
+        let fraction: CGFloat = isLandscape ? 0.21 : 0.24
+        let scaled = m * fraction
+        let maxSide: CGFloat = isLandscape ? 235 : 260
+        return min(max(scaled, 120), maxSide)
     }
 
     /// Center of the playable band (matches the diamond’s vertical/horizontal midlines).

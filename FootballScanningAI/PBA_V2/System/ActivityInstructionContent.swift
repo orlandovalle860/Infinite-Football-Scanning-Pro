@@ -89,7 +89,7 @@ enum ActivityInstructionContent {
             )
         case .awayFromPressure:
             return ActivityInstructionData(
-                title: "Playing Away From Pressure",
+                title: ActivityKind.awayFromPressure.displayName,
                 yourDecisionLines: [
                     "Scan for pressure.",
                     "Identify the safest space.",
@@ -100,7 +100,7 @@ enum ActivityInstructionContent {
             )
         case .dribbleOrPass:
             return ActivityInstructionData(
-                title: "Dribble or Pass",
+                title: ActivityKind.dribbleOrPass.displayName,
                 yourDecisionLines: [
                     "Scan before expected arrival.",
                     "If forward space is open → dribble.",
@@ -118,7 +118,7 @@ enum ActivityInstructionContent {
             )
         case .oneTouchPassing:
             return ActivityInstructionData(
-                title: "One-Touch Passing",
+                title: ActivityKind.oneTouchPassing.displayName,
                 yourDecisionLines: [
                     "Scan multiple options early.",
                     "Decide before expected arrival.",

@@ -1,7 +1,6 @@
 {
   "images" : [
     {
-      "filename" : "Logo Name Tagline New Font.png",
       "idiom" : "universal",
       "scale" : "1x"
     },
@@ -10,6 +9,7 @@
       "scale" : "2x"
     },
     {
+      "filename" : "vpLaunchMark.png",
       "idiom" : "universal",
       "scale" : "3x"
     }

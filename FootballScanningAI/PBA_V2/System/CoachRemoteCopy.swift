@@ -13,6 +13,9 @@ enum CoachRemoteCopy {
     /// Ready state — headline when connected and waiting for NEXT REP.
     static let readyForNextRep = "Ready for next rep"
 
+    /// Coach remote while display is still on instruction / countdown cue.
+    static let waitingForDisplaySetup = "Waiting for player to finish setup…"
+
     /// PASS step — timing input (after cue on Display). Same phrase as pre-block partner instructions.
     static let passTimingInstruction = ActivityInstructionData.partnerCoachPassTimingLine
 

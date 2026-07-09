@@ -20,18 +20,29 @@ final class SoloSessionTimerController: ObservableObject {
     private var sessionStartDate: Date?
 
     func start(choice: SoloSessionDurationChoice) {
-        stop()
-        self.choice = choice
-        sessionStartDate = Date()
+        let startedAt = SoloTimeBasedSession.sessionStartedAt ?? Date()
+        resume(choice: choice, sessionStartedAt: startedAt)
         pendingEndAfterCurrentRep = false
+    }
+
+    /// Continue an in-progress session clock (e.g. after switching activities).
+    func resume(choice: SoloSessionDurationChoice, sessionStartedAt: Date) {
+        tickTimer?.invalidate()
+        tickTimer = nil
+        self.choice = choice
+        self.sessionStartDate = sessionStartedAt
         isVisible = true
 
         if let duration = choice.durationSeconds {
-            countdownEndDate = sessionStartDate!.addingTimeInterval(duration)
+            countdownEndDate = sessionStartedAt.addingTimeInterval(duration)
+            if Date() >= countdownEndDate! {
+                pendingEndAfterCurrentRep = true
+            }
         } else {
             countdownEndDate = nil
         }
         refreshDisplay()
+        guard tickTimer == nil, !pendingEndAfterCurrentRep else { return }
         tickTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
@@ -54,6 +65,23 @@ final class SoloSessionTimerController: ObservableObject {
         guard let sessionStartDate else { return SoloTimeBasedSession.elapsedSeconds(now: now) }
         return max(0, now.timeIntervalSince(sessionStartDate))
     }
+
+    /// Seconds left on a timed countdown; `nil` for free-play elapsed mode.
+    var remainingTime: TimeInterval? {
+        guard let choice, choice.isTimed, let countdownEndDate else { return nil }
+        return max(0, countdownEndDate.timeIntervalSinceNow)
+    }
+
+    /// Remaining countdown for timed sessions; elapsed time for free play.
+    var presentationText: String {
+        guard let choice else { return displayText }
+        if choice.isTimed, let remaining = remainingTime {
+            return SoloSessionTimeFormat.mmss(remaining)
+        }
+        return SoloSessionTimeFormat.mmss(elapsedSeconds())
+    }
+
+    var sessionStartTime: Date? { sessionStartDate }
 
     private func tick() {
         refreshDisplay()

@@ -14,6 +14,7 @@ extension View {
         isPresented: Bool,
         elapsedSeconds: TimeInterval,
         repCount: Int,
+        repTarget: Int? = nil,
         onDone: @escaping () -> Void
     ) -> some View {
         ZStack {
@@ -22,6 +23,7 @@ extension View {
                 PostSessionFeedbackView(
                     repCount: repCount,
                     durationSeconds: elapsedSeconds,
+                    repTarget: repTarget,
                     onDone: onDone
                 )
                 .transition(.opacity)

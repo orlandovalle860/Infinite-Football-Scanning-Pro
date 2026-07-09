@@ -49,6 +49,8 @@ struct CoachSessionView: View {
     @Environment(\.dismiss) private var dismiss
     /// Shown as de-emphasized header copy (nav bar title is cleared on coach remotes).
     let coachRemoteHeaderTitle: String
+    /// Block "Rep X of Y" — off for timer-driven partner coach remotes.
+    let showsBlockRepProgress: Bool
     let totalReps: Int
     /// Authoritative 1-based rep counter owned by the parent coach remote view.
     /// This view never mutates it — the parent advances the count after each rep
@@ -87,6 +89,7 @@ struct CoachSessionView: View {
 
     /// Read-only: cancel UI nudge if partner session ends or link drops (does not send relay traffic).
     @ObservedObject private var partnerSessionCoordinator: TrainingPartnerConnectionCoordinator
+    @ObservedObject private var timedSession = TimedSessionController.shared
 
     @State private var phase: SessionPhase = .idle
     @State private var lastDirection: SwipeDirection? = nil
@@ -109,6 +112,7 @@ struct CoachSessionView: View {
 
     init(
         coachRemoteHeaderTitle: String = "",
+        showsBlockRepProgress: Bool = false,
         totalReps: Int = 12,
         currentRepOneBased: Int = 1,
         preBeepDelayRange: ClosedRange<Double> = 0.0...0.0,
@@ -124,6 +128,7 @@ struct CoachSessionView: View {
         loggingPhaseEvaluativeSubtitle: String? = nil
     ) {
         self.coachRemoteHeaderTitle = coachRemoteHeaderTitle
+        self.showsBlockRepProgress = showsBlockRepProgress
         self.totalReps = totalReps
         self.currentRepOneBased = max(1, min(currentRepOneBased, max(totalReps, 1)))
         self.preBeepDelayRange = preBeepDelayRange
@@ -173,9 +178,11 @@ struct CoachSessionView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         PartnerLinkPassiveStatusLine(role: .coach, coachPresentation: .sessionRepHeader)
-                        Text("Rep \(currentRepOneBased) of \(totalReps)")
-                            .foregroundColor(.white)
-                            .font(.title3.weight(.semibold))
+                        if showsBlockRepProgress {
+                            Text("Rep \(currentRepOneBased) of \(totalReps)")
+                                .foregroundColor(.white)
+                                .font(.title3.weight(.semibold))
+                        }
                     }
                     Spacer(minLength: 8)
                 }
@@ -340,6 +347,16 @@ struct CoachSessionView: View {
                 scheduleCoachWaitingStartRepHapticLoop()
             }
         }
+        .onChange(of: timedSession.isSessionActive) { _, active in
+            if active {
+                if coachWaitingStartRepHapticsEligible() {
+                    scheduleCoachWaitingStartRepHapticLoop()
+                }
+            } else {
+                cancelCoachWaitingStartRepHapticLoop()
+                cancelFirstRunEphemeralGuidance()
+            }
+        }
         .onChange(of: externalBeepArmedRepIndex) { _, newValue in
             // Only honor beep-arm signals in external-arm mode and only when
             // they match the rep we're currently waiting on. Stale signals (for
@@ -373,6 +390,7 @@ struct CoachSessionView: View {
     private func handleTap() {
         switch phase {
         case .idle, .waitingForNextRep:
+            guard TimedSessionDisplayIntegration.coachRemoteRepControlEnabled else { return }
             guard CoachTapInputGuard.mayStartNextRep() else {
                 print("[INPUT-GUARD] Start rep tap debounced (650ms after PASS or prior start)")
                 return
@@ -399,6 +417,7 @@ struct CoachSessionView: View {
         case .waitingBeep:
             print("[INPUT-GUARD] Tap ignored before beep")
         case .logging:
+            guard TimedSessionDisplayIntegration.coachRemoteRepControlEnabled else { return }
             guard CoachTapInputGuard.mayStartNextRep() else {
                 print("[INPUT-GUARD] Start rep tap debounced (650ms after PASS or prior start)")
                 return
@@ -544,6 +563,7 @@ struct CoachSessionView: View {
 
     @MainActor
     private func coachWaitingStartRepHapticsEligible() -> Bool {
+        guard TimedSessionDisplayIntegration.coachRemoteRepControlEnabled else { return false }
         guard phase == .waitingForNextRep || phase == .idle else { return false }
         guard coachTransportConnected else { return false }
         guard partnerSessionCoordinator.isPartnerTrainingSessionActive else { return false }
@@ -721,7 +741,8 @@ struct DisableSwipeBack: UIViewControllerRepresentable {
 
 #Preview {
     CoachSessionView(
-        coachRemoteHeaderTitle: "Coach — Preview (12 reps)",
+        coachRemoteHeaderTitle: "Coach — Away From Pressure",
+        showsBlockRepProgress: true,
         totalReps: 12,
         currentRepOneBased: 1,
         preBeepDelayRange: 0.0...0.0,
@@ -729,4 +750,46 @@ struct DisableSwipeBack: UIViewControllerRepresentable {
         onPassTriggered: nil,
         onDirectionLogged: nil
     )
+}
+
+/// Coach remote idle state while the iPad display picks duration, reconnects, or starts the timed session.
+struct CoachRemoteWaitingForDisplaySessionView: View {
+    let headerTitle: String
+    let transportConnected: Bool
+    var statusMessage: String = "Waiting for player to start session…"
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if !headerTitle.isEmpty {
+                            Text(headerTitle)
+                                .font(.subheadline)
+                                .fontWeight(.regular)
+                                .foregroundColor(.white.opacity(0.7))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        if transportConnected {
+                            PartnerLinkPassiveStatusLine(role: .coach, coachPresentation: .sessionRepHeader)
+                        }
+                    }
+                    Spacer(minLength: 8)
+                }
+                .padding(.horizontal)
+                .padding(.top, 4)
+
+                Spacer(minLength: 48)
+
+                Text(statusMessage)
+                    .font(.title3.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.82))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+
+                Spacer()
+            }
+        }
+    }
 }

@@ -7,10 +7,46 @@
 
 import SwiftUI
 
+@MainActor
+enum HomeNavigationAction {
+    static func goHome(router: AppRouter, popToRootTrigger: PopToRootTrigger) {
+        if popToRootTrigger.isPlayerHomeLocalNavigationActive {
+            popToRootTrigger.request = true
+        }
+        // Temporary Partner → Coach Remote (player role): Home should exit the coach stack.
+        let endingPartner =
+            AppRole.resolved(from: UserDefaults.standard.string(forKey: AppRole.storageKey) ?? "") == .player
+            && TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive
+        if endingPartner {
+            TrainingPartnerConnectionCoordinator.shared.endPartnerTrainingSession(reason: "homeToolbarTemporaryCoachRemote")
+        }
+        router.popToRoot(endingPartnerSession: false)
+    }
+}
+
+/// Compact Home control for timed session chrome (pairs with Change Activity + End).
+struct SessionChromeHomeButton: View {
+    @EnvironmentObject private var router: AppRouter
+    @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
+
+    var body: some View {
+        Button {
+            HomeNavigationAction.goHome(router: router, popToRootTrigger: popToRootTrigger)
+        } label: {
+            Image(systemName: "house.fill")
+                .font(.caption.weight(.semibold))
+        }
+        .buttonStyle(.plain)
+        .foregroundColor(.white.opacity(0.75))
+        .accessibilityLabel("Home")
+    }
+}
+
 /// Top-trailing Home: clears `AppRouter` path and resets player-home local navigation via ``PopToRootTrigger``.
 struct GlobalHomeNavigationOverlay: View {
     @EnvironmentObject private var router: AppRouter
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
+    @ObservedObject private var timedSession = TimedSessionController.shared
 
     private var isPadDisplay: Bool {
         UIDevice.current.userInterfaceIdiom == .pad
@@ -28,17 +64,16 @@ struct GlobalHomeNavigationOverlay: View {
     private var homeTrailingPadding: CGFloat { isPadDisplay ? 20 : 12 }
 
     private var shouldShow: Bool {
-        !router.path.isEmpty || popToRootTrigger.isPlayerHomeLocalNavigationActive
+        guard !timedSession.isManagingSession else { return false }
+        guard !router.suppressesGlobalHomeOverlay else { return false }
+        return !router.path.isEmpty || popToRootTrigger.isPlayerHomeLocalNavigationActive
     }
 
     var body: some View {
         Group {
             if shouldShow {
                 Button {
-                    if popToRootTrigger.isPlayerHomeLocalNavigationActive {
-                        popToRootTrigger.request = true
-                    }
-                    router.popToRoot(endingPartnerSession: false)
+                    HomeNavigationAction.goHome(router: router, popToRootTrigger: popToRootTrigger)
                 } label: {
                     Image(systemName: "house.fill")
                         .font(.system(size: homeIconPointSize, weight: .semibold))

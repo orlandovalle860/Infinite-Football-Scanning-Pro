@@ -30,6 +30,8 @@ struct TwoMinuteCoachRemoteView: View {
     private static let partnerTransportMode = PartnerTransportPolicy.coachRemoteTransportMode
 
     @ObservedObject private var relaySharedRemoteService = TrainingPartnerConnectionCoordinator.shared.coachRelayRemoteService
+    @ObservedObject private var timedSession = TimedSessionController.shared
+    @ObservedObject private var partnerCoordinator = TrainingPartnerConnectionCoordinator.shared
     @StateObject private var multipeerRemoteService = RemoteService(transport: TwoMinuteSessionTransport.makeInitial(for: .multipeer))
 
     private var remoteService: RemoteService {
@@ -78,15 +80,7 @@ struct TwoMinuteCoachRemoteView: View {
 
     /// Whether the active transport is connected (Multipeer peer name vs relay WebSocket).
     private var coachSessionConnected: Bool {
-        if TrainingPartnerConnectionCoordinator.shared.isConnected {
-            return true
-        }
-        switch Self.partnerTransportMode {
-        case .multipeer:
-            return connectionManager.connectedPeerName != nil
-        case .relayWebSocket:
-            return remoteService.connectionState == .connected && coachRelayDisplayPeerJoined
-        }
+        TrainingPartnerConnectionCoordinator.shared.isPartnerTransportLinkLive
     }
 
     var body: some View {
@@ -107,7 +101,12 @@ struct TwoMinuteCoachRemoteView: View {
                 switch state {
                 case .ready, .waitingForRepStart, .armedForPass, .logging:
                     readyView
-                case .complete: completeView
+                case .complete:
+                    if TimedSessionDisplayIntegration.coachRemoteShowsBlockCompleteUI {
+                        completeView
+                    } else {
+                        readyView
+                    }
                 }
             }
             if Self.partnerTransportMode == .relayWebSocket {
@@ -143,7 +142,8 @@ struct TwoMinuteCoachRemoteView: View {
             if case .partnerSessionCheckpoint(let sourceRole, _, let repIndex, _, _, _) = msg, sourceRole == "display" {
                 handleDisplayRepSignal(repIndex: repIndex)
             }
-            if case .sessionEnded = msg {
+            if case .sessionEnded(let source, _) = msg,
+               !TimedSessionController.shared.isManagingSession || source != .display {
                 #if DEBUG
                 if Self.partnerTransportMode == .relayWebSocket {
                     CoachPersistDebug.log(
@@ -175,6 +175,9 @@ struct TwoMinuteCoachRemoteView: View {
             guard !TrainingPartnerConnectionCoordinator.shared.isPartnerSoftReconnectRepRestartSuppressed else { return }
             applyPartnerSoftReconnectFromCoordinatorNotificationTwoMinute()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .partnerDisplayRepEngineBecameReady).receive(on: RunLoop.main)) { _ in
+            applyPartnerTrainAgainCoachRemoteReset()
+        }
         .onAppear {
             didNavigateBackToCoachHubAfterDisplayDisconnect = false
             didAttemptCoachRelayAutoReconnect = false
@@ -190,6 +193,7 @@ struct TwoMinuteCoachRemoteView: View {
             }
             #endif
             TrainingPartnerConnectionCoordinator.shared.beginPartnerTrainingSessionIfNeeded()
+            TrainingPartnerConnectionCoordinator.shared.restoreCoachTimedSessionMirrorIfNeeded()
             let coordinator = TrainingPartnerConnectionCoordinator.shared
             coordinator.markSessionCalibrationResolved(
                 averageTravelTimeSeconds: PartnerPassTempoCalibrationStore.seededAverageTravelTimeSeconds(),
@@ -241,6 +245,15 @@ struct TwoMinuteCoachRemoteView: View {
             resetLocalUIForDisconnect(source: "relayRemoteService=disconnected")
         }
         .onChange(of: state) { _, newState in
+            if TimedSessionDisplayIntegration.coachRemoteLoopsEngineChunks {
+                if case .complete = newState {
+                    currentRepIndex = 0
+                    clearRepStartAckWaitState()
+                    state = .ready
+                    resetCoachSessionInput()
+                }
+                return
+            }
             if case .complete = newState {
                 AuthFlowOnboardingSync.markLocalAndSyncRemoteCompleted()
             }
@@ -280,16 +293,34 @@ struct TwoMinuteCoachRemoteView: View {
     private func broadcastCoachSessionStartIfNeeded() {
         guard !didBroadcastCoachSessionStart else { return }
         didBroadcastCoachSessionStart = true
+        if TrainingPartnerConnectionCoordinator.shared.shouldCoachDeferToDisplayTimedSession() {
+            return
+        }
+        TrainingPartnerConnectionCoordinator.shared.prepareCoachRemoteForBroadcastSessionStart(activity: .twoMinuteTest)
         TrainingPartnerConnectionCoordinator.shared.broadcastSessionStartedFromCoach(activity: .twoMinuteTest, totalReps: totalReps)
     }
 
     private var readyView: some View {
         VStack(spacing: 20) {
-            if !coachSessionConnected {
+            if !coachSessionConnected, timedSession.isSessionActive {
+                CoachRemoteWaitingForDisplaySessionView(
+                    headerTitle: "Coach — \(ActivityKind.twoMinuteTest.displayName)",
+                    transportConnected: false,
+                    statusMessage: "Reconnecting to session…"
+                )
+            } else if !coachSessionConnected {
                 connectionSection
             } else if showConnectedConfirmation {
                 PartnerConnectedConfirmationView()
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
+            } else if !TimedSessionDisplayIntegration.coachRemoteRepControlEnabled {
+                CoachRemoteWaitingForDisplaySessionView(
+                    headerTitle: "Coach — \(ActivityKind.twoMinuteTest.displayName)",
+                    transportConnected: coachSessionConnected,
+                    statusMessage: partnerCoordinator.isPartnerRelayReconnecting
+                        ? "Reconnecting to session…"
+                        : CoachRemoteCopy.waitingForDisplaySetup
+                )
             } else {
                 sharedSessionInput(repIndex: currentRepIndex)
             }
@@ -298,7 +329,8 @@ struct TwoMinuteCoachRemoteView: View {
 
     private func sharedSessionInput(repIndex: Int) -> some View {
         CoachSessionView(
-            coachRemoteHeaderTitle: "Coach — \(ActivityKind.twoMinuteTest.displayName) (\(totalReps) reps)",
+            coachRemoteHeaderTitle: "Coach — \(ActivityKind.twoMinuteTest.displayName)",
+            showsBlockRepProgress: TimedSessionDisplayIntegration.showsCoachBlockRepProgress,
             totalReps: totalReps,
             currentRepOneBased: currentRepIndex + 1,
             preBeepDelayRange: 0.0...0.0,
@@ -324,7 +356,15 @@ struct TwoMinuteCoachRemoteView: View {
 
     @discardableResult
     private func startNextRepIfReady() -> Bool {
-        guard currentRepIndex < totalReps else { return false }
+        guard TimedSessionDisplayIntegration.coachRemoteRepControlEnabled else { return false }
+        if TimedSessionDisplayIntegration.coachRemoteLoopsEngineChunks {
+            currentRepIndex = TimedSessionDisplayIntegration.coachRemoteWrapRepIndex(
+                currentRepIndex,
+                chunkSize: totalReps
+            )
+        } else {
+            guard currentRepIndex < totalReps else { return false }
+        }
         if case .complete = state { return false }
         pendingDirectionLogRepZeroBased = nil
         let now = Date().timeIntervalSince1970
@@ -558,8 +598,8 @@ struct TwoMinuteCoachRemoteView: View {
         let coord = TrainingPartnerConnectionCoordinator.shared
         guard let code = coord.lastCoachRelayJoinCode,
               !code.isEmpty,
-              remoteService.connectionState != .connected else {
-            CoachPersistDebug.log("auto-reconnect skipped (no code or already connected)", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+              !coord.isPartnerTransportLinkLive else {
+            CoachPersistDebug.log("auto-reconnect skipped (no code or transport live)", joinField: coachRelayJoinCodeInput, peerJoined: coord.coachRelayDisplayPeerPresent)
             return
         }
         didAttemptCoachRelayAutoReconnect = true
@@ -570,9 +610,6 @@ struct TwoMinuteCoachRemoteView: View {
 
     private var completeView: some View {
         VStack(spacing: 20) {
-            Text("Rep \(totalReps) of \(totalReps)")
-                .font(.footnote)
-                .foregroundColor(.white.opacity(0.5))
             Spacer()
             Text("Session complete")
                 .font(.title2.bold())
@@ -599,6 +636,13 @@ struct TwoMinuteCoachRemoteView: View {
     }
 
     private func coachStartNextBlockTapped() {
+        if TimedSessionDisplayIntegration.coachRemoteLoopsEngineChunks {
+            currentRepIndex = 0
+            clearRepStartAckWaitState()
+            state = .ready
+            resetCoachSessionInput()
+            return
+        }
         if coachSessionConnected {
             remoteService.send(.startNextBlock(timestamp: Date()))
         }
@@ -635,16 +679,21 @@ struct TwoMinuteCoachRemoteView: View {
     }
 
     private func advanceCoachRepIndexAfterPass(completedRepIndex: Int) {
-        currentRepIndex = completedRepIndex + 1
         clearRepStartAckWaitState()
-        if currentRepIndex >= totalReps {
-            CoachFirstRunGuidanceStore.markCompletedFirstRun(activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId)
-            state = .complete
-            pendingDirectionLogRepZeroBased = nil
-        } else {
+        if let nextIndex = TimedSessionDisplayIntegration.coachRemoteNextRepIndexAfterPass(
+            completedRepIndex: completedRepIndex,
+            chunkSize: totalReps
+        ) {
+            currentRepIndex = nextIndex
             state = .ready
             resetCoachSessionInput()
+            pendingDirectionLogRepZeroBased = nil
+            return
         }
+        currentRepIndex = completedRepIndex + 1
+        CoachFirstRunGuidanceStore.markCompletedFirstRun(activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId)
+        state = .complete
+        pendingDirectionLogRepZeroBased = nil
     }
 
     private func triggerReconnectRestartOverlay() {
@@ -661,6 +710,14 @@ struct TwoMinuteCoachRemoteView: View {
         state = .ready
         resetCoachSessionInput()
         triggerReconnectRestartOverlay()
+    }
+
+    private func applyPartnerTrainAgainCoachRemoteReset() {
+        guard TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive else { return }
+        currentRepIndex = 0
+        clearRepStartAckWaitState()
+        state = .ready
+        resetCoachSessionInput()
     }
 
     private func coachSyncRepIndexForCheckpoint() -> Int {
@@ -741,6 +798,11 @@ struct TwoMinuteCoachRemoteView: View {
                 guard self.repStartHardResetToken == hardResetToken else { return }
                 guard case .waitingForRepStart(let stillWaitingRep) = state, stillWaitingRep == repIndex else { return }
                 guard pendingRepStartHardResetRepIndex == repIndex else { return }
+                if CoachRepFlowDecoupling.shouldDeferRepStartAckHardReset(repIndex: repIndex) {
+                    pendingRepStartHardResetRepIndex = nil
+                    self.scheduleRepStartAckTimeout(for: repIndex)
+                    return
+                }
                 state = .ready
                 pendingRepStartHardResetRepIndex = nil
                 resetCoachSessionInput()

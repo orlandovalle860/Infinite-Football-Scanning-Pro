@@ -50,7 +50,7 @@ struct AwayFromPressureDisplaySessionView: View {
     /// Solo: wall time when the current rep's beep fired; anchors pass tolerance window.
     @State private var soloRepBeepWallTime: Date?
     @State private var soloLifetimeRepDisplayCount = SoloLifetimeRepCounter.totalReps(for: .awayFromPressure)
-    @State private var soloLifetimeRecordedRepIndices = Set<Int>()
+    @State private var soloLifetimeRecordedRepIndices = Set<String>()
     @StateObject private var soloSessionTimer = SoloSessionTimerController()
     @StateObject private var soloActionIdleCue = SoloActionIdleCueState()
     @State private var showSoloTimedComplete = false
@@ -80,9 +80,9 @@ struct AwayFromPressureDisplaySessionView: View {
         self.mode = mode
         self.settingsViewModel = settingsViewModel
         self.profileManager = profileManager
-        let repCount = SoloTimeBasedSession.blockRepCount(
+        let repCount = TimedSessionEnginePolicy.enginePlanBlockSize(
             activityId: ActivityKind.awayFromPressure.sessionActivityActivityId,
-            soloFallback: 12,
+            soloFallback: TimedSessionEnginePolicy.timedSessionBlockSize,
             mode: mode
         )
         let plan = AwayFromPressureRepPlanner.generatePlan(forBlockSize: repCount)
@@ -90,13 +90,15 @@ struct AwayFromPressureDisplaySessionView: View {
         _partnerRelaySession = ObservedObject(wrappedValue: TrainingPartnerConnectionCoordinator.shared.relayDisplaySession)
     }
 
-    private var blockTotalReps: Int {
-        SoloTimeBasedSession.blockRepCount(
+    private var enginePlanRepCount: Int {
+        TimedSessionEnginePolicy.enginePlanBlockSize(
             activityId: ActivityKind.awayFromPressure.sessionActivityActivityId,
-            soloFallback: 12,
+            soloFallback: TimedSessionEnginePolicy.timedSessionBlockSize,
             mode: mode
         )
     }
+
+    private var blockTotalReps: Int { enginePlanRepCount }
 
     private var effectiveUsesAutoLoop: Bool {
         SoloTimeBasedDisplaySessionSupport.effectiveUsesAutoLoop(mode: mode)
@@ -123,7 +125,10 @@ struct AwayFromPressureDisplaySessionView: View {
                 waitForPartnerReady: mode.requiresPhoneDisplayRelay,
                 partnerReady: partnerReadyForCountdown,
                 suppressCoachMessagesDuringCountdown: $blockCoachDrillDuringSessionCountdown,
-                isEnabled: !effectiveUsesAutoLoop
+                isEnabled: TimedSessionDisplayIntegration.showsPartnerSessionStartCountdown(
+                    mode: mode,
+                    effectiveUsesAutoLoop: effectiveUsesAutoLoop
+                )
             )
             .onReceive(NotificationCenter.default.publisher(for: .relayForegroundReconnectCompleted)) { _ in
                 handleRelayForegroundReconnectCompleted()
@@ -154,7 +159,7 @@ struct AwayFromPressureDisplaySessionView: View {
                 statusOverlay
                     .opacity(statusOverlayOpacity)
             }
-            if mode != .solo, showsBetweenRepPlayerText {
+            if TimedSessionDisplayIntegration.showsBlockRepProgressOverlay(mode: mode), showsBetweenRepPlayerText {
                 repCountOverlay
             }
             SoloWallCalibrationGetReadyOverlay(mode: mode, calibration: soloWallCalibration)
@@ -176,19 +181,25 @@ struct AwayFromPressureDisplaySessionView: View {
     }
 
     private var awayFromPressureSessionContentWithCover: some View {
-        awayFromPressureSessionStack
+        SessionScreenLayout {
+            awayFromPressureSessionStack
+        }
             .contentShape(Rectangle())
             .onTapGesture(perform: handleAwayFromPressureTap)
             .soloSessionTimerOverlay(
-                isVisible: mode == .solo && !soloWallCalibration.isCalibrating && soloSessionTimer.isVisible,
-                text: soloSessionTimer.displayText,
+                isVisible: TimedSessionDisplayIntegration.showsSessionTimerOverlay(
+                    mode: mode,
+                    isCalibrating: soloWallCalibration.isCalibrating,
+                    localTimer: soloSessionTimer
+                ),
+                text: TimedSessionDisplayIntegration.timerDisplayText(local: soloSessionTimer),
                 onFreePlayEnd: soloFreeModeEndAction
             )
             .navigationDestination(isPresented: $navigateToBlockSummary) {
                 awayFromPressureBlockSummaryDestination
             }
             .soloSessionCompleteOverlay(
-                isPresented: showSoloTimedComplete,
+                isPresented: showSoloTimedComplete && !TimedSessionDisplayIntegration.shouldDeferCompletionOverlay,
                 elapsedSeconds: soloTimedCompleteElapsed,
                 repCount: soloTimedCompleteReps,
                 onDone: handleSoloSessionCompleteDismiss
@@ -196,6 +207,17 @@ struct AwayFromPressureDisplaySessionView: View {
             .fullScreenCover(isPresented: passTempoCalibrationPresented) {
                 awayFromPressurePassTempoCalibrationCover
             }
+            .soloTapToStartGate(
+                mode: mode,
+                hasCompletedCalibration: hasCompletedPassTempoCalibration,
+                isCalibrating: soloWallCalibration.isCalibrating,
+                sessionStartCueActive: sessionStartCueContent != nil,
+                localTimer: soloSessionTimer,
+                onUserStart: {
+                    isSoloRunning = true
+                    startSoloLoop()
+                }
+            )
     }
 
     @ViewBuilder
@@ -249,15 +271,16 @@ struct AwayFromPressureDisplaySessionView: View {
             .onChange(of: hasCompletedPassTempoCalibration) { _, completed in
                 guard completed else { return }
                 tryPresentSessionStartCue()
-                if mode == .solo {
-                    onSoloCalibrationReadyIfNeeded()
-                } else {
+                onSoloCalibrationReadyIfNeeded()
+                if mode != .solo {
                     tryStartSoloAutoloop()
                 }
+                notifyPartnerTimedDrillSurfaceReadyIfNeeded()
             }
             .onChange(of: soloWallCalibration.isCalibrating) { _, isCalibrating in
                 guard !isCalibrating else { return }
                 tryPresentSessionStartCue()
+                onSoloCalibrationReadyIfNeeded()
                 tryStartSoloAutoloop()
             }
     }
@@ -267,6 +290,7 @@ struct AwayFromPressureDisplaySessionView: View {
         awayFromPressureEngineSyncModifiers
             .onAppear(perform: handleAwayFromPressureOnAppear)
             .onDisappear(perform: handleAwayFromPressureOnDisappear)
+            .onTimedSessionContainerEnd { userInitiatedEndSoloSession() }
             .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { notification in
                 guard let userInfo = notification.userInfo,
                       let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
@@ -276,9 +300,13 @@ struct AwayFromPressureDisplaySessionView: View {
             }
             .onChange(of: scenePhase) { _, newPhase in
                 if newPhase == .background {
-                    engine.applicationDidEnterBackground()
+                    pauseSessionForBackground()
                 } else if newPhase == .active {
+                    SessionStartCueRepGate.noteScenePhase(newPhase)
                     engine.synchronizeTimersAfterEnteringForeground()
+                    if SessionStartCueRepGate.consumeDidEnterBackground() {
+                        resumeSessionIfNeeded()
+                    }
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
@@ -296,6 +324,7 @@ struct AwayFromPressureDisplaySessionView: View {
                 guard mode.requiresPhoneDisplayRelay else { return }
                 if connected {
                     beginConnectedToCalibrationTransitionIfNeeded()
+                    notifyPartnerTimedDrillSurfaceReadyIfNeeded()
                 } else {
                     showConnectedConfirmation = false
                     hasStartedConnectedToCalibrationTransition = false
@@ -325,15 +354,22 @@ struct AwayFromPressureDisplaySessionView: View {
             onCompletedThreePass: onSoloWallCalibrationFinished
         ) { return }
         guard !isSoloDrillInputFrozen else { return }
+        guard !SoloSessionUserStartGate.shouldBlockSoloRepFlow(
+            mode: mode,
+            hasCompletedCalibration: hasCompletedPassTempoCalibration,
+            isCalibrating: soloWallCalibration.isCalibrating
+        ) else { return }
         if mode == .solo, !effectiveUsesAutoLoop {
             handleWallSoloTrigger()
         }
     }
 
     private func handleSoloSessionCompleteDismiss() {
-        SoloTimeBasedSession.clear()
-        showSoloTimedComplete = false
-        router.popToRoot()
+        FirstSessionOnboardingStore.completeSoloTimedFeedbackDismiss(
+            clearSession: { SoloTimeBasedSession.clear() },
+            dismissOverlay: { showSoloTimedComplete = false },
+            popToRoot: { router.popToRoot() }
+        )
     }
 
     private func handleRelayForegroundReconnectCompleted() {
@@ -360,10 +396,14 @@ struct AwayFromPressureDisplaySessionView: View {
             cue: soloActionIdleCue
         )
         guard mode.requiresPhoneDisplayRelay, old == true, new == false else { return }
-        flushPendingCoachNextRepAfterCountdown()
+        if SessionStartCueRepGate.canStartRepEngine(instructionVisible: sessionStartCueContent != nil) {
+            flushPendingCoachNextRepAfterCountdown()
+        }
+        notifyPartnerTimedDrillSurfaceReadyIfNeeded()
     }
 
     private func handleAwayFromPressurePhaseChange(oldPhase: AwayFromPressurePhase, newPhase: AwayFromPressurePhase) {
+        recordTimedRepAtEngineBoundary(oldPhase: oldPhase, newPhase: newPhase)
         if case .blockComplete = newPhase {
             stopSoloAutoloop()
             PlayerFirstRunGuidanceStore.markCompletedFirstRun(activityId: ActivityKind.awayFromPressure.sessionActivityActivityId)
@@ -384,14 +424,38 @@ struct AwayFromPressureDisplaySessionView: View {
             blockSummaryShowTimingAdaptationFeedback =
                 abs(CurrentSessionStore.shared.calibrationFactor(for: calId) - 1.0) > 0.001
             DispatchQueue.main.async {
+                if TimedSessionDisplayIntegration.continueAfterEnginePlanComplete(
+                    restartEngineBlock: {
+                        self.engine.restartBlockFromBeginning()
+                        self.isSoloRunning = true
+                    },
+                    resumeReps: { self.tryStartSoloAutoloop() }
+                ) {
+                    return
+                }
+                guard TimedSessionDisplayIntegration.allowsBlockSummaryNavigation else { return }
                 if mode == .solo {
                     if SoloTimeBasedSession.isActive {
                         finishSoloTimeBasedSession()
                     } else {
                         showSoloSummary = true
+                        FirstSessionOnboardingStore.noteTrainingSessionCompleted(
+                            deferLoginUntilFeedbackDismissed: false,
+                            repCount: SoloTimeBasedDisplaySessionSupport.overlayRepCount(
+                                engineLoggedRepCount: engine.repLogs.count
+                            ),
+                            elapsedSeconds: soloSessionTimer.elapsedSeconds()
+                        )
                         navigateToBlockSummary = true
                     }
                 } else {
+                    FirstSessionOnboardingStore.noteTrainingSessionCompleted(
+                        deferLoginUntilFeedbackDismissed: false,
+                        repCount: SoloTimeBasedDisplaySessionSupport.overlayRepCount(
+                            engineLoggedRepCount: engine.repLogs.count
+                        ),
+                        elapsedSeconds: soloSessionTimer.elapsedSeconds()
+                    )
                     navigateToBlockSummary = true
                 }
             }
@@ -404,7 +468,8 @@ struct AwayFromPressureDisplaySessionView: View {
             isWaitingForNextRep: isWaitingForNextRep,
             cue: soloActionIdleCue
         )
-        if mode == .solo, SoloTimeBasedSession.isActive, soloSessionTimer.pendingEndAfterCurrentRep,
+        let activeTimer = TimedSessionDisplayIntegration.sessionTimer(local: soloSessionTimer)
+        if SoloTimeBasedSession.isActive, activeTimer.pendingEndAfterCurrentRep,
            case .waitingForNextRep = newPhase {
             finishSoloTimeBasedSession()
         } else if case .waitingForNextRep = newPhase {
@@ -414,7 +479,10 @@ struct AwayFromPressureDisplaySessionView: View {
         if case .armedScanning = newPhase {
             preloadBeepAssetsForInstantReveal()
         }
-        if case .beepedAwaitingPass = newPhase { playBeep() }
+        if case .beepedAwaitingPass = newPhase,
+           SessionStartCueRepGate.canStartRepEngine(instructionVisible: sessionStartCueContent != nil) {
+            playBeep()
+        }
         if mode == .solo, !mode.requiresPhoneDisplayRelay,
            case .waitingForNextRep = newPhase,
            case .markerVisible(let oldR, let oldP, _) = oldPhase {
@@ -425,12 +493,31 @@ struct AwayFromPressureDisplaySessionView: View {
     }
 
     private func handleAwayFromPressureOnAppear() {
+        SessionStartCueRepGate.onDrillSurfaceAppeared()
         if mode == .solo {
             soloLifetimeRepDisplayCount = SoloLifetimeRepCounter.totalReps(for: .awayFromPressure)
         }
         let coordinator = TrainingPartnerConnectionCoordinator.shared
-        hasCompletedPassTempoCalibration = false
-        if mode.requiresPhoneDisplayRelay {
+        let timedPartnerActivitySwitch = mode.requiresPhoneDisplayRelay
+            && TimedSessionDisplayIntegration.shouldSkipPartnerSessionStartCue(mode: mode)
+        if timedPartnerActivitySwitch {
+            showPassTempoCalibration = false
+            let partnerNeedsCalibration = PBASessionFlowPolicy.shouldPromptCalibration(for: .partner)
+                && !coordinator.sessionCalibrationResolved
+            if partnerNeedsCalibration {
+                CurrentSessionStore.shared.setExpectedBallTravelTimeOverrideSeconds(nil)
+                hasCompletedPassTempoCalibration = false
+                hasStartedConnectedToCalibrationTransition = false
+            } else {
+                CurrentSessionStore.shared.setExpectedBallTravelTimeOverrideSeconds(
+                    coordinator.sessionCalibrationAverageTravelTime ?? PartnerPassTempoCalibrationStore.savedAverageTravelTimeSeconds()
+                )
+                hasCompletedPassTempoCalibration = true
+                showConnectedConfirmation = false
+                hasStartedConnectedToCalibrationTransition = true
+            }
+        } else if mode.requiresPhoneDisplayRelay {
+            hasCompletedPassTempoCalibration = false
             showPassTempoCalibration = false
             let partnerNeedsCalibration = PBASessionFlowPolicy.shouldPromptCalibration(for: .partner) && !coordinator.sessionCalibrationResolved
             if partnerNeedsCalibration {
@@ -457,7 +544,9 @@ struct AwayFromPressureDisplaySessionView: View {
         }
         partnerCalibration.reset()
         showConnectedConfirmation = false
-        hasStartedConnectedToCalibrationTransition = false
+        if !timedPartnerActivitySwitch {
+            hasStartedConnectedToCalibrationTransition = false
+        }
         beginConnectedToCalibrationTransitionIfNeeded()
         #if DEBUG
         PartnerPersistDebug.log("AwayFromPressureDisplaySessionView onAppear")
@@ -493,7 +582,13 @@ struct AwayFromPressureDisplaySessionView: View {
         AnalyticsManager.shared.track(.trainingSessionStarted, playerId: playerStore.selectedPlayerId)
         registerSupabaseAwayFromPressureBlockSession()
         if mode == .solo, effectiveUsesAutoLoop {
-            isSoloRunning = true
+            if SoloSessionUserStartGate.hasConfirmedUserStart,
+               hasCompletedPassTempoCalibration,
+               !soloWallCalibration.isCalibrating {
+                isSoloRunning = true
+            } else {
+                isSoloRunning = false
+            }
         }
         if effectiveUsesAutoLoop {
             tryPresentSessionStartCue()
@@ -501,7 +596,7 @@ struct AwayFromPressureDisplaySessionView: View {
         if mode == .solo {
             if effectiveUsesAutoLoop {
                 syncRepController(with: engine.phase)
-                if !soloWallCalibration.isCalibrating {
+                if isSoloRunning {
                     startSoloLoop()
                 }
             }
@@ -510,6 +605,20 @@ struct AwayFromPressureDisplaySessionView: View {
             tryStartSoloAutoloop()
         }
         soloWallBootResolved = true
+        notifyPartnerTimedDrillSurfaceReadyIfNeeded()
+    }
+
+    private func notifyPartnerTimedDrillSurfaceReadyIfNeeded() {
+        TimedSessionDisplayIntegration.fastPathPartnerTimedDrillSurfaceIfNeeded(
+            mode: mode,
+            partnerDrillReady: TimedSessionDisplayIntegration.partnerTimedDrillSurfaceReady(
+                mode: mode,
+                coachConnectedForCalibration: coachConnectedForCalibration,
+                hasCompletedPassTempoCalibration: hasCompletedPassTempoCalibration,
+                showPassTempoCalibration: showPassTempoCalibration,
+                showConnectedConfirmation: showConnectedConfirmation
+            )
+        )
     }
 
     private func handleAwayFromPressureOnDisappear() {
@@ -517,9 +626,14 @@ struct AwayFromPressureDisplaySessionView: View {
         soloWallCalibration.cancelPendingBeeps()
         stopSoloAutoloop()
         pendingNextRepIndex = nil
+        SessionStartCueRepGate.onDrillSurfaceDisappeared()
         #if DEBUG
         PartnerPersistDebug.log("AwayFromPressureDisplaySessionView onDisappear")
         #endif
+        // Timed container activity switch reuses the same live session; do not send end/disconnect teardown here.
+        if TimedSessionDisplayIntegration.usesSharedSession {
+            return
+        }
         if mode.requiresPhoneDisplayRelay {
             teardownPartnerTransportWhenSessionSuspends()
         }
@@ -575,6 +689,11 @@ struct AwayFromPressureDisplaySessionView: View {
             guard repController.state == .preBeep || repController.state == .decisionWindow else { return }
             guard !repController.hasLoggedTap else { return }
             repController.registerTap()
+            TimedSessionDisplayIntegration.recordSessionRepIfNeeded(
+                activityId: ActivityKind.awayFromPressure.sessionActivityActivityId,
+                repIndex: repIndex,
+                recordedRepTokens: &soloLifetimeRecordedRepIndices
+            )
             #if DEBUG
             if sessionTransportMode == .relayWebSocket {
                 afpRelayDisplayLog("incoming passTriggered repIndex=\(repIndex)")
@@ -631,7 +750,7 @@ struct AwayFromPressureDisplaySessionView: View {
             }
             #endif
             break
-        case .sessionEnded:
+        case .sessionEnded(_, _):
             #if DEBUG
             if sessionTransportMode == .relayWebSocket {
                 afpRelayDisplayLog("sessionEnded received")
@@ -656,12 +775,14 @@ struct AwayFromPressureDisplaySessionView: View {
             break
         case .startNextBlock:
             break
+        case .timedSessionActive, .timedSessionInactive, .displayRepEngineReady, .activityChanged:
+            break
         }
     }
 
     private func startRepSolo() {
         guard isSoloRunning, !isSoloDrillInputFrozen else { return }
-        guard sessionStartCueContent == nil else { return }
+        guard SessionStartCueRepGate.canStartRepEngine(instructionVisible: sessionStartCueContent != nil) else { return }
         handleWallSoloTrigger()
     }
 
@@ -681,8 +802,13 @@ struct AwayFromPressureDisplaySessionView: View {
         guard !isSoloDrillInputFrozen else { return }
         guard !soloWallCalibration.isCalibrating else { return }
         guard hasCompletedPassTempoCalibration else { return }
+        guard !SoloSessionUserStartGate.shouldBlockSoloRepFlow(
+            mode: mode,
+            hasCompletedCalibration: hasCompletedPassTempoCalibration,
+            isCalibrating: soloWallCalibration.isCalibrating
+        ) else { return }
         guard !blockCoachDrillDuringSessionCountdown else { return }
-        guard sessionStartCueContent == nil else { return }
+        guard SessionStartCueRepGate.canStartRepEngine(instructionVisible: sessionStartCueContent != nil) else { return }
         guard !soloLoopRunner.isRunning else { return }
         if case .blockComplete = engine.phase { return }
         isSoloRunning = true
@@ -711,6 +837,7 @@ struct AwayFromPressureDisplaySessionView: View {
             onCompletedThreePass: onSoloWallCalibrationFinished
         ) { return }
         guard !isSoloDrillInputFrozen else { return }
+        guard SessionStartCueRepGate.canStartRepEngine(instructionVisible: sessionStartCueContent != nil) else { return }
         switch engine.phase {
         case .waitingForNextRep:
             soloActionIdleCue.onUserTapToStart()
@@ -945,27 +1072,36 @@ struct AwayFromPressureDisplaySessionView: View {
     }
 
     private func recordSoloLifetimeRepIfNeeded(repIndex: Int) {
+        TimedSessionDisplayIntegration.recordSessionRepIfNeeded(
+            activityId: ActivityKind.awayFromPressure.sessionActivityActivityId,
+            repIndex: repIndex,
+            recordedRepTokens: &soloLifetimeRecordedRepIndices
+        )
         guard mode == .solo else { return }
-        guard soloLifetimeRecordedRepIndices.insert(repIndex).inserted else { return }
-        if SoloTimeBasedSession.isActive {
-            SoloTimeBasedSession.recordRepCompleted()
-        }
         soloLifetimeRepDisplayCount = SoloLifetimeRepCounter.recordRep(for: .awayFromPressure)
     }
 
-    private var soloFreeModeEndAction: (() -> Void)? {
-        guard mode == .solo, SoloTimeBasedSession.config == .free else { return nil }
-        return { userInitiatedEndSoloSession() }
+    private func recordTimedRepAtEngineBoundary(oldPhase: AwayFromPressurePhase, newPhase: AwayFromPressurePhase) {
+        guard case .waitingForNextRep = newPhase else { return }
+        let completedRepIndex: Int?
+        switch oldPhase {
+        case .markerVisible(let r, _, _), .awaitingExitLog(let r, _):
+            completedRepIndex = r
+        default:
+            completedRepIndex = nil
+        }
+        guard let repIndex = completedRepIndex else { return }
+        guard engine.repLogs.last?.repIndex == repIndex else { return }
+        TimedSessionDisplayIntegration.recordSessionRepIfNeeded(
+            activityId: ActivityKind.awayFromPressure.sessionActivityActivityId,
+            repIndex: repIndex,
+            recordedRepTokens: &soloLifetimeRecordedRepIndices
+        )
     }
 
-    private func onSoloCalibrationReadyIfNeeded() {
-        SoloTimeBasedDisplaySessionSupport.onSoloCalibrationReady(
-            mode: mode,
-            hasCompletedCalibration: hasCompletedPassTempoCalibration,
-            isCalibrating: soloWallCalibration.isCalibrating,
-            timer: soloSessionTimer,
-            tryAutoloop: { tryStartSoloAutoloop() }
-        )
+    private var soloFreeModeEndAction: (() -> Void)? {
+        guard mode == .solo, SoloTimeBasedSession.isActive else { return nil }
+        return { userInitiatedEndSoloSession() }
     }
 
     private func captureSoloSessionCompletionMetrics() {
@@ -984,19 +1120,52 @@ struct AwayFromPressureDisplaySessionView: View {
     }
 
     private func userInitiatedEndSoloSession() {
-        guard mode == .solo, SoloTimeBasedSession.isActive, !showSoloTimedComplete, !isSoloSessionEnding else { return }
-        SoloSessionEndTransition.beginUserEnd(
-            setEnding: { isSoloSessionEnding = true },
-            freeze: { freezeSoloSessionForCompletion() },
-            presentOverlay: { showSoloTimedComplete = true },
-            clearEnding: { isSoloSessionEnding = false }
+        TimedSessionDisplayIntegration.requestUserEnd(
+            mode: mode,
+            showComplete: showSoloTimedComplete,
+            isEnding: isSoloSessionEnding,
+            completionType: .earlyExit,
+            freeze: {},
+            localEnd: {
+                SoloSessionEndTransition.beginUserEnd(
+                    setEnding: { isSoloSessionEnding = true },
+                    freeze: {},
+                    presentOverlay: {
+                        finishSoloTimeBasedSession(completionType: .earlyExit)
+                    },
+                    clearEnding: { isSoloSessionEnding = false }
+                )
+            }
         )
     }
 
-    private func finishSoloTimeBasedSession() {
-        guard mode == .solo, SoloTimeBasedSession.isActive, !showSoloTimedComplete else { return }
-        freezeSoloSessionForCompletion()
-        showSoloTimedComplete = true
+    private func finishSoloTimeBasedSession(completionType: SessionCompletionType = .completed) {
+        TimedSessionDisplayIntegration.finishTimeBasedSession(
+            mode: mode,
+            showComplete: showSoloTimedComplete,
+            completionType: completionType,
+            freeze: { freezeSoloSessionForCompletion() },
+            localFinish: {
+                guard mode == .solo, SoloTimeBasedSession.isActive, !showSoloTimedComplete else { return }
+                freezeSoloSessionForCompletion()
+                CurrentSessionStore.shared.markSessionCompletionType(completionType)
+                FirstSessionOnboardingStore.prepareLoginPromptAfterSoloTimedSessionIfNeeded(
+                    repCount: soloTimedCompleteReps,
+                    elapsedSeconds: soloTimedCompleteElapsed
+                )
+                showSoloTimedComplete = true
+            }
+        )
+    }
+
+    private func onSoloCalibrationReadyIfNeeded() {
+        TimedSessionDisplayIntegration.onCalibrationReady(
+            mode: mode,
+            hasCompletedCalibration: hasCompletedPassTempoCalibration,
+            isCalibrating: soloWallCalibration.isCalibrating,
+            localTimer: soloSessionTimer,
+            tryAutoloop: { tryStartSoloAutoloop() }
+        )
     }
 
     private var isMarkerVisible: Bool {
@@ -1017,7 +1186,13 @@ struct AwayFromPressureDisplaySessionView: View {
 
     private func tryPresentSessionStartCue() {
         guard !hasPresentedSessionStartCue else { return }
-        guard let content = ActivityKind.awayFromPressure.sessionStartCue else { return }
+        guard !TimedSessionDisplayIntegration.shouldSkipPartnerSessionStartCue(mode: mode) else { return }
+        guard let content = ActivityKind.awayFromPressure.sessionStartCue else {
+            hasPresentedSessionStartCue = true
+            TimedSessionDisplayIntegration.markPartnerSessionStartChromeCompletedIfNeeded(mode: mode)
+            SessionStartCueRepGate.enableRepEngine()
+            return
+        }
         guard sessionStartCueDrillIsVisible else { return }
         hasPresentedSessionStartCue = true
         sessionStartCueContent = content
@@ -1026,13 +1201,40 @@ struct AwayFromPressureDisplaySessionView: View {
     /// Cue finished: clear UI and restart autoloop if a pre-cue start left the runner stuck without firing a rep.
     private func onSessionStartCueFinished() {
         sessionStartCueContent = nil
+        TimedSessionDisplayIntegration.markPartnerSessionStartChromeCompletedIfNeeded(mode: mode)
         if soloLoopRunner.isRunning {
             stopSoloAutoloop()
             if mode == .solo, effectiveUsesAutoLoop {
                 isSoloRunning = true
             }
         }
+        SessionStartCueRepGate.scheduleRepEngineResume {
+            resumeRepEngineAfterInstructionDismissed()
+        }
+    }
+
+    private func pauseSessionForBackground() {
+        engine.applicationDidEnterBackground()
+    }
+
+    private func resumeSessionIfNeeded() {
+        handleRepGateForegroundReturn()
+    }
+
+    /// Idempotent: safe when `scenePhase` flips rapidly; gate consumes the pending flag once.
+    private func handleRepGateForegroundReturn() {
+        guard SessionStartCueRepGate.consumeForegroundReconciliation(instructionVisible: sessionStartCueContent != nil) else { return }
+        hasPresentedSessionStartCue = false
+        tryPresentSessionStartCue()
+        guard sessionStartCueContent == nil else { return }
+        resumeRepEngineAfterInstructionDismissed()
+    }
+
+    private func resumeRepEngineAfterInstructionDismissed() {
+        guard TimedSessionDisplayIntegration.canResumeRepEngine else { return }
+        guard SessionStartCueRepGate.claimFirstRepStart() else { return }
         tryStartSoloAutoloop()
+        flushPendingCoachNextRepAfterCountdown()
     }
 
     private var dribbleOrPassLayout: some View {
@@ -1124,17 +1326,38 @@ struct AwayFromPressureDisplaySessionView: View {
     }
 
     private func registerSupabaseAwayFromPressureBlockSession() {
-        CurrentSessionStore.shared.resetDecisionTimingCalibrationForNewDrillBlock(
-            activityId: ActivityKind.awayFromPressure.sessionActivityActivityId
-        )
-        Task {
-            guard let sessionId = await SupabaseSessionService.shared.createSessionForDrill(activity: .awayFromPressure, blockSize: blockTotalReps, playerId: playerStore.selectedPlayerId ?? profileManager.currentProfile?.id) else { return }
-            let activityId = await SupabaseSessionService.shared.createSessionActivity(sessionId: sessionId, activityId: ActivityKind.awayFromPressure.sessionActivityActivityId, blockNumber: 1)
-            await MainActor.run {
-                CurrentSessionStore.shared.setSessionIdOnly(sessionId)
-                if let activityId = activityId { CurrentSessionStore.shared.setCurrentSessionActivityId(activityId) }
+        TimedSessionDisplayIntegration.registerActivitySegment(
+            activity: .awayFromPressure,
+            skipSessionCreation: {},
+            createSession: {
+                CurrentSessionStore.shared.resetDecisionTimingCalibrationForNewDrillBlock(
+                    activityId: ActivityKind.awayFromPressure.sessionActivityActivityId
+                )
+                Task {
+                    guard let sessionId = await SupabaseSessionService.shared.createSessionForDrill(
+                        activity: .awayFromPressure,
+                        blockSize: blockTotalReps,
+                        playerId: playerStore.selectedPlayerId ?? profileManager.currentProfile?.id,
+                        mode: SessionAnalyticsMode.from(trainingMode: mode)
+                    ) else { return }
+                    let block = await SupabaseSessionService.shared.openSessionActivityBlock(sessionId: sessionId, activityId: ActivityKind.awayFromPressure.sessionActivityActivityId, blockNumber: 1)
+                    await MainActor.run {
+                        CurrentSessionStore.shared.setSessionIdOnly(
+                            sessionId,
+                            mode: SessionAnalyticsMode.from(trainingMode: mode),
+                            startAnalyticsClock: mode.requiresPhoneDisplayRelay
+                        )
+                        if let activityId = block.sessionActivityId { CurrentSessionStore.shared.setCurrentSessionActivityId(activityId) }
+                        if let segmentId = block.segmentId {
+                            CurrentSessionStore.shared.setCurrentSessionActivitySegmentId(
+                                segmentId,
+                                activityId: ActivityKind.awayFromPressure.sessionActivityActivityId
+                            )
+                        }
+                    }
+                }
             }
-        }
+        )
     }
 
     /// Dismiss block summary and restart this drill from rep 0 (same display session; no role/setup routing).
@@ -1207,10 +1430,25 @@ struct AwayFromPressureDisplaySessionView: View {
                 joinCode: partnerRelaySession.joinCode,
                 activityTitle: "Playing Away From Pressure",
                 onExitSession: {
-                    router.popToRoot(endingPartnerSession: false)
+                    cancelWaitingForCoachAndExit()
                 }
             )
         }
+    }
+
+    private func cancelWaitingForCoachAndExit() {
+        pendingNextRepIndex = nil
+        blockCoachDrillDuringSessionCountdown = false
+        engine.invalidateAllTimers()
+        repController.resetForNewSession()
+        soloWallCalibration.cancelPendingBeeps()
+        stopSoloAutoloop()
+        TimedSessionController.shared.clear()
+        CurrentSessionStore.shared.clear()
+        TrainingPartnerConnectionCoordinator.shared.endPartnerTrainingSession(
+            reason: "display.waitingForCoach.backCancel.awayFromPressure"
+        )
+        dismiss()
     }
 
     private func afpRelayDisplayLog(_ message: String) {
@@ -1220,6 +1458,7 @@ struct AwayFromPressureDisplaySessionView: View {
     }
 
     private func flushPendingCoachNextRepAfterCountdown() {
+        guard SessionStartCueRepGate.canStartRepEngine(instructionVisible: sessionStartCueContent != nil) else { return }
         guard let idx = pendingNextRepIndex else { return }
         pendingNextRepIndex = nil
         applyPartnerCoachNextRep(repIndex: idx)
@@ -1268,6 +1507,11 @@ struct AwayFromPressureDisplaySessionView: View {
     }
 
     private func applyPartnerCoachNextRep(repIndex: Int) {
+        if SessionStartCueRepGate.deferCoachNextRepIfNeeded(
+            repIndex: repIndex,
+            instructionVisible: sessionStartCueContent != nil,
+            pending: &pendingNextRepIndex
+        ) { return }
         #if DEBUG
         if repIndex > partnerCoachRepGate.expectedNextCoachRepIndex {
             print("[PartnerCoach][AFP] nextRep coach ahead of displayTrackedNext: coach=\(repIndex) displayNext=\(partnerCoachRepGate.expectedNextCoachRepIndex)")
@@ -1308,6 +1552,11 @@ struct AwayFromPressureDisplaySessionView: View {
 
     @discardableResult
     private func tryCommitPartnerCoachNextRep(repIndex: Int) -> Bool {
+        if SessionStartCueRepGate.deferCoachNextRepIfNeeded(
+            repIndex: repIndex,
+            instructionVisible: sessionStartCueContent != nil,
+            pending: &pendingNextRepIndex
+        ) { return false }
         print("[NEXTREP] received repIndex=\(repIndex) while phase=\(engine.phase) currentRepIndex=\(engine.currentRepIndex)")
         if repIndex < partnerCoachRepGate.expectedNextCoachRepIndex {
             if repIndex + 1 == partnerCoachRepGate.expectedNextCoachRepIndex, case .waitingForNextRep = engine.phase {
@@ -1371,6 +1620,7 @@ struct AwayFromPressureDisplaySessionView: View {
     }
 
     private func flushPendingPartnerCoachNextRepIfNeeded() {
+        guard SessionStartCueRepGate.canStartRepEngine(instructionVisible: sessionStartCueContent != nil) else { return }
         guard let idx = pendingNextRepIndex else { return }
         guard case .waitingForNextRep = engine.phase else { return }
         _ = tryCommitPartnerCoachNextRep(repIndex: idx)
@@ -1497,10 +1747,10 @@ struct AwayFromPressureDisplaySessionView: View {
         hasSentSessionEnded = true
         if mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket {
             afpRelayDisplayLog("send sessionEnded (relay)")
-            partnerRelaySession.sendTwoMinuteMessage(.sessionEnded(timestamp: Date()))
+            partnerRelaySession.sendTwoMinuteMessage(.sessionEnded(source: .display, timestamp: Date()))
             return
         }
-        connectionManager.sendTwoMinuteMessage(.sessionEnded(timestamp: Date()))
+        connectionManager.sendTwoMinuteMessage(.sessionEnded(source: .display, timestamp: Date()))
     }
 
     private func sendRepStartedAck(repIndex: Int) {

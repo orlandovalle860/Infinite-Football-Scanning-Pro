@@ -80,14 +80,13 @@ struct TwoMinuteCriticalScanSessionView: View {
     /// Solo: wall time when the current rep's beep fired; anchors pass tolerance window.
     @State private var soloRepBeepWallTime: Date?
     @State private var soloLifetimeRepDisplayCount = SoloLifetimeRepCounter.totalReps(for: .twoMinuteTest)
-    @State private var soloLifetimeRecordedRepIndices = Set<Int>()
+    @State private var soloLifetimeRecordedRepIndices = Set<String>()
     @StateObject private var soloSessionTimer = SoloSessionTimerController()
     @StateObject private var soloActionIdleCue = SoloActionIdleCueState()
     @State private var sessionStartCueContent: ActivitySessionStartCueContent?
     @State private var hasPresentedSessionStartCue = false
     @State private var sessionStartCueHeight: CGFloat = 0
     @State private var showSoloTimedComplete = false
-    @State private var pendingFirstSessionLoginPrompt = false
     @State private var isSoloSessionEnding = false
     @State private var soloTimedCompleteElapsed: TimeInterval = 0
     @State private var soloTimedCompleteReps = 0
@@ -106,9 +105,9 @@ struct TwoMinuteCriticalScanSessionView: View {
         self.mode = mode
         self.settingsViewModel = settingsViewModel
         self.profileManager = profileManager
-        let repCount = SoloTimeBasedSession.blockRepCount(
+        let repCount = TimedSessionEnginePolicy.enginePlanBlockSize(
             activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId,
-            soloFallback: 10,
+            soloFallback: TimedSessionEnginePolicy.twoMinuteTestEngineChunkSize,
             mode: mode
         )
         _engine = StateObject(wrappedValue: TwoMinuteCriticalScanEngine(
@@ -119,13 +118,16 @@ struct TwoMinuteCriticalScanSessionView: View {
         _partnerRelaySession = ObservedObject(wrappedValue: TrainingPartnerConnectionCoordinator.shared.relayDisplaySession)
     }
 
-    private var blockTotalReps: Int {
-        SoloTimeBasedSession.blockRepCount(
+    private var enginePlanRepCount: Int {
+        TimedSessionEnginePolicy.enginePlanBlockSize(
             activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId,
-            soloFallback: 10,
+            soloFallback: TimedSessionEnginePolicy.twoMinuteTestEngineChunkSize,
             mode: mode
         )
     }
+
+    /// Engine plan chunk only (10 reps). Timed session length and save totals come from ``TimedSessionController``.
+    private var blockTotalReps: Int { enginePlanRepCount }
 
     private var effectiveUsesAutoLoop: Bool {
         SoloTimeBasedDisplaySessionSupport.effectiveUsesAutoLoop(mode: mode)
@@ -166,7 +168,7 @@ struct TwoMinuteCriticalScanSessionView: View {
                     .opacity(isBallVisible ? 0.25 : 1)
             }
             waitingForCoachOverlay
-            if mode != .solo, showsBetweenRepPlayerText {
+            if TimedSessionDisplayIntegration.showsBlockRepProgressOverlay(mode: mode), showsBetweenRepPlayerText {
                 repCountOverlay
             }
             if mode == .partner, showExitLogButtons, let repIndex = repIndexForExit {
@@ -193,7 +195,9 @@ struct TwoMinuteCriticalScanSessionView: View {
     }
 
     private var sessionContentWithCover: some View {
-        sessionStack
+        SessionScreenLayout {
+            sessionStack
+        }
             .contentShape(Rectangle())
             .onTapGesture {
                 if SoloWallCalibrationInput.handleIfSoloCalibrating(
@@ -205,25 +209,44 @@ struct TwoMinuteCriticalScanSessionView: View {
                     onCompletedThreePass: onTwoMinuteSoloWallCalibrationFinished
                 ) { return }
                 guard !isSoloDrillInputFrozen else { return }
+                guard !SoloSessionUserStartGate.shouldBlockSoloRepFlow(
+                    mode: mode,
+                    hasCompletedCalibration: hasCompletedPassTempoCalibration,
+                    isCalibrating: soloWallCalibration.isCalibrating
+                ) else { return }
+                guard SessionStartCueRepGate.canStartRepEngine(instructionVisible: sessionStartCueContent != nil) else { return }
                 if mode == .solo, !effectiveUsesAutoLoop { handleWallSoloTrigger() }
             }
             .soloSessionTimerOverlay(
-                isVisible: mode == .solo && !soloWallCalibration.isCalibrating && soloSessionTimer.isVisible,
-                text: soloSessionTimer.displayText,
+                isVisible: TimedSessionDisplayIntegration.showsSessionTimerOverlay(
+                    mode: mode,
+                    isCalibrating: soloWallCalibration.isCalibrating,
+                    localTimer: soloSessionTimer
+                ),
+                text: TimedSessionDisplayIntegration.timerDisplayText(local: soloSessionTimer),
                 onFreePlayEnd: soloFreeModeEndAction
             )
             .soloSessionCompleteOverlay(
-                isPresented: showSoloTimedComplete,
+                isPresented: showSoloTimedComplete && !TimedSessionDisplayIntegration.shouldDeferCompletionOverlay,
                 elapsedSeconds: soloTimedCompleteElapsed,
                 repCount: soloTimedCompleteReps,
                 onDone: {
-                    SoloTimeBasedSession.clear()
-                    showSoloTimedComplete = false
-                    router.popToRoot()
-                    if pendingFirstSessionLoginPrompt {
-                        pendingFirstSessionLoginPrompt = false
-                        NotificationCenter.default.post(name: .firstSessionTrainingCompleted, object: nil)
-                    }
+                    FirstSessionOnboardingStore.completeSoloTimedFeedbackDismiss(
+                        clearSession: { SoloTimeBasedSession.clear() },
+                        dismissOverlay: { showSoloTimedComplete = false },
+                        popToRoot: { router.popToRoot() }
+                    )
+                }
+            )
+            .soloTapToStartGate(
+                mode: mode,
+                hasCompletedCalibration: hasCompletedPassTempoCalibration,
+                isCalibrating: soloWallCalibration.isCalibrating,
+                sessionStartCueActive: sessionStartCueContent != nil,
+                localTimer: soloSessionTimer,
+                onUserStart: {
+                    isSoloRunning = true
+                    startSoloLoop()
                 }
             )
             .fullScreenCover(item: $testResultItem) { item in
@@ -288,6 +311,7 @@ struct TwoMinuteCriticalScanSessionView: View {
             }
             .onChange(of: popToRootTrigger.request, handlePopToRootChange)
             .onAppear(perform: handleOnAppear)
+            .onTimedSessionContainerEnd { userInitiatedEndSoloSession() }
             .onDisappear(perform: handleOnDisappear)
             .onChange(of: scenePhase, handleScenePhaseChange)
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
@@ -301,6 +325,7 @@ struct TwoMinuteCriticalScanSessionView: View {
                 guard mode.requiresPhoneDisplayRelay else { return }
                 if connected {
                     beginConnectedToCalibrationTransitionIfNeeded()
+                    notifyPartnerTimedDrillSurfaceReadyIfNeeded()
                 } else {
                     showConnectedConfirmation = false
                     hasStartedConnectedToCalibrationTransition = false
@@ -319,7 +344,10 @@ struct TwoMinuteCriticalScanSessionView: View {
                 waitForPartnerReady: mode.requiresPhoneDisplayRelay,
                 partnerReady: partnerReadyForCountdown,
                 suppressCoachMessagesDuringCountdown: $blockCoachDrillDuringSessionCountdown,
-                isEnabled: !effectiveUsesAutoLoop
+                isEnabled: TimedSessionDisplayIntegration.showsPartnerSessionStartCountdown(
+                    mode: mode,
+                    effectiveUsesAutoLoop: effectiveUsesAutoLoop
+                )
             )
             .onChange(of: blockCoachDrillDuringSessionCountdown) { old, new in
                 if old == true, new == false {
@@ -334,7 +362,10 @@ struct TwoMinuteCriticalScanSessionView: View {
                     cue: soloActionIdleCue
                 )
                 guard mode.requiresPhoneDisplayRelay, old == true, new == false else { return }
-                flushPendingCoachNextRepAfterCountdown()
+                if SessionStartCueRepGate.canStartRepEngine(instructionVisible: sessionStartCueContent != nil) {
+                    flushPendingCoachNextRepAfterCountdown()
+                }
+                notifyPartnerTimedDrillSurfaceReadyIfNeeded()
             }
             .onChange(of: soloWallCalibration.isCalibrating) { _, isCalibrating in
                 guard !isCalibrating else { return }
@@ -344,25 +375,23 @@ struct TwoMinuteCriticalScanSessionView: View {
             .onChange(of: hasCompletedPassTempoCalibration) { _, completed in
                 guard completed else { return }
                 tryPresentSessionStartCue()
-                if mode == .solo {
-                    onSoloCalibrationReadyIfNeeded()
-                } else {
+                onSoloCalibrationReadyIfNeeded()
+                if mode != .solo {
                     tryStartSoloAutoloop()
                 }
+                notifyPartnerTimedDrillSurfaceReadyIfNeeded()
             }
             .onChange(of: showPassTempoCalibration) { old, new in
                 guard old == true, new == false else { return }
-                if mode == .solo {
-                    onSoloCalibrationReadyIfNeeded()
-                } else {
+                onSoloCalibrationReadyIfNeeded()
+                if mode != .solo {
                     tryStartSoloAutoloop()
                 }
             }
             .onChange(of: showCalibrationChoicePrompt) { old, new in
                 guard old == true, new == false else { return }
-                if mode == .solo {
-                    onSoloCalibrationReadyIfNeeded()
-                } else {
+                onSoloCalibrationReadyIfNeeded()
+                if mode != .solo {
                     tryStartSoloAutoloop()
                 }
             }
@@ -401,6 +430,8 @@ struct TwoMinuteCriticalScanSessionView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .relayForegroundReconnectCompleted)) { _ in
                 guard mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket else { return }
+                // Background/interruption can temporarily flip connection state; force-sync the display gate.
+                sessionManager.setConnected(partnerRelaySession.isCoachPaired)
                 alignEngineRepWithCoordinatorSnapshotAfterRelayForegroundTwoMinute()
                 engine.synchronizeTimersAfterEnteringForeground()
                 PartnerRelayCheckpointDisplaySend.sendIfReady(
@@ -459,6 +490,11 @@ struct TwoMinuteCriticalScanSessionView: View {
             guard repController.state == .preBeep || repController.state == .decisionWindow else { return }
             guard !repController.hasLoggedTap else { return }
             repController.registerTap()
+            TimedSessionDisplayIntegration.recordSessionRepIfNeeded(
+                activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId,
+                repIndex: repIndex,
+                recordedRepTokens: &soloLifetimeRecordedRepIndices
+            )
             #if DEBUG
             let displayReceiveWall = Date()
             DecisionSpeedDebugLog.logDisplayRelayIngress(activity: .twoMinuteTest, kind: "passTriggered", repIndex: repIndex, embeddedTimestamp: timestamp, displayReceiveWallTime: displayReceiveWall)
@@ -496,7 +532,7 @@ struct TwoMinuteCriticalScanSessionView: View {
             break
         case .coachPaired:
             break
-        case .sessionEnded:
+        case .sessionEnded(_, _):
             break
         case .partnerTrainingEnded:
             break
@@ -510,6 +546,8 @@ struct TwoMinuteCriticalScanSessionView: View {
         case .calibrationPassTapped, .calibrationArrivalTapped, .calibrationFinished:
             break
         case .startNextBlock:
+            break
+        case .timedSessionActive, .timedSessionInactive, .displayRepEngineReady, .activityChanged:
             break
         }
     }
@@ -572,6 +610,7 @@ struct TwoMinuteCriticalScanSessionView: View {
     }
 
     private func flushPendingCoachNextRepAfterCountdown() {
+        guard SessionStartCueRepGate.canStartRepEngine(instructionVisible: sessionStartCueContent != nil) else { return }
         guard let idx = pendingNextRepIndex else { return }
         pendingNextRepIndex = nil
         applyPartnerCoachNextRep(repIndex: idx)
@@ -580,6 +619,11 @@ struct TwoMinuteCriticalScanSessionView: View {
     /// Applies a single coach-originated rep start: coach is source of truth for rep index; display only buffers until `waitingForNextRep`.
     private func applyPartnerCoachNextRep(repIndex: Int) {
         guard sessionManager.isConnected else { return }
+        if SessionStartCueRepGate.deferCoachNextRepIfNeeded(
+            repIndex: repIndex,
+            instructionVisible: sessionStartCueContent != nil,
+            pending: &pendingNextRepIndex
+        ) { return }
         #if DEBUG
         if repIndex > partnerCoachRepGate.expectedNextCoachRepIndex {
             print("[PartnerCoach][2MT] nextRep coach ahead of displayTrackedNext: coach=\(repIndex) displayNext=\(partnerCoachRepGate.expectedNextCoachRepIndex)")
@@ -620,6 +664,11 @@ struct TwoMinuteCriticalScanSessionView: View {
 
     @discardableResult
     private func tryCommitPartnerCoachNextRep(repIndex: Int) -> Bool {
+        if SessionStartCueRepGate.deferCoachNextRepIfNeeded(
+            repIndex: repIndex,
+            instructionVisible: sessionStartCueContent != nil,
+            pending: &pendingNextRepIndex
+        ) { return false }
         print("[NEXTREP] received repIndex=\(repIndex) while phase=\(engine.phase) currentRepIndex=\(engine.currentRepIndex)")
         if repIndex < partnerCoachRepGate.expectedNextCoachRepIndex {
             if repIndex + 1 == partnerCoachRepGate.expectedNextCoachRepIndex, case .waitingForNextRep = engine.phase {
@@ -683,6 +732,7 @@ struct TwoMinuteCriticalScanSessionView: View {
     }
 
     private func flushPendingPartnerCoachNextRepIfNeeded() {
+        guard SessionStartCueRepGate.canStartRepEngine(instructionVisible: sessionStartCueContent != nil) else { return }
         guard let idx = pendingNextRepIndex else { return }
         guard sessionManager.isConnected else { return }
         guard case .waitingForNextRep = engine.phase else { return }
@@ -726,7 +776,26 @@ struct TwoMinuteCriticalScanSessionView: View {
         twoMTAllowsExitLogged(repIndex: repIndex)
     }
 
+    private func recordTimedRepAtEngineBoundary(oldPhase: CriticalScanPhase, newPhase: CriticalScanPhase) {
+        guard case .waitingForNextRep = newPhase else { return }
+        let completedRepIndex: Int?
+        switch oldPhase {
+        case .ballVisible(let r, _, _), .awaitingExitLog(let r, _):
+            completedRepIndex = r
+        default:
+            completedRepIndex = nil
+        }
+        guard let repIndex = completedRepIndex else { return }
+        guard engine.repLogs.last?.repIndex == repIndex else { return }
+        TimedSessionDisplayIntegration.recordSessionRepIfNeeded(
+            activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId,
+            repIndex: repIndex,
+            recordedRepTokens: &soloLifetimeRecordedRepIndices
+        )
+    }
+
     private func handlePhaseChange(_ oldPhase: CriticalScanPhase, _ newPhase: CriticalScanPhase) {
+        recordTimedRepAtEngineBoundary(oldPhase: oldPhase, newPhase: newPhase)
         if case .beepedAwaitingPass = oldPhase {
             if case .beepedAwaitingPass = newPhase { }
             else {
@@ -745,25 +814,39 @@ struct TwoMinuteCriticalScanSessionView: View {
                     activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId
                 )
             }
-            let wasFirstSession = FirstSessionOnboardingStore.markFirstSessionCompletedIfNeeded()
-            if wasFirstSession {
-                AuthFlowOnboardingSync.markLocalBaselineCompleted()
-                pendingFirstSessionLoginPrompt = true
-            }
             DispatchQueue.main.async {
+                if TimedSessionDisplayIntegration.continueAfterEnginePlanComplete(
+                    restartEngineBlock: {
+                        self.engine.restartBlockFromBeginning()
+                        if self.mode == .solo, self.effectiveUsesAutoLoop {
+                            self.isSoloRunning = true
+                        }
+                    },
+                    resumeReps: { self.tryStartSoloAutoloop() }
+                ) {
+                    return
+                }
+                guard TimedSessionDisplayIntegration.allowsBlockSummaryNavigation else { return }
                 if mode == .solo, SoloTimeBasedSession.isActive {
                     finishSoloTimeBasedSession()
-                } else if wasFirstSession {
-                    self.testResultItem = nil
-                    self.router.popToRoot()
-                    NotificationCenter.default.post(name: .firstSessionTrainingCompleted, object: nil)
-                    AnalyticsManager.shared.track(.twoMinuteTestCompleted, playerId: self.playerStore.selectedPlayerId)
                 } else {
-                    self.testResultItem = TwoMinuteResultItem(
-                        result: TwoMinuteTestResult.from(logs: self.engine.repLogs, difficulty: self.config.difficulty),
-                        logs: self.engine.repLogs,
-                        showTimingAdaptationFeedback: false
+                    let wasFirstSession = FirstSessionOnboardingStore.noteTrainingSessionCompleted(
+                        deferLoginUntilFeedbackDismissed: false,
+                        repCount: SoloTimeBasedDisplaySessionSupport.overlayRepCount(
+                            engineLoggedRepCount: engine.repLogs.count
+                        ),
+                        elapsedSeconds: soloSessionTimer.elapsedSeconds()
                     )
+                    if wasFirstSession {
+                        self.testResultItem = nil
+                        self.router.popToRoot()
+                    } else {
+                        self.testResultItem = TwoMinuteResultItem(
+                            result: TwoMinuteTestResult.from(logs: self.engine.repLogs, difficulty: self.config.difficulty),
+                            logs: self.engine.repLogs,
+                            showTimingAdaptationFeedback: false
+                        )
+                    }
                     AnalyticsManager.shared.track(.twoMinuteTestCompleted, playerId: self.playerStore.selectedPlayerId)
                 }
             }
@@ -772,6 +855,7 @@ struct TwoMinuteCriticalScanSessionView: View {
             preloadBeepAssetsForInstantReveal()
         }
         if case .beepedAwaitingPass = newPhase {
+            guard SessionStartCueRepGate.canStartRepEngine(instructionVisible: sessionStartCueContent != nil) else { return }
             if mode != .solo || !soloWallCalibration.isCalibrating {
                 playBeep()
             }
@@ -786,7 +870,7 @@ struct TwoMinuteCriticalScanSessionView: View {
         )
         if case .waitingForNextRep = newPhase {
             cancelStimulusAfterBeepWork()
-            if mode == .solo, SoloTimeBasedSession.isActive, soloSessionTimer.pendingEndAfterCurrentRep {
+            if SoloTimeBasedSession.isActive, TimedSessionDisplayIntegration.sessionTimer(local: soloSessionTimer).pendingEndAfterCurrentRep {
                 finishSoloTimeBasedSession()
             } else {
                 SoloTimeBasedDisplaySessionSupport.notifyQuickRepAdvanceIfNeeded(mode: mode, soloLoopRunner: soloLoopRunner)
@@ -816,7 +900,7 @@ struct TwoMinuteCriticalScanSessionView: View {
 
     private func startRepSolo() {
         guard isSoloRunning, !isSoloDrillInputFrozen else { return }
-        guard sessionStartCueContent == nil else { return }
+        guard SessionStartCueRepGate.canStartRepEngine(instructionVisible: sessionStartCueContent != nil) else { return }
         handleWallSoloTrigger()
     }
 
@@ -825,8 +909,13 @@ struct TwoMinuteCriticalScanSessionView: View {
         guard !isSoloDrillInputFrozen else { return }
         guard !soloWallCalibration.isCalibrating else { return }
         guard hasCompletedPassTempoCalibration else { return }
+        guard !SoloSessionUserStartGate.shouldBlockSoloRepFlow(
+            mode: mode,
+            hasCompletedCalibration: hasCompletedPassTempoCalibration,
+            isCalibrating: soloWallCalibration.isCalibrating
+        ) else { return }
         guard !blockCoachDrillDuringSessionCountdown else { return }
-        guard sessionStartCueContent == nil else { return }
+        guard SessionStartCueRepGate.canStartRepEngine(instructionVisible: sessionStartCueContent != nil) else { return }
         guard !soloLoopRunner.isRunning else { return }
         if case .complete = engine.phase { return }
         guard nextRepIndex < blockTotalReps else { return }
@@ -881,6 +970,7 @@ struct TwoMinuteCriticalScanSessionView: View {
 
     /// When the display loads: SessionManager creates session in Supabase and generates pairing code; UI shows pairing screen. Test does not start until coach connects.
     private func handleOnAppear() {
+        SessionStartCueRepGate.onDrillSurfaceAppeared()
         if mode == .solo {
             soloLifetimeRepDisplayCount = SoloLifetimeRepCounter.totalReps(for: .twoMinuteTest)
         }
@@ -888,20 +978,39 @@ struct TwoMinuteCriticalScanSessionView: View {
         PartnerPersistDebug.log("TwoMinuteCriticalScanSessionView onAppear")
         #endif
         onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
-        hasCompletedPassTempoCalibration = false
+        let coordinator = TrainingPartnerConnectionCoordinator.shared
+        let timedPartnerActivitySwitch = mode.requiresPhoneDisplayRelay
+            && TimedSessionDisplayIntegration.shouldSkipPartnerSessionStartCue(mode: mode)
         showCalibrationChoicePrompt = false
         showPassTempoCalibration = false
         startedWithoutSavedCalibration = !PartnerPassTempoCalibrationStore.hasSavedCalibration
         justCompletedCalibrationThisSession = false
         partnerCalibration.reset()
         showConnectedConfirmation = false
-        hasStartedConnectedToCalibrationTransition = false
+        if timedPartnerActivitySwitch {
+            let partnerNeedsCalibration = PBASessionFlowPolicy.shouldPromptCalibration(for: .partner)
+                && !coordinator.sessionCalibrationResolved
+            if partnerNeedsCalibration {
+                CurrentSessionStore.shared.setExpectedBallTravelTimeOverrideSeconds(nil)
+                hasCompletedPassTempoCalibration = false
+                hasStartedConnectedToCalibrationTransition = false
+            } else {
+                CurrentSessionStore.shared.setExpectedBallTravelTimeOverrideSeconds(
+                    coordinator.sessionCalibrationAverageTravelTime ?? PartnerPassTempoCalibrationStore.savedAverageTravelTimeSeconds()
+                )
+                hasCompletedPassTempoCalibration = true
+                showConnectedConfirmation = false
+                hasStartedConnectedToCalibrationTransition = true
+            }
+        } else {
+            hasCompletedPassTempoCalibration = false
+            hasStartedConnectedToCalibrationTransition = false
+        }
         beginConnectedToCalibrationTransitionIfNeeded()
         if mode != .solo {
             soloWallCalibration.resetForNonSoloSession()
         }
-        let coordinator = TrainingPartnerConnectionCoordinator.shared
-        if mode.requiresPhoneDisplayRelay {
+        if mode.requiresPhoneDisplayRelay, !timedPartnerActivitySwitch {
             let partnerNeedsCalibration = PBASessionFlowPolicy.shouldPromptCalibration(for: .partner) && !coordinator.sessionCalibrationResolved
             if partnerNeedsCalibration {
                 CurrentSessionStore.shared.setExpectedBallTravelTimeOverrideSeconds(nil)
@@ -959,15 +1068,26 @@ struct TwoMinuteCriticalScanSessionView: View {
                 }
             }
         }
-        Task {
-            await sessionManager.startSession(
-                activity: .twoMinuteTest,
-                blockSize: blockTotalReps,
-                playerId: playerStore.selectedPlayerId ?? profileManager.currentProfile?.id
-            )
+        if TimedSessionController.shared.shouldSkipActivitySessionCreation {
+            TimedSessionController.shared.prepareActivitySegment(activity: .twoMinuteTest)
+        } else {
+            Task {
+                await sessionManager.startSession(
+                    activity: .twoMinuteTest,
+                    blockSize: blockTotalReps,
+                    playerId: playerStore.selectedPlayerId ?? profileManager.currentProfile?.id,
+                    mode: mode
+                )
+            }
         }
         if mode == .solo, effectiveUsesAutoLoop {
-            isSoloRunning = true
+            if SoloSessionUserStartGate.hasConfirmedUserStart,
+               hasCompletedPassTempoCalibration,
+               !soloWallCalibration.isCalibrating {
+                isSoloRunning = true
+            } else {
+                isSoloRunning = false
+            }
         }
         if effectiveUsesAutoLoop {
             tryPresentSessionStartCue()
@@ -978,13 +1098,27 @@ struct TwoMinuteCriticalScanSessionView: View {
         if mode == .solo {
             if effectiveUsesAutoLoop {
                 syncRepController(with: engine.phase)
-                if !soloWallCalibration.isCalibrating {
+                if isSoloRunning {
                     startSoloLoop()
                 }
             }
             onSoloCalibrationReadyIfNeeded()
         }
         soloWallBootResolved = true
+        notifyPartnerTimedDrillSurfaceReadyIfNeeded()
+    }
+
+    private func notifyPartnerTimedDrillSurfaceReadyIfNeeded() {
+        TimedSessionDisplayIntegration.fastPathPartnerTimedDrillSurfaceIfNeeded(
+            mode: mode,
+            partnerDrillReady: TimedSessionDisplayIntegration.partnerTimedDrillSurfaceReady(
+                mode: mode,
+                coachConnectedForCalibration: coachConnectedForCalibration,
+                hasCompletedPassTempoCalibration: hasCompletedPassTempoCalibration,
+                showPassTempoCalibration: showPassTempoCalibration,
+                showConnectedConfirmation: showConnectedConfirmation
+            )
+        )
     }
 
     private func handleOnDisappear() {
@@ -992,6 +1126,11 @@ struct TwoMinuteCriticalScanSessionView: View {
         cancelStimulusAfterBeepWork()
         stopSoloAutoloop()
         pendingNextRepIndex = nil
+        SessionStartCueRepGate.onDrillSurfaceDisappeared()
+        // Timed container activity switch reuses the same live session; do not send end/disconnect teardown here.
+        if TimedSessionDisplayIntegration.usesSharedSession {
+            return
+        }
         if mode.requiresPhoneDisplayRelay {
             // Do not send sessionEnded while persisting — coach app treats it as a full disconnect (clears join / hub).
             if TrainingPartnerConnectionCoordinator.shared.shouldPersistPartnerPairing {
@@ -1025,18 +1164,39 @@ struct TwoMinuteCriticalScanSessionView: View {
 
     private func handleScenePhaseChange(old: ScenePhase, new: ScenePhase) {
         if new == .background {
-            if mode == .solo {
-                cancelStimulusAfterBeepWork()
-                stopSoloAutoloop()
-                if soloWallCalibration.isCalibrating {
-                    soloWallCalibration.cancelPendingBeeps()
-                }
-            }
-            engine.applicationDidEnterBackground()
+            pauseSessionForBackground()
         } else if new == .active {
+            SessionStartCueRepGate.noteScenePhase(new)
             engine.synchronizeTimersAfterEnteringForeground()
-            tryStartSoloAutoloop()
+            if SessionStartCueRepGate.consumeDidEnterBackground() {
+                resumeSessionIfNeeded()
+            }
         }
+    }
+
+    private func pauseSessionForBackground() {
+        if mode == .solo {
+            cancelStimulusAfterBeepWork()
+            stopSoloAutoloop()
+            if soloWallCalibration.isCalibrating {
+                soloWallCalibration.cancelPendingBeeps()
+            }
+        }
+        engine.applicationDidEnterBackground()
+    }
+
+    private func resumeSessionIfNeeded() {
+        handleRepGateForegroundReturn()
+        tryStartSoloAutoloop()
+    }
+
+    /// Idempotent: safe when `scenePhase` flips rapidly; gate consumes the pending flag once.
+    private func handleRepGateForegroundReturn() {
+        guard SessionStartCueRepGate.consumeForegroundReconciliation(instructionVisible: sessionStartCueContent != nil) else { return }
+        hasPresentedSessionStartCue = false
+        tryPresentSessionStartCue()
+        guard sessionStartCueContent == nil else { return }
+        resumeRepEngineAfterInstructionDismissed()
     }
 
     /// iOS Home / app switcher: soft-suspend relay only (keep join code / pairing).
@@ -1163,6 +1323,7 @@ struct TwoMinuteCriticalScanSessionView: View {
             onCompletedThreePass: onTwoMinuteSoloWallCalibrationFinished
         ) { return }
         guard !isSoloDrillInputFrozen else { return }
+        guard SessionStartCueRepGate.canStartRepEngine(instructionVisible: sessionStartCueContent != nil) else { return }
         switch engine.phase {
         case .waitingForNextRep:
             soloActionIdleCue.onUserTapToStart()
@@ -1317,25 +1478,26 @@ struct TwoMinuteCriticalScanSessionView: View {
     }
 
     private func recordSoloLifetimeRepIfNeeded(repIndex: Int) {
+        TimedSessionDisplayIntegration.recordSessionRepIfNeeded(
+            activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId,
+            repIndex: repIndex,
+            recordedRepTokens: &soloLifetimeRecordedRepIndices
+        )
         guard mode == .solo else { return }
-        guard soloLifetimeRecordedRepIndices.insert(repIndex).inserted else { return }
-        if SoloTimeBasedSession.isActive {
-            SoloTimeBasedSession.recordRepCompleted()
-        }
         soloLifetimeRepDisplayCount = SoloLifetimeRepCounter.recordRep(for: .twoMinuteTest)
     }
 
     private var soloFreeModeEndAction: (() -> Void)? {
-        guard mode == .solo, SoloTimeBasedSession.config == .free else { return nil }
+        guard mode == .solo, SoloTimeBasedSession.isActive else { return nil }
         return { userInitiatedEndSoloSession() }
     }
 
     private func onSoloCalibrationReadyIfNeeded() {
-        SoloTimeBasedDisplaySessionSupport.onSoloCalibrationReady(
+        TimedSessionDisplayIntegration.onCalibrationReady(
             mode: mode,
             hasCompletedCalibration: hasCompletedPassTempoCalibration,
             isCalibrating: soloWallCalibration.isCalibrating,
-            timer: soloSessionTimer,
+            localTimer: soloSessionTimer,
             tryAutoloop: { tryStartSoloAutoloop() }
         )
     }
@@ -1357,19 +1519,42 @@ struct TwoMinuteCriticalScanSessionView: View {
     }
 
     private func userInitiatedEndSoloSession() {
-        guard mode == .solo, SoloTimeBasedSession.isActive, !showSoloTimedComplete, !isSoloSessionEnding else { return }
-        SoloSessionEndTransition.beginUserEnd(
-            setEnding: { isSoloSessionEnding = true },
-            freeze: { freezeSoloSessionForCompletion() },
-            presentOverlay: { showSoloTimedComplete = true },
-            clearEnding: { isSoloSessionEnding = false }
+        TimedSessionDisplayIntegration.requestUserEnd(
+            mode: mode,
+            showComplete: showSoloTimedComplete,
+            isEnding: isSoloSessionEnding,
+            completionType: .earlyExit,
+            freeze: {},
+            localEnd: {
+                SoloSessionEndTransition.beginUserEnd(
+                    setEnding: { isSoloSessionEnding = true },
+                    freeze: {},
+                    presentOverlay: {
+                        finishSoloTimeBasedSession(completionType: .earlyExit)
+                    },
+                    clearEnding: { isSoloSessionEnding = false }
+                )
+            }
         )
     }
 
-    private func finishSoloTimeBasedSession() {
-        guard mode == .solo, SoloTimeBasedSession.isActive, !showSoloTimedComplete else { return }
-        freezeSoloSessionForCompletion()
-        showSoloTimedComplete = true
+    private func finishSoloTimeBasedSession(completionType: SessionCompletionType = .completed) {
+        TimedSessionDisplayIntegration.finishTimeBasedSession(
+            mode: mode,
+            showComplete: showSoloTimedComplete,
+            completionType: completionType,
+            freeze: { freezeSoloSessionForCompletion() },
+            localFinish: {
+                guard mode == .solo, SoloTimeBasedSession.isActive, !showSoloTimedComplete else { return }
+                freezeSoloSessionForCompletion()
+                CurrentSessionStore.shared.markSessionCompletionType(completionType)
+                FirstSessionOnboardingStore.prepareLoginPromptAfterSoloTimedSessionIfNeeded(
+                    repCount: soloTimedCompleteReps,
+                    elapsedSeconds: soloTimedCompleteElapsed
+                )
+                showSoloTimedComplete = true
+            }
+        )
     }
 
     /// Same layout as Dribble or Pass: center "X" marker, no players. Ball at one of four slots when visible.
@@ -1473,7 +1658,13 @@ struct TwoMinuteCriticalScanSessionView: View {
 
     private func tryPresentSessionStartCue() {
         guard !hasPresentedSessionStartCue else { return }
-        guard let content = ActivityKind.twoMinuteTest.sessionStartCue else { return }
+        guard !TimedSessionDisplayIntegration.shouldSkipPartnerSessionStartCue(mode: mode) else { return }
+        guard let content = ActivityKind.twoMinuteTest.sessionStartCue else {
+            hasPresentedSessionStartCue = true
+            TimedSessionDisplayIntegration.markPartnerSessionStartChromeCompletedIfNeeded(mode: mode)
+            SessionStartCueRepGate.enableRepEngine()
+            return
+        }
         guard sessionStartCueDrillIsVisible else { return }
         hasPresentedSessionStartCue = true
         sessionStartCueContent = content
@@ -1482,13 +1673,23 @@ struct TwoMinuteCriticalScanSessionView: View {
     /// Cue finished: clear UI and restart autoloop if a pre-cue start left the runner stuck without firing a rep.
     private func onSessionStartCueFinished() {
         sessionStartCueContent = nil
+        TimedSessionDisplayIntegration.markPartnerSessionStartChromeCompletedIfNeeded(mode: mode)
         if soloLoopRunner.isRunning {
             stopSoloAutoloop()
             if mode == .solo, effectiveUsesAutoLoop {
                 isSoloRunning = true
             }
         }
+        SessionStartCueRepGate.scheduleRepEngineResume {
+            resumeRepEngineAfterInstructionDismissed()
+        }
+    }
+
+    private func resumeRepEngineAfterInstructionDismissed() {
+        guard TimedSessionDisplayIntegration.canResumeRepEngine else { return }
+        guard SessionStartCueRepGate.claimFirstRepStart() else { return }
         tryStartSoloAutoloop()
+        flushPendingCoachNextRepAfterCountdown()
     }
 
     private var coachConnectedForCalibration: Bool {
@@ -1571,9 +1772,13 @@ struct TwoMinuteCriticalScanSessionView: View {
                                 await sessionManager.startSession(
                                     activity: .twoMinuteTest,
                                     blockSize: blockTotalReps,
-                                    playerId: playerStore.selectedPlayerId ?? profileManager.currentProfile?.id
+                                    playerId: playerStore.selectedPlayerId ?? profileManager.currentProfile?.id,
+                                    mode: mode
                                 )
                             }
+                        },
+                        onExitSession: {
+                            cancelWaitingForCoachAndExit()
                         }
                     )
                 } else if sessionManager.isCreating {
@@ -1599,7 +1804,8 @@ struct TwoMinuteCriticalScanSessionView: View {
                                 await sessionManager.startSession(
                                     activity: .twoMinuteTest,
                                     blockSize: blockTotalReps,
-                                    playerId: playerStore.selectedPlayerId ?? profileManager.currentProfile?.id
+                                    playerId: playerStore.selectedPlayerId ?? profileManager.currentProfile?.id,
+                                    mode: mode
                                 )
                             }
                         }
@@ -1626,6 +1832,25 @@ struct TwoMinuteCriticalScanSessionView: View {
                     .allowsHitTesting(false)
                     Spacer()
                 }
+                if !(mode.requiresPhoneDisplayRelay && sessionTransportMode == .relayWebSocket) {
+                    VStack {
+                        HStack {
+                            Button(action: cancelWaitingForCoachAndExit) {
+                                Image(systemName: "chevron.left")
+                                    .font(.system(size: 18, weight: .semibold))
+                                    .foregroundColor(.white.opacity(0.92))
+                                    .frame(width: 38, height: 38)
+                                    .background(Color.white.opacity(0.12))
+                                    .clipShape(Circle())
+                            }
+                            .accessibilityLabel("Back")
+                            Spacer()
+                        }
+                        Spacer()
+                    }
+                    .padding(.top, 12)
+                    .padding(.horizontal, 14)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1634,7 +1859,24 @@ struct TwoMinuteCriticalScanSessionView: View {
 
     /// Relay error overlay needs Retry taps; other waiting states pass touches through.
     private var waitingCoachOverlayAllowsHitTesting: Bool {
-        return false
+        return shouldShowWaitingForCoachOverlay
+    }
+
+    private func cancelWaitingForCoachAndExit() {
+        pendingNextRepIndex = nil
+        blockCoachDrillDuringSessionCountdown = false
+        cancelStimulusAfterBeepWork()
+        stopSoloAutoloop()
+        soloWallCalibration.cancelPendingBeeps()
+        engine.invalidateAllTimers()
+        repController.resetForNewSession()
+        sessionManager.clear(preserveCoachConnection: false)
+        TimedSessionController.shared.clear()
+        CurrentSessionStore.shared.clear()
+        TrainingPartnerConnectionCoordinator.shared.endPartnerTrainingSession(
+            reason: "display.waitingForCoach.backCancel.twoMinute"
+        )
+        dismiss()
     }
 
     private var statusOverlay: some View {
@@ -1773,10 +2015,10 @@ struct TwoMinuteCriticalScanSessionView: View {
         guard !hasSentSessionEnded else { return }
         hasSentSessionEnded = true
         if mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket {
-            partnerRelaySession.sendTwoMinuteMessage(.sessionEnded(timestamp: Date()))
+            partnerRelaySession.sendTwoMinuteMessage(.sessionEnded(source: .display, timestamp: Date()))
             return
         }
-        connectionManager.sendTwoMinuteMessage(.sessionEnded(timestamp: Date()))
+        connectionManager.sendTwoMinuteMessage(.sessionEnded(source: .display, timestamp: Date()))
     }
 
     private func sendRepStartedAck(repIndex: Int) {

@@ -49,7 +49,7 @@ struct FootballScanningAIApp: App {
     
     var body: some Scene {
         WindowGroup {
-            SplashScreen()
+            SplashContainerView()
                 .environmentObject(ConnectionManager.shared)
                 .environmentObject(multipeerManager)
                 .environmentObject(router)

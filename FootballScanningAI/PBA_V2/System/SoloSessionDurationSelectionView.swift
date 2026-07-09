@@ -2,7 +2,7 @@
 //  SoloSessionDurationSelectionView.swift
 //  FootballScanningAI
 //
-//  Solo: pick training style and session duration before starting an activity.
+//  Solo + partner: pick training style (solo only) and session duration before starting.
 //
 
 import SwiftUI
@@ -13,9 +13,21 @@ import UIKit
 
 struct SoloSessionDurationSelectionView: View {
     let activity: ActivityKind
+    var trainingMode: TrainingMode = .solo
+
     @EnvironmentObject private var router: AppRouter
+    @ObservedObject private var timedSession = TimedSessionController.shared
     @State private var selectedStyle: SoloTrainingStyle = SoloTrainingStyle.loadLastSelected()
     @State private var selectedDuration: SoloSessionDurationChoice = SoloSessionDurationChoice.loadLastSelected()
+
+    private var isPartnerFlow: Bool { trainingMode == .partner }
+
+    private var partnerDurationHint: String {
+        if selectedDuration == .free {
+            return "Train freely until you or the coach ends the session. Tap Start when ready."
+        }
+        return "Choose how long to train, then tap Start before the coach begins reps."
+    }
 
     var body: some View {
         ZStack {
@@ -29,74 +41,103 @@ struct SoloSessionDurationSelectionView: View {
             )
             .ignoresSafeArea()
 
-            VStack(spacing: 28) {
-                Spacer(minLength: 0)
+            ResponsiveScrollScreen {
+                VStack(spacing: 28) {
+                    if isPartnerFlow {
+                        VStack(spacing: 8) {
+                            Text("Partner Session")
+                                .font(.title2.weight(.bold))
+                                .foregroundColor(.white)
+                            Text(partnerDurationHint)
+                                .font(.subheadline)
+                                .foregroundColor(.white.opacity(0.65))
+                                .multilineTextAlignment(.center)
+                        }
+                    }
 
-                VStack(spacing: 24) {
-                    Text("Training style")
-                        .font(.title2.weight(.bold))
-                        .foregroundColor(.white)
-                        .multilineTextAlignment(.center)
+                    if !isPartnerFlow {
+                        VStack(spacing: 24) {
+                            Text("Training style")
+                                .font(.title2.weight(.bold))
+                                .foregroundColor(.white)
+                                .multilineTextAlignment(.center)
 
-                    VStack(spacing: 20) {
-                        ForEach(SoloTrainingStyle.allCases) { option in
-                            selectionRow(title: option.title, isSelected: selectedStyle == option) {
-                                guard selectedStyle != option else { return }
-                                selectedStyle = option
-                                SoloTrainingStyle.saveLastSelected(option)
-                                soloSelectionHaptic()
+                            VStack(spacing: 20) {
+                                ForEach(SoloTrainingStyle.allCases) { option in
+                                    selectionRow(title: option.title, isSelected: selectedStyle == option) {
+                                        guard selectedStyle != option else { return }
+                                        selectedStyle = option
+                                        SoloTrainingStyle.saveLastSelected(option)
+                                        soloSelectionHaptic()
+                                    }
+                                }
                             }
                         }
                     }
-                }
 
-                VStack(spacing: 24) {
-                    Text("How long do you want to train?")
-                        .font(.title2.weight(.bold))
-                        .foregroundColor(.white)
-                        .multilineTextAlignment(.center)
+                    VStack(spacing: 24) {
+                        Text(selectedDuration.shortTitle)
+                            .font(.headline.weight(.semibold))
+                            .foregroundColor(.white.opacity(0.85))
+                        if let target = selectedDuration.repTarget {
+                            Text("Target: \(target)+ reps")
+                                .font(.subheadline)
+                                .foregroundColor(.white.opacity(0.55))
+                        }
 
-                    VStack(spacing: 20) {
-                        ForEach(SoloSessionDurationChoice.allCases) { option in
-                            selectionRow(title: option.title, isSelected: selectedDuration == option) {
-                                guard selectedDuration != option else { return }
-                                selectedDuration = option
-                                SoloSessionDurationChoice.saveLastSelected(option)
-                                soloSelectionHaptic()
+                        Text("How long do you want to train?")
+                            .font(.title2.weight(.bold))
+                            .foregroundColor(.white)
+                            .multilineTextAlignment(.center)
+
+                        VStack(spacing: 20) {
+                            ForEach(SoloSessionDurationChoice.allCases) { option in
+                                selectionRow(title: option.title, isSelected: selectedDuration == option) {
+                                    guard selectedDuration != option else { return }
+                                    selectedDuration = option
+                                    SoloSessionDurationChoice.saveLastSelected(option)
+                                    soloSelectionHaptic()
+                                }
                             }
                         }
                     }
-                }
 
-                Button {
-                    soloSelectionHaptic()
-                    SoloTrainingStyle.saveLastSelected(selectedStyle)
-                    SoloSessionDurationChoice.saveLastSelected(selectedDuration)
-                    SoloTimeBasedSession.begin(duration: selectedDuration, style: selectedStyle)
-                    PBASessionFlowPolicy.persistTrainingMode(.solo)
-                    router.push(PBASessionFlowPolicy.routeForActivityLaunch(activity))
-                } label: {
-                    Text("Start")
-                        .font(.title3.weight(.bold))
-                        .foregroundColor(.black)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 22)
-                        .background(Color.yellow)
-                        .cornerRadius(16)
+                    Button(action: startTimedSession) {
+                        Text("Start")
+                            .font(.title3.weight(.bold))
+                            .foregroundColor(.black)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 22)
+                            .background(Color.yellow)
+                            .cornerRadius(16)
+                    }
+                    .buttonStyle(SoloStartButtonStyle())
                 }
-                .buttonStyle(SoloStartButtonStyle())
-
-                Spacer(minLength: 0)
             }
-            .padding(.horizontal, 28)
-            .frame(maxWidth: 420)
-            .frame(maxWidth: .infinity)
         }
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             selectedStyle = SoloTrainingStyle.loadLastSelected()
             selectedDuration = SoloSessionDurationChoice.loadLastSelected()
         }
+    }
+
+    private func startTimedSession() {
+        soloSelectionHaptic()
+        SoloTrainingStyle.saveLastSelected(selectedStyle)
+        SoloSessionDurationChoice.saveLastSelected(selectedDuration)
+        timedSession.beginSessionContainer(
+            mode: trainingMode,
+            durationChoice: selectedDuration,
+            style: selectedStyle
+        )
+        guard !isAlreadyOnTimedSessionRoute else { return }
+        router.push(.timedSession(activity: activity, mode: trainingMode))
+    }
+
+    private var isAlreadyOnTimedSessionRoute: Bool {
+        guard case .timedSession(let routedActivity, let routedMode) = router.path.last else { return false }
+        return routedActivity == activity && routedMode == trainingMode
     }
 
     private func selectionRow(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
@@ -145,7 +186,8 @@ struct SoloSessionTimerCornerBadge: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .safeAreaPadding(.top, 8)
+        .padding(.horizontal, 16)
+        .safeAreaPadding(.top, 14)
     }
 
     private var timerLabel: some View {

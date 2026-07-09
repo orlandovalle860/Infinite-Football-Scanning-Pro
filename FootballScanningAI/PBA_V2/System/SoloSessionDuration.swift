@@ -2,43 +2,77 @@
 //  SoloSessionDuration.swift
 //  FootballScanningAI
 //
-//  Solo time-based training: duration selection, session state, and rep budget.
+//  Time-based training: duration selection, session state, and rep budget.
 //
 
 import Foundation
 
 enum SoloSessionDurationChoice: String, CaseIterable, Identifiable {
+    case fiveMin = "5min"
     case tenMin = "10min"
     case fifteenMin = "15min"
-    case twentyMin = "20min"
     case free = "free"
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .tenMin: return "10 minutes"
-        case .fifteenMin: return "15 minutes"
-        case .twentyMin: return "20 minutes"
+        case .fiveMin: return "5 minutes (Quick)"
+        case .tenMin: return "10 minutes (Standard)"
+        case .fifteenMin: return "15 minutes (Extended)"
         case .free: return "Train freely"
+        }
+    }
+
+    var shortTitle: String {
+        switch self {
+        case .fiveMin: return "5-minute session"
+        case .tenMin: return "10-minute session"
+        case .fifteenMin: return "15-minute session"
+        case .free: return "Free session"
+        }
+    }
+
+    /// Soft rep guidance — not enforced.
+    var repTarget: Int? {
+        switch self {
+        case .fiveMin: return 20
+        case .tenMin: return 40
+        case .fifteenMin: return 60
+        case .free: return nil
         }
     }
 
     var durationSeconds: TimeInterval? {
         switch self {
+        case .fiveMin: return 5 * 60
         case .tenMin: return 10 * 60
         case .fifteenMin: return 15 * 60
-        case .twentyMin: return 20 * 60
         case .free: return nil
         }
     }
 
     var isTimed: Bool { durationSeconds != nil }
 
+    /// Compact label for session logs and analytics (e.g. `free`, `5m`, `10m`).
+    var logLabel: String {
+        switch self {
+        case .free: return "free"
+        case .fiveMin: return "5m"
+        case .tenMin: return "10m"
+        case .fifteenMin: return "15m"
+        }
+    }
+
     static func loadLastSelected() -> SoloSessionDurationChoice {
         guard let raw = UserDefaults.standard.string(forKey: AppStorageKeys.lastSessionDuration),
               let choice = SoloSessionDurationChoice(rawValue: raw) else {
-            return .fifteenMin
+            return .tenMin
+        }
+        // Migrate legacy stored values.
+        switch raw {
+        case "20min": return .fifteenMin
+        default: break
         }
         return choice
     }
@@ -48,15 +82,11 @@ enum SoloSessionDurationChoice: String, CaseIterable, Identifiable {
     }
 }
 
-/// Active solo time-based session (set after duration selection, cleared on session complete).
+/// Active time-based session (solo or partner). Cleared when session completes.
 @MainActor
 enum SoloTimeBasedSession {
-    /// Large rep budget so timed/free sessions are not cut off by block size.
-    static let unlimitedRepBudget = 5000
-
     private(set) static var config: SoloSessionDurationChoice?
     private(set) static var trainingStyle: SoloTrainingStyle?
-    private(set) static var sessionRepCount = 0
     private(set) static var sessionStartedAt: Date?
 
     static var isActive: Bool { config != nil }
@@ -68,8 +98,8 @@ enum SoloTimeBasedSession {
     static func begin(duration choice: SoloSessionDurationChoice, style: SoloTrainingStyle) {
         config = choice
         trainingStyle = style
-        sessionRepCount = 0
-        sessionStartedAt = Date()
+        sessionStartedAt = nil
+        SoloSessionUserStartGate.reset()
     }
 
     static func begin(with choice: SoloSessionDurationChoice) {
@@ -79,32 +109,24 @@ enum SoloTimeBasedSession {
     static func clear() {
         config = nil
         trainingStyle = nil
-        sessionRepCount = 0
         sessionStartedAt = nil
+        SoloSessionUserStartGate.reset()
     }
 
-    static func recordRepCompleted() {
-        sessionRepCount += 1
+    /// Call when the player taps to start after calibration (solo local display).
+    static func beginSessionClock() {
+        sessionStartedAt = Date()
+    }
+
+    /// Fresh clock for partner Train Again — keeps duration config, resets elapsed/countdown baseline.
+    static func restartSessionClock() {
+        sessionStartedAt = Date()
+        SoloSessionUserStartGate.reset()
     }
 
     static func elapsedSeconds(now: Date = Date()) -> TimeInterval {
         guard let sessionStartedAt else { return 0 }
         return max(0, now.timeIntervalSince(sessionStartedAt))
-    }
-
-    static func blockRepCount(
-        activityId: String,
-        soloFallback: Int,
-        mode: TrainingMode
-    ) -> Int {
-        if mode == .solo, isActive {
-            return unlimitedRepBudget
-        }
-        return TrainingPartnerConnectionCoordinator.shared.partnerBlockTotalReps(
-            activityId: activityId,
-            soloFallback: soloFallback,
-            mode: mode
-        )
     }
 }
 

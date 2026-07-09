@@ -14,6 +14,16 @@ enum CoachRepFlowDecoupling {
         !blockComplete
     }
 
+    /// Partner display still in session-start gate — avoid bouncing coach back to TAP TO START on rep-start ack timeout.
+    static func shouldDeferRepStartAckHardReset(repIndex: Int) -> Bool {
+        guard repIndex == 0 else { return false }
+        let coordinator = TrainingPartnerConnectionCoordinator.shared
+        guard coordinator.isPartnerTrainingSessionActive else { return false }
+        if coordinator.isPartnerDisplayCountdownActive { return true }
+        if !coordinator.isDisplayRepEngineReady { return true }
+        return false
+    }
+
     /// Rep index to attach to an optional late direction log after PASS.
     static func pendingLogRepIndex(afterPassFor repIndex: Int) -> Int {
         repIndex

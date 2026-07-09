@@ -1,5 +1,5 @@
 //
-//  SessionSummaryView.swift
+//  SessionSummaryScreenView.swift
 //  FootballScanningAI
 //
 //  PBA V2 — SCREEN 11 SESSION SUMMARY. Train Another → same activity. Back to Home → HomeDashboardView. Share Report → sheet.
@@ -592,6 +592,9 @@ struct SessionSummaryScreenView: View {
         let c = session.speedCounts
         return ScrollView {
             VStack(alignment: .center, spacing: 20) {
+                VisionPlayBrandingView(style: .prominentDark)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
                 Group {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(activityName)
@@ -750,6 +753,8 @@ struct SessionSummaryScreenView: View {
         ZStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
+                    VisionPlayBrandingView(style: .prominentDark)
+
                     VStack(alignment: .leading, spacing: 6) {
                         Text(activityName)
                             .font(.title2.weight(.bold))
@@ -822,6 +827,8 @@ struct SessionSummaryScreenView: View {
         ZStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
+                    VisionPlayBrandingView(style: .prominentDark)
+
                     simpleSummarySection
 
                     buttonsSection

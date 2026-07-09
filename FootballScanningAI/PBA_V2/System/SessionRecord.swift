@@ -37,12 +37,42 @@ enum ActivityKind: String, Codable, Hashable, Identifiable {
     /// User-facing activity label (display only; not used for routing or persistence).
     var displayName: String {
         switch self {
-        case .twoMinuteTest: return "Meet the Ball"
-        case .awayFromPressure: return "Playing Away From Pressure"
         case .dribbleOrPass: return "Dribble or Pass"
-        case .oneTouchPassing: return "One-Touch Passing"
+        case .twoMinuteTest: return "Meet the Ball"
+        case .awayFromPressure: return "Away from Pressure"
+        case .oneTouchPassing: return "One Touch Passing"
         }
     }
+
+    /// Session summary breakdown label — same as ``displayName`` (single source of truth).
+    var sessionSummaryDisplayName: String { displayName }
+
+    /// Short subtitle for activity picker tiles and home cards.
+    var activityPickerSubtitle: String {
+        switch self {
+        case .twoMinuteTest: return "Move early, arrive prepared"
+        case .dribbleOrPass: return "Read space or play early"
+        case .awayFromPressure: return "Find the safe side"
+        case .oneTouchPassing: return "Play fast, scan early"
+        }
+    }
+
+    /// SF Symbol for activity picker tiles.
+    var activityPickerIcon: String {
+        switch self {
+        case .twoMinuteTest: return "figure.run"
+        case .dribbleOrPass: return "arrow.triangle.branch"
+        case .awayFromPressure: return "shield.lefthalf.filled"
+        case .oneTouchPassing: return "bolt.fill"
+        }
+    }
+
+    static let sessionSummaryDisplayOrder: [ActivityKind] = [
+        .dribbleOrPass,
+        .twoMinuteTest,
+        .awayFromPressure,
+        .oneTouchPassing
+    ]
 
     /// Optional one-line cue shown at session start (display only).
     var sessionStartCue: ActivitySessionStartCueContent? {

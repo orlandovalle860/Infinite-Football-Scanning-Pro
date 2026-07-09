@@ -37,7 +37,7 @@ enum SoloActionIdleCue {
         cue: SoloActionIdleCueState
     ) {
         guard isActionPaced(mode: mode), isWaitingForNextRep else { return }
-        let isFirstRepOfSession = SoloTimeBasedSession.sessionRepCount == 0
+        let isFirstRepOfSession = TimedSessionController.shared.totalRepCount == 0
         cue.activateWaitingIdle(
             haptic: isFirstRepOfSession ? .sessionReady : .repCompleted
         )

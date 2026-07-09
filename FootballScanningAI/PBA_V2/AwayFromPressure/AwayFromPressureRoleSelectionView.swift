@@ -21,7 +21,7 @@ struct AwayFromPressureRoleSelectionView: View {
     var body: some View {
         VStack(spacing: 24) {
             Spacer(minLength: 24)
-            Text("Playing Away From Pressure")
+            Text(ActivityKind.awayFromPressure.displayName)
                 .font(.system(size: 24, weight: .bold, design: .rounded))
                 .foregroundColor(.white)
                 .multilineTextAlignment(.center)

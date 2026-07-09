@@ -15,20 +15,21 @@ struct CoachRemoteHubView: View {
     @EnvironmentObject private var connectionManager: ConnectionManager
     @ObservedObject private var coachRelayRemoteService = TrainingPartnerConnectionCoordinator.shared.coachRelayRemoteService
     @ObservedObject private var relayDisplaySession = TrainingPartnerConnectionCoordinator.shared.relayDisplaySession
+    @ObservedObject private var partnerCoordinator = TrainingPartnerConnectionCoordinator.shared
     @AppStorage(AppRole.storageKey) private var appRoleRaw: String = AppRole.player.rawValue
     @AppStorage("coachRemoteLastUsedActivityV1") private var lastUsedActivityKey: String = ""
     @State private var partnerSessionActive = false
     @State private var showDisconnectCoachConfirm = false
+    @State private var activityTapBlockedMessage: String?
 
     private var coachLinkReadyForActivities: Bool {
-        CoachRemoteSessionStartGate.coachDeviceIsPresent()
+        CoachRemoteHubLaunchPolicy.canOpenActivitySelection
     }
 
     private struct CoachRemoteActivityItem: Identifiable, Equatable {
         let id: String
         let activityKind: ActivityKind?
         let title: String
-        let subtitle: String
         let icon: String
         let route: AppRoute
     }
@@ -37,24 +38,21 @@ struct CoachRemoteHubView: View {
         CoachRemoteActivityItem(
             id: "dribble_or_pass",
             activityKind: .dribbleOrPass,
-            title: "Dribble or Pass",
-            subtitle: "12 reps",
+            title: ActivityKind.dribbleOrPass.displayName,
             icon: "arrow.triangle.branch",
             route: .dribbleOrPassCoachRemote
         ),
         CoachRemoteActivityItem(
             id: "away_from_pressure",
             activityKind: .awayFromPressure,
-            title: "Playing Away From Pressure",
-            subtitle: "12 reps",
+            title: ActivityKind.awayFromPressure.displayName,
             icon: "exclamationmark.triangle.fill",
             route: .awayFromPressureCoachRemote
         ),
         CoachRemoteActivityItem(
             id: "one_touch_passing",
             activityKind: .oneTouchPassing,
-            title: "One-Touch Passing",
-            subtitle: "12 reps",
+            title: ActivityKind.oneTouchPassing.displayName,
             icon: "hand.tap.fill",
             route: .oneTouchPassingCoachRemote
         ),
@@ -62,8 +60,7 @@ struct CoachRemoteHubView: View {
             id: "two_minute_test",
             activityKind: .twoMinuteTest,
             title: ActivityKind.twoMinuteTest.displayName,
-            subtitle: "10 reps",
-            icon: "soccerball",
+            icon: "figure.run",
             route: .twoMinuteCoachRemote
         )
     ]
@@ -104,12 +101,21 @@ struct CoachRemoteHubView: View {
         .navigationTitle("Coach Remote")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            // Temporary Partner flow (pushed from Home while still AppRole.player): clear Done path home.
+            if AppRole.resolved(from: appRoleRaw) == .player {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Done") {
+                        exitTemporaryCoachRemoteToHome()
+                    }
+                    .foregroundColor(.white.opacity(0.9))
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Button("Switch to Player Mode") {
                         let old = appRoleRaw
                         appRoleRaw = AppRole.player.rawValue
-                        router.popToRoot()
+                        router.popToRoot(endingPartnerSession: true)
                         AppRoleDebug.log("role_change reason=switch_to_player old=\(old) new=\(AppRole.player.rawValue) routing=player_flow")
                     }
                 } label: {
@@ -122,9 +128,14 @@ struct CoachRemoteHubView: View {
         .preferredColorScheme(.dark)
         .onAppear {
             partnerSessionActive = TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive
+            Task {
+                await partnerCoordinator.attemptCoachRelayAutoReconnectFromStoredJoinCodeIfNeeded(reason: "coach_hub_onAppear")
+            }
+            openCoachRemoteForLiveTimedSessionIfNeeded()
         }
         .onChange(of: coachRelayRemoteService.connectionState) { _, _ in
             partnerSessionActive = TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive
+            openCoachRemoteForLiveTimedSessionIfNeeded()
         }
         .onChange(of: connectionManager.connectedPeerName) { _, _ in
             partnerSessionActive = TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive
@@ -132,15 +143,85 @@ struct CoachRemoteHubView: View {
         .onChange(of: relayDisplaySession.isCoachPaired) { _, _ in
             partnerSessionActive = TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive
         }
+        .onChange(of: partnerCoordinator.isDisplayRepEngineReady) { _, _ in
+            partnerSessionActive = TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive
+            openCoachRemoteForLiveTimedSessionIfNeeded()
+        }
+        .onChange(of: partnerCoordinator.currentTimedSessionActivityId) { _, _ in
+            partnerSessionActive = TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive
+            Task { await partnerCoordinator.attemptCoachRelayAutoReconnectFromStoredJoinCodeIfNeeded(reason: "timedSessionActive") }
+            openCoachRemoteForLiveTimedSessionIfNeeded()
+        }
+        .onChange(of: partnerCoordinator.coachRelayDisplayPeerPresent) { _, _ in
+            partnerSessionActive = TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive
+            openCoachRemoteForLiveTimedSessionIfNeeded()
+        }
+        .alert("Not connected yet", isPresented: Binding(
+            get: { activityTapBlockedMessage != nil },
+            set: { if !$0 { activityTapBlockedMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { activityTapBlockedMessage = nil }
+        } message: {
+            Text(activityTapBlockedMessage ?? "Enter the join code and wait for the display to connect.")
+        }
         .alert("Disconnect Coach?", isPresented: $showDisconnectCoachConfirm) {
             Button("Cancel", role: .cancel) {}
             Button("Disconnect", role: .destructive) {
                 TrainingPartnerConnectionCoordinator.shared.endPartnerTrainingSession(reason: "coachRemoteHubEndTrainingSession")
                 partnerSessionActive = false
+                // Temporary Partner entry: leave the coach stack and return to Player Home.
+                if AppRole.resolved(from: appRoleRaw) == .player {
+                    router.popToRoot(endingPartnerSession: false)
+                }
             }
         } message: {
             Text("You'll need to enter a new join code to start another session.")
         }
+    }
+
+    /// Leave a Home-pushed Coach Remote flow without permanently changing AppRole.
+    private func exitTemporaryCoachRemoteToHome() {
+        if TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive {
+            TrainingPartnerConnectionCoordinator.shared.endPartnerTrainingSession(reason: "temporaryCoachRemoteDone")
+        }
+        partnerSessionActive = false
+        router.popToRoot(endingPartnerSession: false)
+    }
+
+    /// Display started / resumed a timed partner session (e.g. Train Again) — open the matching coach remote from the hub.
+    private func openCoachRemoteForLiveTimedSessionIfNeeded() {
+        guard partnerCoordinator.isPartnerTrainingSessionActive else { return }
+        guard CoachRemoteHubLaunchPolicy.canOpenActivitySelection else { return }
+        guard isOnCoachHubSurface else { return }
+        guard let activityId = partnerCoordinator.currentTimedSessionActivityId,
+              let activity = ActivityKind.fromSessionActivityId(activityId) else { return }
+        guard partnerCoordinator.isDisplayRepEngineReady else { return }
+        let route = CoachRemoteHubLaunchPolicy.coachRemoteRoute(for: activity)
+        guard router.path.last != route else { return }
+        router.push(route)
+    }
+
+    /// Coach-role root hub (`path` empty) or hub pushed from player Home (`path` ends with `.coachRemote`).
+    private var isOnCoachHubSurface: Bool {
+        router.path.isEmpty || router.path.last == .coachRemote
+    }
+
+    private func openCoachActivity(_ item: CoachRemoteActivityItem) {
+        guard CoachRemoteHubLaunchPolicy.canOpenActivitySelection else {
+            #if DEBUG
+            print("[CoachHub] activity tile blocked — coach link not live")
+            #endif
+            activityTapBlockedMessage = "Enter the join code and wait until the display shows as connected, then try again."
+            return
+        }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        lastUsedActivityKey = item.id
+        partnerCoordinator.restoreCoachTimedSessionMirrorIfNeeded()
+        if let activity = item.activityKind {
+            partnerCoordinator.prepareCoachRemoteForBroadcastSessionStart(activity: activity)
+        }
+        if router.path.last == item.route { return }
+        router.push(item.route)
     }
 
     private var activitySelectionStack: some View {
@@ -167,13 +248,11 @@ struct CoachRemoteHubView: View {
 
                         CoachRemoteGridTile(
                             title: recommendedActivity.title,
-                            subtitle: recommendedActivity.subtitle,
                             icon: recommendedActivity.icon,
                             isLastUsed: lastUsedActivityKey == recommendedActivity.id,
                             route: recommendedActivity.route,
                             isProminent: true,
-                            onTap: { lastUsedActivityKey = recommendedActivity.id },
-                            router: router
+                            onTap: { openCoachActivity(recommendedActivity) }
                         )
                     }
                     .padding(.horizontal, 20)
@@ -188,12 +267,10 @@ struct CoachRemoteHubView: View {
                             ForEach(otherActivities) { activity in
                                 CoachRemoteGridTile(
                                     title: activity.title,
-                                    subtitle: activity.subtitle,
                                     icon: activity.icon,
                                     isLastUsed: lastUsedActivityKey == activity.id,
                                     route: activity.route,
-                                    onTap: { lastUsedActivityKey = activity.id },
-                                    router: router
+                                    onTap: { openCoachActivity(activity) }
                                 )
                             }
                         }
@@ -226,57 +303,19 @@ struct CoachRemoteHubView: View {
     }
 }
 
-private struct CoachRemoteHubRow: View {
-    let title: String
-    let subtitle: String
-    let icon: String
-
-    var body: some View {
-        HStack(spacing: 16) {
-            Image(systemName: icon)
-                .font(.title2)
-                .foregroundColor(.yellow)
-                .frame(width: 36, height: 36)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.headline)
-                    .foregroundColor(.white)
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.75))
-            }
-            Spacer(minLength: 0)
-            Image(systemName: "chevron.right")
-                .font(.subheadline.weight(.semibold))
-                .foregroundColor(.white.opacity(0.5))
-        }
-        .padding(.vertical, 16)
-        .padding(.horizontal, 20)
-        .background(Color.white.opacity(0.1))
-        .cornerRadius(16)
-    }
-}
-
 private struct CoachRemoteGridTile: View {
     let title: String
-    let subtitle: String
     let icon: String
     let isLastUsed: Bool
     let route: AppRoute
     var isProminent: Bool = false
     let onTap: () -> Void
-    @ObservedObject var router: AppRouter
 
     var body: some View {
-        Button {
-            guard CoachRemoteSessionStartGate.coachDeviceIsPresent() else { return }
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            onTap()
-            router.push(route)
-        } label: {
-            VStack(alignment: .leading, spacing: 10) {
+        Button(action: onTap) {
+            VStack(spacing: isProminent ? 14 : 12) {
                 Image(systemName: icon)
-                    .font(.title2)
+                    .font(isProminent ? .title : .title2)
                     .foregroundColor(.yellow)
                 if isLastUsed {
                     Text("Last Used")
@@ -290,15 +329,12 @@ private struct CoachRemoteGridTile: View {
                 Text(title)
                     .font(isProminent ? .headline.weight(.bold) : .subheadline.weight(.semibold))
                     .foregroundColor(.white)
+                    .multilineTextAlignment(.center)
                     .lineLimit(2)
-                Text(subtitle)
-                    .font(isProminent ? .caption.weight(.semibold) : .caption2)
-                    .foregroundColor(.white.opacity(0.7))
-                Spacer(minLength: 0)
+                    .minimumScaleFactor(0.85)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: isProminent ? 120 : 96)
             .padding(14)
-            .frame(minHeight: isProminent ? 132 : 100)
             .background(Color.white.opacity(0.1))
             .cornerRadius(14)
             .contentShape(Rectangle())

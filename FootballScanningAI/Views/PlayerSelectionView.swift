@@ -47,7 +47,7 @@ struct PlayerSelectionView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollView {
+                ResponsiveScrollScreen(horizontalPadding: 20, maxContentWidth: 520) {
                     VStack(alignment: .leading, spacing: 16) {
                         Text("Select a player")
                             .font(.title2.bold())
@@ -94,7 +94,6 @@ struct PlayerSelectionView: View {
                         }
                         .buttonStyle(PlainButtonStyle())
                     }
-                    .padding(20)
                 }
             }
         }

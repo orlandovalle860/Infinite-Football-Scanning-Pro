@@ -48,6 +48,12 @@ struct RepLog: Codable {
 
 // MARK: - Multipeer / relay messages (payload prefix pba2:)
 
+/// Who initiated a timed partner session end (relay `sessionEnded` wire message).
+enum PartnerSessionEndSource: String, Codable {
+    case coach
+    case display
+}
+
 /// Partner session messages. **Do not rename cases** without a protocol migration — JSON `kind` must stay backward compatible.
 enum TwoMinuteMessage: Codable {
     case nextRep(repIndex: Int)
@@ -67,8 +73,8 @@ enum TwoMinuteMessage: Codable {
     case incorrectDecision(repIndex: Int, timestamp: Date)
     /// Coach device: notifies display that this session is paired so the pairing code can be hidden.
     case coachPaired(sessionId: UUID)
-    /// Display device: notifies coach that session ended so UI can reset immediately.
-    case sessionEnded(timestamp: Date)
+    /// Either device: timed partner session ended (`source` = coach or display).
+    case sessionEnded(source: PartnerSessionEndSource, timestamp: Date)
     /// Either device: the **whole** partner training run ended (explicit hub end / Leave with end session). Peers must tear down relay and clear pairing so the next activity gets a fresh join code.
     case partnerTrainingEnded(timestamp: Date)
     /// After reconnect: minimal drill snapshot so coach can compare rep/phase (does not change scores).
@@ -79,8 +85,16 @@ enum TwoMinuteMessage: Codable {
     case calibrationFinished(averageTravelTimeSeconds: Double?)
     /// Coach → display: open the partner display flow for this activity (relay / Multipeer). Wire kind: `sessionStarted`.
     case sessionStarted(activityId: String, totalReps: Int, timestamp: Date)
+    /// Display → coach: iPad picked duration and timed session container is live.
+    case timedSessionActive(activityId: String, timestamp: Date)
+    /// Display → coach: iPad awaiting duration or session ended — coach must not arm reps.
+    case timedSessionInactive(timestamp: Date)
+    /// Display → coach: instruction / countdown cue finished — coach may show TAP TO START.
+    case displayRepEngineReady(activityId: String, timestamp: Date)
     /// Coach → display: discard finished block, reset rep 0, dismiss results; same session / connection. Wire kind: `startNextBlock`.
     case startNextBlock(timestamp: Date)
+    /// Coach → display: switch timed-session activity (coach remote owns selection).
+    case activityChanged(activityId: String, timestamp: Date)
 
     enum CodingKeys: String, CodingKey {
         case kind
@@ -117,7 +131,17 @@ enum TwoMinuteMessage: Codable {
         case "coachPaired":
             self = .coachPaired(sessionId: try c.decode(UUID.self, forKey: .sessionId))
         case "sessionEnded":
-            self = .sessionEnded(timestamp: try c.decode(Date.self, forKey: .timestamp))
+            let sourceRaw = try c.decodeIfPresent(String.self, forKey: .sourceRole)
+            let source = sourceRaw.flatMap(PartnerSessionEndSource.init(rawValue:)) ?? .display
+            self = .sessionEnded(
+                source: source,
+                timestamp: try c.decode(Date.self, forKey: .timestamp)
+            )
+        case "coachEndTimedSession":
+            self = .sessionEnded(
+                source: .coach,
+                timestamp: try c.decode(Date.self, forKey: .timestamp)
+            )
         case "partnerTrainingEnded":
             self = .partnerTrainingEnded(timestamp: try c.decode(Date.self, forKey: .timestamp))
         case "partnerSessionCheckpoint":
@@ -141,8 +165,25 @@ enum TwoMinuteMessage: Codable {
                 totalReps: try c.decode(Int.self, forKey: .totalReps),
                 timestamp: try c.decode(Date.self, forKey: .timestamp)
             )
+        case "timedSessionActive":
+            self = .timedSessionActive(
+                activityId: try c.decode(String.self, forKey: .activityId),
+                timestamp: try c.decode(Date.self, forKey: .timestamp)
+            )
+        case "timedSessionInactive":
+            self = .timedSessionInactive(timestamp: try c.decode(Date.self, forKey: .timestamp))
+        case "displayRepEngineReady":
+            self = .displayRepEngineReady(
+                activityId: try c.decode(String.self, forKey: .activityId),
+                timestamp: try c.decode(Date.self, forKey: .timestamp)
+            )
         case "startNextBlock":
             self = .startNextBlock(timestamp: try c.decode(Date.self, forKey: .timestamp))
+        case "activityChanged":
+            self = .activityChanged(
+                activityId: try c.decode(String.self, forKey: .activityId),
+                timestamp: try c.decode(Date.self, forKey: .timestamp)
+            )
         default:
             throw DecodingError.dataCorruptedError(forKey: .kind, in: c, debugDescription: "Unknown kind: \(kind)")
         }
@@ -183,8 +224,9 @@ enum TwoMinuteMessage: Codable {
         case .coachPaired(let sessionId):
             try c.encode("coachPaired", forKey: .kind)
             try c.encode(sessionId, forKey: .sessionId)
-        case .sessionEnded(let timestamp):
+        case .sessionEnded(let source, let timestamp):
             try c.encode("sessionEnded", forKey: .kind)
+            try c.encode(source.rawValue, forKey: .sourceRole)
             try c.encode(timestamp, forKey: .timestamp)
         case .partnerTrainingEnded(let timestamp):
             try c.encode("partnerTrainingEnded", forKey: .kind)
@@ -211,8 +253,23 @@ enum TwoMinuteMessage: Codable {
             try c.encode(activityId, forKey: .activityId)
             try c.encode(totalReps, forKey: .totalReps)
             try c.encode(timestamp, forKey: .timestamp)
+        case .timedSessionActive(let activityId, let timestamp):
+            try c.encode("timedSessionActive", forKey: .kind)
+            try c.encode(activityId, forKey: .activityId)
+            try c.encode(timestamp, forKey: .timestamp)
+        case .timedSessionInactive(let timestamp):
+            try c.encode("timedSessionInactive", forKey: .kind)
+            try c.encode(timestamp, forKey: .timestamp)
+        case .displayRepEngineReady(let activityId, let timestamp):
+            try c.encode("displayRepEngineReady", forKey: .kind)
+            try c.encode(activityId, forKey: .activityId)
+            try c.encode(timestamp, forKey: .timestamp)
         case .startNextBlock(let timestamp):
             try c.encode("startNextBlock", forKey: .kind)
+            try c.encode(timestamp, forKey: .timestamp)
+        case .activityChanged(let activityId, let timestamp):
+            try c.encode("activityChanged", forKey: .kind)
+            try c.encode(activityId, forKey: .activityId)
             try c.encode(timestamp, forKey: .timestamp)
         }
     }
@@ -224,7 +281,7 @@ extension TwoMinuteMessage {
         switch self {
         case .nextRep, .passTriggered, .exitLogged, .firstTouchLogged, .incorrectDecision:
             return true
-        case .repStarted, .beepArmed, .coachPaired, .sessionEnded, .partnerTrainingEnded, .partnerSessionCheckpoint, .calibrationPassTapped, .calibrationArrivalTapped, .calibrationFinished, .sessionStarted, .startNextBlock:
+        case .repStarted, .beepArmed, .coachPaired, .sessionEnded, .partnerTrainingEnded, .partnerSessionCheckpoint, .calibrationPassTapped, .calibrationArrivalTapped, .calibrationFinished, .sessionStarted, .timedSessionActive, .timedSessionInactive, .displayRepEngineReady, .startNextBlock, .activityChanged:
             return false
         }
     }

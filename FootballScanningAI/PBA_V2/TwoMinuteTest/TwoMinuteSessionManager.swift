@@ -25,38 +25,58 @@ final class TwoMinuteSessionManager: ObservableObject {
 
     /// Creates a session in Supabase (no pairing code), then creates a session_activity row. On success, updates CurrentSessionStore.
     /// When not signed in (e.g. new user after sign-out), cloud insert is not possible; uses a local-only session id so relay + drill can still run.
-    func startSession(activity: ActivityKind, blockSize: Int, playerId: UUID?) async {
+    func startSession(activity: ActivityKind, blockSize: Int, playerId: UUID?, mode: TrainingMode) async {
         guard !isCreating else { return }
         isCreating = true
         creationError = nil
+        let analyticsMode = SessionAnalyticsMode.from(trainingMode: mode)
         let sessionIdCreated = await SupabaseSessionService.shared.createSessionForDrill(
             activity: activity,
             blockSize: blockSize,
-            playerId: playerId
+            playerId: playerId,
+            mode: analyticsMode
         )
         var sessionActivityId: UUID?
+        var segmentId: UUID?
         if let sid = sessionIdCreated {
-            sessionActivityId = await SupabaseSessionService.shared.createSessionActivity(
+            let block = await SupabaseSessionService.shared.openSessionActivityBlock(
                 sessionId: sid,
                 activityId: activity.sessionActivityActivityId,
                 blockNumber: 1
             )
+            sessionActivityId = block.sessionActivityId
+            segmentId = block.segmentId
         }
         let noSupabaseAuth = await MainActor.run { AuthManager.shared.currentSession == nil }
         await MainActor.run {
             isCreating = false
             if let sid = sessionIdCreated {
                 sessionId = sid
-                CurrentSessionStore.shared.setSessionIdOnly(sid)
+                CurrentSessionStore.shared.setSessionIdOnly(
+                    sid,
+                    mode: analyticsMode,
+                    startAnalyticsClock: mode.requiresPhoneDisplayRelay,
+                    supabaseStartedAt: Date()
+                )
                 if let id = sessionActivityId {
                     CurrentSessionStore.shared.setCurrentSessionActivityId(id)
+                }
+                if let segmentId {
+                    CurrentSessionStore.shared.setCurrentSessionActivitySegmentId(
+                        segmentId,
+                        activityId: activity.sessionActivityActivityId
+                    )
                 }
                 creationError = nil
             } else if noSupabaseAuth {
                 let localId = UUID()
                 sessionId = localId
                 CurrentSessionStore.shared.clear()
-                CurrentSessionStore.shared.setSessionIdOnly(localId)
+                CurrentSessionStore.shared.setSessionIdOnly(
+                    localId,
+                    mode: SessionAnalyticsMode.from(trainingMode: mode),
+                    startAnalyticsClock: mode.requiresPhoneDisplayRelay
+                )
                 creationError = nil
                 print("[TwoMinuteSession] local-only session id=\(localId.uuidString) (no Supabase auth); relay/drill proceed without cloud session row")
             } else {

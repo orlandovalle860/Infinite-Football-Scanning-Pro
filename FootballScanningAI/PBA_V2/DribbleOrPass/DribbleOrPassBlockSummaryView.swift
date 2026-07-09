@@ -242,6 +242,7 @@ struct DribbleOrPassBlockSummaryView: View {
             onAppearPopToRootIfRequested(trigger: popToRootTrigger, dismiss: dismiss)
             AnalyticsManager.shared.track(.trainingSessionCompleted, playerId: playerStore.selectedPlayerId)
             guard !didSave else { return }
+            guard !TimedSessionDisplayIntegration.usesSharedSession else { return }
             #if DEBUG
             print("[PBA-Debug] Block completed (DOP). results.count=\(results.count), correct=\(blockResult.correctCount), decisionSpeedScoreValue=\(decisionSpeedScoreValue ?? -1), playerId=\(playerStore.selectedPlayerId?.uuidString ?? "nil")")
             let repLabels = results.map { $0.decisionSpeed.rawValue }

@@ -12,6 +12,10 @@ create table if not exists public.sessions (
   decisions_completed int not null default 0,
   decision_speed_score int,
   created_at timestamptz not null default now(),
+  started_at timestamptz,
+  ended_at timestamptz,
+  duration_seconds int,
+  mode text,
   pairing_code text
 );
 create index if not exists sessions_pairing_code_idx on public.sessions(pairing_code) where pairing_code is not null;
@@ -26,6 +30,18 @@ create table if not exists public.session_activities (
   ended_at timestamptz
 );
 create index if not exists session_activities_session_id_idx on public.session_activities(session_id);
+
+-- One row per activity stint within a timed/multi-activity session (supports mid-session activity switching).
+create table if not exists public.session_activity_segments (
+  id uuid primary key default gen_random_uuid(),
+  session_id uuid not null references public.sessions(id) on delete cascade,
+  activity_id text not null,
+  started_at timestamptz not null default now(),
+  ended_at timestamptz,
+  rep_count int not null default 0
+);
+create index if not exists session_activity_segments_session_id_idx on public.session_activity_segments(session_id);
+create index if not exists session_activity_segments_activity_id_idx on public.session_activity_segments(activity_id);
 
 -- One row per decision within a block; linked to session_id and optionally to session_activity_id.
 create table if not exists public.decisions (

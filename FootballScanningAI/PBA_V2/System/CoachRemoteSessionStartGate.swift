@@ -18,13 +18,17 @@ enum CoachRemoteSessionStartGate {
         return AppRole.resolved(from: raw) == .player
     }
 
-    /// Multipeer peer, relay paired, or coach relay WebSocket. Used for **Coach Remote (phone)** and legacy checks — not for iPad display passive routing.
+    /// Multipeer peer, relay paired, or coach relay WebSocket with display in room.
     @MainActor
     static func coachDeviceIsPresent() -> Bool {
         let coordinator = TrainingPartnerConnectionCoordinator.shared
         if ConnectionManager.shared.connectedPeerName != nil { return true }
         if coordinator.relayDisplaySession.isCoachPaired { return true }
-        if coordinator.coachRelayRemoteService.connectionState == .connected { return true }
+        if coordinator.coachRelayRemoteService.connectionState == .connected {
+            // Coach phone: socket up alone is not a live link — wait for relay peer_joined.
+            if isPadPlayerRole() { return true }
+            return coordinator.coachRelayDisplayPeerPresent
+        }
         return false
     }
 
@@ -45,6 +49,29 @@ enum CoachRemoteSessionStartGate {
     }
 }
 
+/// Coach Remote hub: join code vs activity grid gating.
+enum CoachRemoteHubLaunchPolicy {
+    /// Activity grid — only when partner transport is actually live (join code + peer_joined).
+    @MainActor
+    static var canOpenActivitySelection: Bool {
+        let coordinator = TrainingPartnerConnectionCoordinator.shared
+        if coordinator.isPartnerTrainingSessionActive {
+            return coordinator.isPartnerTransportLinkLive
+        }
+        return CoachRemoteSessionStartGate.coachDeviceIsPresent()
+    }
+
+    @MainActor
+    static func coachRemoteRoute(for activity: ActivityKind) -> AppRoute {
+        switch activity {
+        case .dribbleOrPass: return .dribbleOrPassCoachRemote
+        case .awayFromPressure: return .awayFromPressureCoachRemote
+        case .oneTouchPassing: return .oneTouchPassingCoachRemote
+        case .twoMinuteTest: return .twoMinuteCoachRemote
+        }
+    }
+}
+
 extension AppRoute {
     /// Routes that begin a PBA or 2-Minute **training** flow (not hub / warmups / shell screens).
     var requiresCoachRemotePhoneToStartOnPad: Bool {
@@ -57,9 +84,7 @@ extension AppRoute {
              .trainingModeSelection:
             return true
         case .coachRemote, .partnerPairing, .twoMinuteCoachRemote, .dribbleOrPassCoachRemote, .awayFromPressureCoachRemote, .oneTouchPassingCoachRemote,
-             .warmupHub, .warmup, .soloActivitySelection, .debugMenu:
-            return false
-        case .soloSessionDuration:
+             .warmupHub, .warmup, .soloActivitySelection, .soloSessionDuration, .timedSession, .progress, .debugMenu:
             return false
         }
     }

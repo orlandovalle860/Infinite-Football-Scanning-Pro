@@ -22,7 +22,7 @@ enum RecommendationEngine {
         if progressStore.last(.twoMinuteTest, playerId: playerId) == nil {
             return Recommendation(
                 headline: "Recommended First Session",
-                rationale: "Train your first touch under pressure.",
+                rationale: "Move early and arrive prepared on your first touch.",
                 nextActivity: .twoMinuteTest
             )
         }
@@ -93,11 +93,6 @@ enum RecommendationEngine {
 
     /// One-line description (subtitle) for each activity.
     static func activityDescription(_ activity: ActivityKind) -> String {
-        switch activity {
-        case .twoMinuteTest: return "Train first-touch decisions under pressure."
-        case .awayFromPressure: return "Decide opposite the red on your first action."
-        case .dribbleOrPass: return "Choose the correct action."
-        case .oneTouchPassing: return "Decide before expected arrival."
-        }
+        activity.activityPickerSubtitle
     }
 }

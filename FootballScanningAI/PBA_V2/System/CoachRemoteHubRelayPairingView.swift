@@ -152,9 +152,9 @@ struct CoachRemoteHubRelayPairingView: View {
     private func attemptCoachRelayAutoReconnectIfNeeded() {
         guard !didAttemptCoachRelayAutoReconnect else { return }
         let coord = TrainingPartnerConnectionCoordinator.shared
-        guard let code = coord.lastCoachRelayJoinCode,
+        guard let code = coord.lastCoachRelayJoinCode?.trimmingCharacters(in: .whitespacesAndNewlines),
               !code.isEmpty,
-              remoteService.connectionState != .connected else {
+              !coord.isPartnerTransportLinkLive else {
             return
         }
         didAttemptCoachRelayAutoReconnect = true

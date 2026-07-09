@@ -43,8 +43,23 @@ enum AppRoute: Hashable {
     case soloActivitySelection
     /// Solo: choose session duration before activity setup.
     case soloSessionDuration(activity: ActivityKind)
+    /// Solo timed session container (shared timer + activity switching).
+    case timedSession(activity: ActivityKind, mode: TrainingMode)
+    /// Training progress totals (weekly + all-time) from cumulative activity stats.
+    case progress
     /// Tester Tools entry route; UI is DEBUG-only in ``ContentView`` (toolbar still gated).
     case debugMenu
+
+    /// Coach Remote stack screens provide their own Done / role menu — hide the global Home overlay.
+    var suppressesGlobalHomeOverlay: Bool {
+        switch self {
+        case .coachRemote, .twoMinuteCoachRemote, .dribbleOrPassCoachRemote,
+             .awayFromPressureCoachRemote, .oneTouchPassingCoachRemote:
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 @MainActor
@@ -111,6 +126,11 @@ final class AppRouter: ObservableObject {
     /// Clears the navigation stack so the root view (Home) is shown. Does not use last training mode.
     func resetToHome(endingPartnerSession: Bool = false) {
         popToRoot(endingPartnerSession: endingPartnerSession)
+    }
+
+    /// True when any pushed route owns navigation chrome (Coach Remote hub / activity remotes).
+    var suppressesGlobalHomeOverlay: Bool {
+        path.contains(where: \.suppressesGlobalHomeOverlay)
     }
 
     /// Once per app process, when the main shell first appears — ensures we are not restoring a stale path. Idempotent after the first call.
@@ -190,5 +210,16 @@ final class AppRouter: ObservableObject {
         } else {
             dismiss()
         }
+    }
+
+    /// After coach ends a timed partner session: stay on Coach Remote hub when possible (temporary Home-pushed flow).
+    func returnToCoachRemoteHubAfterSessionEnd() {
+        if path.contains(.coachRemote) {
+            while let last = path.last, last != .coachRemote {
+                popLast()
+            }
+            return
+        }
+        popToRoot(endingPartnerSession: false)
     }
 }

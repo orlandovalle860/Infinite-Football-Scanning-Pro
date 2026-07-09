@@ -253,6 +253,8 @@ final class PartnerRelayDisplaySession: ObservableObject {
             }
         } else if state == .connected {
             cancelRelayDisconnectRecycleTask()
+            TrainingPartnerConnectionCoordinator.shared.rebroadcastTimedSessionActiveFromDisplayIfNeeded()
+            TrainingPartnerConnectionCoordinator.shared.rebroadcastDisplayRepEngineReadyFromDisplayIfNeeded()
         }
     }
 
@@ -262,12 +264,24 @@ final class PartnerRelayDisplaySession: ObservableObject {
         guard CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
         guard TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive else { return }
         guard UIApplication.shared.applicationState == .active else { return }
+        guard !TrainingPartnerConnectionCoordinator.shared.shouldSuppressUnexpectedRelayRecycleNow() else {
+            #if DEBUG
+            print("[RelayWS-DEBUG] suppress unexpected relay recycle during transient lifecycle interruption")
+            #endif
+            return
+        }
         cancelRelayDisconnectRecycleTask()
         relayDisconnectRecycleTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             guard !Task.isCancelled else { return }
             guard socketConnectionState == .disconnected else { return }
             guard joinCode != nil else { return }
+            guard !TrainingPartnerConnectionCoordinator.shared.shouldSuppressUnexpectedRelayRecycleNow() else {
+                #if DEBUG
+                print("[RelayWS-DEBUG] recycle task skipped (transient lifecycle interruption)")
+                #endif
+                return
+            }
             await TrainingPartnerConnectionCoordinator.shared.recyclePlayerDisplayRelaySessionKeepingPartnerRun(reason: "relay_socket_dropped_while_active")
         }
     }
@@ -277,6 +291,8 @@ final class PartnerRelayDisplaySession: ObservableObject {
             Task { @MainActor in
                 isCoachPaired = true
                 onCoachPairingChanged?(true)
+                TrainingPartnerConnectionCoordinator.shared.rebroadcastTimedSessionActiveFromDisplayIfNeeded()
+                TrainingPartnerConnectionCoordinator.shared.rebroadcastDisplayRepEngineReadyFromDisplayIfNeeded()
             }
         }
         if text.contains("peer_left") {

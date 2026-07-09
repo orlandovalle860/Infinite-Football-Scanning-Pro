@@ -15,6 +15,8 @@ struct DebugMenuView: View {
     @ObservedObject var profileManager: UserProfileManager
     @ObservedObject var settingsViewModel: SettingsViewModel
     @EnvironmentObject private var router: AppRouter
+    @EnvironmentObject private var progressStore: ProgressStore
+    @EnvironmentObject private var playerStore: PlayerStore
     @AppStorage(PBABeepSoundManager.selectedBeepStorageKey) private var selectedBeepSound: String = PBABeepSoundManager.defaultSelectedBeepRawValue
 
     var body: some View {
@@ -25,6 +27,19 @@ struct DebugMenuView: View {
                 }
             } header: {
                 Text("Debug")
+            }
+
+            Section {
+                Button("Reset to First-Time User", role: .destructive) {
+                    DebugFirstTimeUserReset.resetToFirstTimeUser(
+                        profileManager: profileManager,
+                        playerStore: playerStore,
+                        progressStore: progressStore,
+                        router: router
+                    )
+                }
+            } footer: {
+                Text("Clears local onboarding, sessions, calibration, streaks, and profiles. DEBUG only.")
             }
 
             Section {

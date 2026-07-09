@@ -64,10 +64,13 @@ enum PBASessionFlowPolicy {
     }
 
     /// Existing installs already have a stored training mode; treat first-launch onboarding as done so we do not block Home.
+    /// New installs skip the Solo/Partner chooser and default to Solo (changeable anytime on Home).
     static func migrateTrainingModeOnboardingIfNeeded() {
-        let hasStoredMode = UserDefaults.standard.object(forKey: pbaLastSelectedTrainingModeKey) != nil
-            || UserDefaults.standard.object(forKey: AppStorageKeys.lastMode) != nil
-        if hasStoredMode, !UserDefaults.standard.bool(forKey: AppStorageKeys.hasLaunchedBefore) {
+        if UserDefaults.standard.object(forKey: pbaLastSelectedTrainingModeKey) == nil,
+           UserDefaults.standard.object(forKey: AppStorageKeys.lastMode) == nil {
+            persistTrainingMode(.solo)
+        }
+        if !UserDefaults.standard.bool(forKey: AppStorageKeys.hasLaunchedBefore) {
             UserDefaults.standard.set(true, forKey: AppStorageKeys.hasLaunchedBefore)
         }
     }

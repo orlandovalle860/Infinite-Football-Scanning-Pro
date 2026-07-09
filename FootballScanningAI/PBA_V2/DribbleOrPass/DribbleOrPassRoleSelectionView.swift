@@ -21,7 +21,7 @@ struct DribbleOrPassRoleSelectionView: View {
     var body: some View {
         VStack(spacing: 24) {
             Spacer(minLength: 24)
-            Text("Dribble or Pass")
+            Text(ActivityKind.dribbleOrPass.displayName)
                 .font(.system(size: 24, weight: .bold, design: .rounded))
                 .foregroundColor(.white)
                 .multilineTextAlignment(.center)

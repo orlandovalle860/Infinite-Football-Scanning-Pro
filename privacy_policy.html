@@ -69,7 +69,7 @@
         <p><strong>App Developer:</strong> Orlando Valle</p>
 
         <div class="highlight">
-            <strong>Summary:</strong> VisionPlay (formerly Infinite Football Scanning Pro) is a football training app. You can use many features on your device without an account. If you choose to sign in, we store account and training data on secure servers operated by our service providers so your progress can sync across devices. We do not sell your data or use it for advertising.
+            <strong>Summary:</strong> VisionPlay (formerly Infinite Football Scanning Pro) is a football training app. You can train without creating a personal account. Some training data may be transmitted to our servers to support app functionality, even if you are not signed in; when not signed in, this data is associated with an anonymous identifier rather than a personal account. If you choose to sign in, we also store account and training data on secure servers operated by our service providers so your progress can sync across devices. We do not sell your data or use it for advertising.
         </div>
 
         <h2>Introduction</h2>
@@ -93,7 +93,8 @@
             <li>Summary statistics such as accuracy, speed scores, and progress through training stages</li>
             <li>App settings and preferences related to training (for example, difficulty and notification preferences)</li>
         </ul>
-        <p>Much of this information is stored on your device. If you are signed in, it may also be uploaded to our cloud database so it can be restored on a new device or after reinstalling the App.</p>
+        <p>Much of this information is stored on your device. Some training data may be transmitted to our servers to support app functionality, even if you are not signed in. When not signed in, this data is associated with an anonymous identifier rather than a personal account. If you are signed in, training data may also be linked to your account and synced across devices.</p>
+        <p>We may use anonymous identifiers to support functionality before account creation.</p>
 
         <h3>3. Product analytics</h3>
         <p>We collect limited product analytics to understand how the App is used and to improve it. These events may include, for example, app opened, training session started or completed, account created, or player profile created. Analytics records may include your user ID, player ID, session identifiers, event name, and timestamp. We do not use third-party advertising or cross-app tracking networks for this purpose.</p>
@@ -105,12 +106,13 @@
             <li>Exchange short-lived session identifiers and join codes</li>
             <li>Relay real-time training control messages (such as rep timing and activity changes) between paired devices</li>
         </ul>
-        <p>Our relay service is designed for live coordination only and does not permanently store your training history in the relay itself. Training results from partner sessions may still be saved to your device and, when signed in, to our cloud database from the display device.</p>
+        <p>Our relay service is designed for live coordination only and does not permanently store your training history in the relay itself. Training results from partner sessions may be saved on your device and may also be transmitted to our cloud database from the display device to support app functionality.</p>
 
         <h3>5. Information collected automatically</h3>
         <ul>
             <li><strong>Device and app data:</strong> Basic technical information needed to operate the App, such as device type, operating system version, and app version, may be included in server logs maintained by our hosting providers.</li>
             <li><strong>Authentication tokens:</strong> If you sign in, your session is stored securely on your device (for example, in the iOS Keychain) so you remain logged in between launches.</li>
+            <li><strong>Anonymous identifiers:</strong> If you use the App without signing in, we may assign or use an anonymous identifier so training and related data can be stored and associated on our servers without a personal account.</li>
             <li><strong>Local storage:</strong> The App uses on-device storage (including UserDefaults) for offline training, queued sync data, and preferences.</li>
         </ul>
 
@@ -127,7 +129,7 @@
         <ul>
             <li>Provide, operate, and improve the App and training curriculum</li>
             <li>Create and manage your account and player profiles</li>
-            <li>Save, sync, and display your training history and progress</li>
+            <li>Save, sync, and display your training history and progress (including using anonymous identifiers when you are not signed in)</li>
             <li>Enable partner and coach training features when you choose to use them</li>
             <li>Send optional local notifications reminding you to train (only if you allow notifications)</li>
             <li>Understand product usage through our own analytics</li>
@@ -154,7 +156,7 @@
 
         <h2>Data Storage and Security</h2>
         <ul>
-            <li>Data is stored on your device and, when you use an account, on servers operated by our cloud provider.</li>
+            <li>Data is stored on your device and may also be stored on servers operated by our cloud provider to support app functionality. When you sign in, data is associated with your account.</li>
             <li>Internet connections use encryption in transit (HTTPS/TLS and secure WebSockets where applicable).</li>
             <li>No method of transmission or storage is 100% secure, but we use reasonable technical and organizational measures to protect your information.</li>
         </ul>
@@ -162,7 +164,7 @@
         <h2>Data Retention</h2>
         <ul>
             <li><strong>On your device:</strong> Local data remains until you delete it in the App, sign out (which clears local account-linked caches on that device), or uninstall the App.</li>
-            <li><strong>On our servers:</strong> Account and training data is retained while your account is active so we can provide sync and history features.</li>
+            <li><strong>On our servers:</strong> Training and account data is retained to support app functionality. Data linked to an account is retained while your account is active. Data associated with an anonymous identifier may be retained according to our operational needs and retention practices.</li>
             <li><strong>Partner relay:</strong> Live relay sessions are short-lived and held in memory for coordination; they are not intended as long-term storage of your training history.</li>
             <li><strong>Analytics:</strong> Product analytics events are retained for a period reasonable for product improvement and then may be aggregated or deleted.</li>
         </ul>
@@ -171,7 +173,7 @@
         <p>Depending on where you live, you may have rights to access, correct, delete, or export your personal information, or to object to or restrict certain processing.</p>
         <p>Within the App today, you can:</p>
         <ul>
-            <li>Use training features without signing in (local data stays on your device)</li>
+            <li>Use training features without signing in (no personal account required; some training data may still be transmitted using an anonymous identifier)</li>
             <li>Create, edit, and delete player profiles</li>
             <li>Sign out, which clears local account-linked data from that device</li>
             <li>Disable coaching notifications in App settings and in iOS Settings</li>

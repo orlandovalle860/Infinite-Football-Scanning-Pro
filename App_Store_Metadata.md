@@ -57,7 +57,9 @@ Track:
 
 Optional sign-in (Apple or email) syncs your profiles and sessions across devices.
 
-Train without an account — your data stays on your device until you choose to sync.
+Train without an account — no personal account required to begin training.
+
+Training data may be stored locally and may also be transmitted to support app functionality. When not signed in, data is associated with an anonymous identifier.
 
 Designed for the field
 
@@ -74,7 +76,7 @@ Coaches can run partner sessions from their phone while the player trains on a l
 Privacy
 
 We don't sell your data or run ads.
-Optional account features use secure cloud services for syncing.
+Training data may be stored locally and may also be transmitted to support app functionality. When not signed in, data is associated with an anonymous identifier. Optional account features use secure cloud services for syncing when you sign in.
 
 Requirements
 
@@ -110,6 +112,8 @@ Solo test path: Open app → start Meet the Ball → complete a short block → 
 Optional sign-in: Sign in with Apple or email, create a player profile, complete a session, confirm history appears.
 
 Partner mode (optional): iPad runs the display session; iPhone joins as coach via join code. Requires local network permission on both devices and an internet connection for relay coordination.
+
+The app may transmit training session data using an anonymous identifier before account creation to support functionality. No personal account is required to begin training.
 
 Privacy Policy: https://orlandovalle860.github.io/Infinite-Football-Scanning-Pro/privacy_policy.html
 

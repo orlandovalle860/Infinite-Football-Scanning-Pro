@@ -333,7 +333,7 @@ Session Breakdown:
 - **Performance Optimization**: AI-powered training recommendations
 
 ### Competitive Advantage
-- **Privacy-First**: Your data stays on your device
+- **Privacy-First**: Training data may be stored locally; when not signed in, transmitted data uses an anonymous identifier (see privacy policy)
 - **Comprehensive**: More detailed than any competitor
 - **Actionable**: Clear recommendations for improvement
 - **Visual**: Easy-to-understand charts and graphs

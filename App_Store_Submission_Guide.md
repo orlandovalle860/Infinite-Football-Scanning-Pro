@@ -40,7 +40,7 @@ Fill in the following fields:
 - **Subtitle**: Master Football Scanning Skills
 - **Keywords**: football,scanning,training,soccer,awareness,decision,skills,coaching,drills,vision
 - **Description**: [Use the full description from App_Store_Metadata.md]
-- **Promotional Text**: Master football scanning skills with two training modes. Build awareness and decision-making under pressure. Privacy-focused, offline training.
+- **Promotional Text**: Master football scanning skills with two training modes. Build awareness and decision-making under pressure. Privacy-focused training with optional cloud sync.
 - **Support URL**: https://orlandovalle860.github.io/Infinite-Football-Scanning-Pro/privacy_policy.html
 - **Marketing URL**: (Optional - can leave blank)
 

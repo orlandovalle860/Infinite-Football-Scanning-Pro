@@ -70,7 +70,7 @@ Navigate to your newly created app and fill in:
 - **Keywords**: football,scanning,training,soccer,awareness,decision,skills,coaching,drills,vision
 - **Description**: [Copy from App_Store_Metadata.md]
 - **Promotional Text**: Master football scanning skills with two training modes. Build awareness and decision-making under pressure. Privacy-focused, offline training.
-- **Support URL**: https://vallefamily.github.io/privacy_policy.html
+- **Support URL**: https://orlandovalle860.github.io/Infinite-Football-Scanning-Pro/privacy_policy.html
 - **Marketing URL**: (Leave blank for now)
 
 ### 4.2 App Review Information
@@ -112,7 +112,7 @@ Fill in the same information as before:
 - **Keywords**: football,scanning,training,soccer,awareness,decision,skills,coaching,drills,vision
 - **Description**: [Copy from App_Store_Metadata.md]
 - **Promotional Text**: Master football scanning skills with two training modes. Build awareness and decision-making under pressure. Privacy-focused, offline training.
-- **Support URL**: https://vallefamily.github.io/privacy_policy.html
+- **Support URL**: https://orlandovalle860.github.io/Infinite-Football-Scanning-Pro/privacy_policy.html
 
 ## Step 7: Prepare for Screenshots
 
@@ -170,7 +170,7 @@ Fill in the same information as before:
 ## Important Notes
 
 ### Privacy Policy
-- Your privacy policy is already hosted at: https://vallefamily.github.io/privacy_policy.html
+- Your privacy policy is already hosted at: https://orlandovalle860.github.io/Infinite-Football-Scanning-Pro/privacy_policy.html
 - Make sure this URL is accessible
 
 ### App Store Guidelines
@@ -195,6 +195,6 @@ Fill in the same information as before:
 ## Contact Information
 - **Developer**: Orlando Valle
 - **Email**: orlandovalle860@gmail.com
-- **Privacy Policy**: https://vallefamily.github.io/privacy_policy.html
+- **Privacy Policy**: https://orlandovalle860.github.io/Infinite-Football-Scanning-Pro/privacy_policy.html
 
 You're now ready to proceed with screenshots and app submission! 

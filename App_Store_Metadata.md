@@ -97,7 +97,7 @@ This app is a football training tool that helps players develop scanning skills 
 ## Contact Information
 - **Developer**: Orlando Valle
 - **Email**: orlandovalle860@gmail.com
-- **Privacy Policy**: https://vallefamily.github.io/privacy_policy.html
+- **Privacy Policy**: https://orlandovalle860.github.io/Infinite-Football-Scanning-Pro/privacy_policy.html
 
 ## Version Information
 - **Version**: 1.0

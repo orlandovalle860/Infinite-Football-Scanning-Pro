@@ -709,24 +709,15 @@ class UserProfileManager: ObservableObject {
     func bestPressureEscapePercent() -> Double? { currentProfile?.bestPressureEscapePercent }
     func bestForwardIntentPercent() -> Double? { currentProfile?.bestForwardIntentPercent }
 
+    /// V1: all training content is free. Re-enable StoreKit gating here when subscriptions ship.
     func isPremiumActive(playerId: UUID?) -> Bool {
-#if DEBUG
+        _ = playerId
         return true
-#else
-        let pid = playerId ?? currentProfile?.id
-        guard let pid else { return false }
-        return profiles.first(where: { $0.id == pid })?.isPremium ?? false
-#endif
     }
 
+    /// V1 no-op — reserved for StoreKit purchase completion.
     func upgradeToPremium(playerId: UUID?) {
-        let pid = playerId ?? currentProfile?.id
-        guard let pid, let index = profiles.firstIndex(where: { $0.id == pid }) else { return }
-        profiles[index].isPremium = true
-        if currentProfile?.id == pid {
-            currentProfile = profiles[index]
-        }
-        saveProfiles()
+        _ = playerId
     }
 
     // MARK: - Player Progress (report card)

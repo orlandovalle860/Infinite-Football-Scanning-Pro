@@ -2321,6 +2321,7 @@ struct IntroView: View {
                         .frame(maxWidth: 420)
                         .frame(maxWidth: .infinity)
                     homeMainTrainingSection
+                    homeComingSoonHint
                 }
             }
         }
@@ -2794,7 +2795,7 @@ struct IntroView: View {
                             .foregroundColor(.white.opacity(0.86))
                     }
                 } else {
-                    Text("Complete more sessions to unlock")
+                    Text("Complete more sessions to see this stat")
                         .font(.caption)
                         .foregroundColor(.white.opacity(0.75))
                 }
@@ -3226,6 +3227,16 @@ struct IntroView: View {
         }
         .frame(maxWidth: 420)
         .frame(maxWidth: .infinity)
+    }
+
+    private var homeComingSoonHint: some View {
+        Text("Train now. Track your progress with cloud sync coming soon.")
+            .font(.footnote)
+            .foregroundColor(.white.opacity(0.45))
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: 420)
+            .frame(maxWidth: .infinity)
+            .padding(.top, 4)
     }
 
     private func homeTrainingMessageView(_ message: HomeTrainingMessage) -> some View {
@@ -3684,7 +3695,7 @@ struct IntroView: View {
 
     private func statusUpgradeToast(status: PlayerStatus) -> some View {
         VStack(spacing: 8) {
-            Text("Status Upgraded")
+            Text("New Status")
                 .font(.headline)
                 .foregroundColor(.white)
             Text("You're becoming a \(status.rawValue).")

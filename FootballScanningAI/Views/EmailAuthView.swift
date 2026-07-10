@@ -32,10 +32,19 @@ struct EmailAuthView: View {
 
     var body: some View {
         VStack(spacing: 24) {
-            Text("Sign in or create an account")
-                .font(.title2.bold())
-                .foregroundColor(.white)
-                .padding(.top, 24)
+            VStack(spacing: 8) {
+                Text("VisionPlay")
+                    .font(.title.weight(.bold))
+                    .foregroundColor(.white)
+                Text("See the Game")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.85))
+                Text("Sign in or create an account")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.65))
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.top, 24)
 
             VStack(spacing: 12) {
                 TextField("Email", text: $email)

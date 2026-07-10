@@ -90,6 +90,7 @@ struct ActivityProgressPanelView: View {
                 if showsInsights {
                     insightCard
                 }
+                aboutFooter
             }
             .padding(.horizontal, 20)
             .padding(.top, 16)
@@ -142,6 +143,19 @@ struct ActivityProgressPanelView: View {
         .padding(18)
         .background(Color.gray.opacity(0.12))
         .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+
+    private var aboutFooter: some View {
+        VStack(spacing: 4) {
+            Text("VisionPlay")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text("Formerly PBA Training")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 8)
     }
 
     private var insightCard: some View {

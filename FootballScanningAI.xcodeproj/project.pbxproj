@@ -446,7 +446,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "PBA Training";
+				INFOPLIST_KEY_CFBundleDisplayName = VisionPlay;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.sports";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "This app uses the local network to connect the Display device and Coach device for Meet the Ball and other activities. Both devices must allow access.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -490,7 +490,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "PBA Training";
+				INFOPLIST_KEY_CFBundleDisplayName = VisionPlay;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.sports";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "This app uses the local network to connect the Display device and Coach device for Meet the Ball and other activities. Both devices must allow access.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;

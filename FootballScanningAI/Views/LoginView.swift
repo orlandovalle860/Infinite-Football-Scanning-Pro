@@ -38,12 +38,16 @@ struct LoginView: View {
             ResponsiveScrollScreen(horizontalPadding: 24, maxContentWidth: 360) {
                 VStack(spacing: 24) {
                     VStack(spacing: 8) {
-                        Text("PBA Training")
+                        Text("VisionPlay")
                             .font(.title.weight(.bold))
                             .foregroundColor(.white)
-                        Text("Sign in or create an account to sync your data")
+                        Text("See the Game")
                             .font(.subheadline)
                             .foregroundColor(.white.opacity(0.85))
+                            .multilineTextAlignment(.center)
+                        Text("Sign in or create an account to sync your data")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.65))
                             .multilineTextAlignment(.center)
                     }
 

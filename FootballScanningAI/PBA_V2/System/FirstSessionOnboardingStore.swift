@@ -14,6 +14,8 @@ extension Notification.Name {
 
 enum FirstSessionOnboardingStore {
     static let hasCompletedFirstSessionKey = "pba.hasCompletedFirstSession"
+    /// After sign-out / account delete: allow the first-session login prompt again; blocks legacy migration from re-marking complete.
+    private static let reenableFirstSessionLoginPromptKey = "pba.reenableFirstSessionLoginPrompt"
     private static let lastLoginPromptDayKey = "pba.lastLoginPromptDay"
     private static let loginPromptDeclinedDayKey = "pba.loginPromptDeclinedDay"
     /// Set when the first session ends with a feedback overlay; login fires on overlay Done.
@@ -28,6 +30,24 @@ enum FirstSessionOnboardingStore {
 
     static var hasCompletedFirstSession: Bool {
         UserDefaults.standard.bool(forKey: hasCompletedFirstSessionKey)
+    }
+
+    /// Call on sign-out / account delete so a guest can be asked to Sign in with Apple again after the next meaningful session.
+    static func resetLoginPromptEligibilityAfterSignOut() {
+        pendingLoginPromptAfterFeedback = false
+        UserDefaults.standard.set(false, forKey: hasCompletedFirstSessionKey)
+        UserDefaults.standard.set(true, forKey: reenableFirstSessionLoginPromptKey)
+        UserDefaults.standard.removeObject(forKey: lastLoginPromptDayKey)
+        UserDefaults.standard.removeObject(forKey: loginPromptDeclinedDayKey)
+        print("[SignOut-Debug] first-session login prompt eligibility reset")
+    }
+
+    private static var shouldSkipLegacyFirstSessionMigration: Bool {
+        UserDefaults.standard.bool(forKey: reenableFirstSessionLoginPromptKey)
+    }
+
+    private static func clearReenableFirstSessionLoginPromptFlag() {
+        UserDefaults.standard.removeObject(forKey: reenableFirstSessionLoginPromptKey)
     }
 
     /// Records the first completed training session for any activity.
@@ -93,6 +113,8 @@ enum FirstSessionOnboardingStore {
     /// Existing installs: skip the new welcome funnel.
     static func migrateExistingInstallsIfNeeded() {
         guard !hasCompletedFirstSession else { return }
+        // After sign-out/delete we intentionally cleared first-session state — do not re-mark via legacy keys.
+        guard !shouldSkipLegacyFirstSessionMigration else { return }
         let legacyComplete =
             UserDefaults.standard.bool(forKey: hasCompletedInitialTestKey)
             || UserDefaults.standard.bool(forKey: hasSeenIntroKey)
@@ -117,6 +139,7 @@ enum FirstSessionOnboardingStore {
         UserDefaults.standard.set(true, forKey: hasCompletedFirstSessionKey)
         UserDefaults.standard.set(true, forKey: AppStorageKeys.hasLaunchedBefore)
         UserDefaults.standard.set(true, forKey: hasSeenIntroKey)
+        clearReenableFirstSessionLoginPromptFlag()
         return true
     }
 

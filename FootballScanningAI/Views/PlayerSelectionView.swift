@@ -13,10 +13,13 @@ struct PlayerSelectionView: View {
     @ObservedObject var settingsViewModel: SettingsViewModel
     @ObservedObject var router: AppRouter
     @Binding var signOutUXPhase: SignOutUXPhase
+    @ObservedObject private var authManager = AuthManager.shared
     @EnvironmentObject private var progressStore: ProgressStore
     @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
 
     @State private var showSignOutConfirmation = false
+    @State private var showDeleteAccountConfirmation = false
+    @State private var showDeleteAccountFailureAlert = false
     @State private var remotePlayers: [SupabasePlayer] = []
     @State private var isLoading = true
     @State private var loadError: String?
@@ -93,6 +96,8 @@ struct PlayerSelectionView: View {
                             .cornerRadius(12)
                         }
                         .buttonStyle(PlainButtonStyle())
+
+                        signedInAccountActions
                     }
                 }
             }
@@ -111,15 +116,6 @@ struct PlayerSelectionView: View {
         )
         .navigationTitle("Players")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("Sign Out") {
-                    showSignOutConfirmation = true
-                }
-                .foregroundColor(.white.opacity(0.9))
-                .disabled(signOutUXPhase != .idle)
-            }
-        }
         .alert("Sign Out?", isPresented: $showSignOutConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Sign Out", role: .destructive) {
@@ -137,9 +133,60 @@ struct PlayerSelectionView: View {
         } message: {
             Text("You’ll return to the sign-in screen and can use a different account.")
         }
+        .alert("Delete Account", isPresented: $showDeleteAccountConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                performDeleteAccount()
+            }
+        } message: {
+            Text("Are you sure you want to permanently delete your account? This action cannot be undone.")
+        }
+        .alert("Delete Account", isPresented: $showDeleteAccountFailureAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("We couldn't delete your account right now. You've been signed out. Try again or contact orlandovalle860@gmail.com.")
+        }
         .onAppear { loadPlayers() }
         .sheet(isPresented: $showAddPlayer) {
             addPlayerSheet
+        }
+    }
+
+    @ViewBuilder
+    private var signedInAccountActions: some View {
+        if authManager.currentSession != nil {
+            VStack(spacing: 14) {
+                Button("Sign Out") {
+                    showSignOutConfirmation = true
+                }
+                .font(.footnote.weight(.semibold))
+                .foregroundColor(.white.opacity(0.85))
+                .disabled(signOutUXPhase != .idle)
+
+                Button("Delete Account") {
+                    showDeleteAccountConfirmation = true
+                }
+                .font(.footnote.weight(.semibold))
+                .foregroundColor(.red.opacity(0.92))
+                .disabled(signOutUXPhase != .idle)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.top, 16)
+        }
+    }
+
+    private func performDeleteAccount() {
+        guard signOutUXPhase == .idle else { return }
+        Task {
+            let deleted = await AccountDeletionService.performAccountDeletion(
+                profileManager: profileManager,
+                playerStore: playerStore,
+                progressStore: progressStore,
+                router: router
+            )
+            if !deleted {
+                showDeleteAccountFailureAlert = true
+            }
         }
     }
 

@@ -46,6 +46,7 @@ enum DebugFirstTimeUserReset {
         FirstSessionOnboardingStore.hasCompletedFirstSessionKey,
         "pba.lastLoginPromptDay",
         "pba.loginPromptDeclinedDay",
+        "pba.reenableFirstSessionLoginPrompt",
         PostSessionFeedbackStore.totalSessionsKey,
         PostSessionFeedbackStore.totalRepsKey,
         PostSessionFeedbackStore.longestSessionDurationKey,

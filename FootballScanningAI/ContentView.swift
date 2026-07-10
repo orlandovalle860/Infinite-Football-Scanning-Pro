@@ -1739,6 +1739,8 @@ struct IntroView: View {
     @State private var isNavigatingToTraining = false
     @State private var snapshotMetricInfoToShow: (title: String, message: String)?
     @State private var showSignOutConfirmation = false
+    @State private var showDeleteAccountConfirmation = false
+    @State private var showDeleteAccountFailureAlert = false
     @State private var showSwitchPlayerConfirmation = false
 #if DEBUG
     @State private var showDebugResetDoneAlert = false
@@ -2322,6 +2324,7 @@ struct IntroView: View {
                         .frame(maxWidth: .infinity)
                     homeMainTrainingSection
                     homeComingSoonHint
+                    signedInAccountActions
                 }
             }
         }
@@ -2342,6 +2345,9 @@ struct IntroView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Progress") {
                     router.push(.progress)
+                    if authManager.currentSession == nil {
+                        showLoginSheet = true
+                    }
                 }
                 .foregroundColor(.white.opacity(0.9))
             }
@@ -2392,6 +2398,19 @@ struct IntroView: View {
             }
         } message: {
             Text("You’ll return to the sign-in screen and can use a different account.")
+        }
+        .alert("Delete Account", isPresented: $showDeleteAccountConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                performDeleteAccount()
+            }
+        } message: {
+            Text("Are you sure you want to permanently delete your account? This action cannot be undone.")
+        }
+        .alert("Delete Account", isPresented: $showDeleteAccountFailureAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("We couldn't delete your account right now. You've been signed out. Try again or contact orlandovalle860@gmail.com.")
         }
         .alert(snapshotMetricInfoToShow?.title ?? "", isPresented: Binding(
             get: { snapshotMetricInfoToShow != nil },
@@ -3237,6 +3256,59 @@ struct IntroView: View {
             .frame(maxWidth: 420)
             .frame(maxWidth: .infinity)
             .padding(.top, 4)
+    }
+
+    @ViewBuilder
+    private var signedInAccountActions: some View {
+        if Config.isSupabaseConfigured {
+            if authManager.currentSession != nil {
+                VStack(spacing: 14) {
+                    Button("Sign Out") {
+                        showSignOutConfirmation = true
+                    }
+                    .font(.footnote.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.85))
+                    .disabled(signOutUXPhase != .idle)
+
+                    Button("Delete Account") {
+                        showDeleteAccountConfirmation = true
+                    }
+                    .font(.footnote.weight(.semibold))
+                    .foregroundColor(.red.opacity(0.92))
+                    .disabled(signOutUXPhase != .idle)
+                }
+                .frame(maxWidth: 420)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 12)
+            } else {
+                Button("Sign in with Apple") {
+                    showLoginSheet = true
+                }
+                .font(.footnote.weight(.semibold))
+                .foregroundColor(.white.opacity(0.85))
+                .frame(maxWidth: 420)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 12)
+                .disabled(signOutUXPhase != .idle)
+                .accessibilityLabel("Sign in with Apple")
+            }
+        }
+    }
+
+    private func performDeleteAccount() {
+        guard signOutUXPhase == .idle else { return }
+        hasSeenIntro = false
+        Task {
+            let deleted = await AccountDeletionService.performAccountDeletion(
+                profileManager: profileManager,
+                playerStore: playerStore,
+                progressStore: progressStore,
+                router: router
+            )
+            if !deleted {
+                showDeleteAccountFailureAlert = true
+            }
+        }
     }
 
     private func homeTrainingMessageView(_ message: HomeTrainingMessage) -> some View {

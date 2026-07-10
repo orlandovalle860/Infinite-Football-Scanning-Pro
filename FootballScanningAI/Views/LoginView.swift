@@ -10,6 +10,7 @@ import AuthenticationServices
 
 struct LoginView: View {
     @ObservedObject private var auth = AuthManager.shared
+    @Environment(\.dismiss) private var dismiss
     @State private var email = ""
     @State private var password = ""
     @State private var isLoading = false
@@ -162,6 +163,9 @@ struct LoginView: View {
         .onAppear {
             auth.lastError = nil
             attemptError = nil
+        }
+        .onChange(of: auth.currentSession != nil) { _, hasSession in
+            if hasSession { dismiss() }
         }
     }
 

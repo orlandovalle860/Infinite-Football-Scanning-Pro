@@ -41,6 +41,8 @@ enum AccountSignOutService {
         UserDefaults.standard.set(false, forKey: hasCompletedInitialTestKey)
         print("[SignOut-Debug] hasCompletedInitialTest reset for next user")
 
+        FirstSessionOnboardingStore.resetLoginPromptEligibilityAfterSignOut()
+
         CurrentSessionStore.shared.clear()
         SupabaseDecisionService.shared.clearPendingDecisionsQueue()
 

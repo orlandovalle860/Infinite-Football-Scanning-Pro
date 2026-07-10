@@ -474,7 +474,15 @@ struct DribbleOrPassDisplaySessionView: View {
             DispatchQueue.main.async {
                 if TimedSessionDisplayIntegration.continueAfterEnginePlanComplete(
                     restartEngineBlock: {
+                        SoloTimeBasedDisplaySessionSupport.resetDisplayRepStateForEngineChunkRestart(
+                            mode: self.mode,
+                            setNextRepIndex: { self.nextRepIndex = $0 },
+                            setPendingNextRepIndex: { self.pendingNextRepIndex = $0 },
+                            resetRepController: { self.repController.reset() },
+                            resetPartnerCoachRepGate: { self.partnerCoachRepGate.reset() }
+                        )
                         self.engine.restartBlockFromBeginning()
+                        self.syncRepController(with: self.engine.phase)
                         self.isSoloRunning = true
                     },
                     resumeReps: { self.tryStartSoloAutoloop() }
@@ -482,6 +490,7 @@ struct DribbleOrPassDisplaySessionView: View {
                     return
                 }
                 guard TimedSessionDisplayIntegration.allowsBlockSummaryNavigation else { return }
+                guard !TimedSessionDisplayIntegration.runEngineContinuously else { return }
                 if mode == .solo {
                     if SoloTimeBasedSession.isActive {
                         finishSoloTimeBasedSession()

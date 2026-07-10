@@ -87,4 +87,21 @@ enum SoloTimeBasedDisplaySessionSupport {
     static func shouldBlockSoloDrillInput(isEnding: Bool, showComplete: Bool) -> Bool {
         isEnding || showComplete
     }
+
+    /// Resets display rep cursor/controller when the engine begins a new timed-session chunk.
+    /// Matches the rep-state portion of drill ``runItBackFromSummary`` without block-summary UI teardown.
+    static func resetDisplayRepStateForEngineChunkRestart(
+        mode: TrainingMode,
+        setNextRepIndex: (Int) -> Void,
+        setPendingNextRepIndex: (Int?) -> Void,
+        resetRepController: () -> Void,
+        resetPartnerCoachRepGate: (() -> Void)? = nil
+    ) {
+        setNextRepIndex(0)
+        setPendingNextRepIndex(nil)
+        resetRepController()
+        if mode.requiresPhoneDisplayRelay {
+            resetPartnerCoachRepGate?()
+        }
+    }
 }

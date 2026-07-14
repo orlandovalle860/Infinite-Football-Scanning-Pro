@@ -9,7 +9,7 @@
 /* Begin PBXBuildFile section */
 		9FD2E34B2F5E200D005AED08 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 9F592DA12DFF0B7D00525BF9 /* Supabase */; };
 		9FDCE9C42E089EAD00F39677 /* critical scan beep.wav in Resources */ = {isa = PBXBuildFile; fileRef = 9FDCE9C32E089EAD00F39677 /* critical scan beep.wav */; };
-		9FE4B7D72E02687B006EF4A6 /* short-beep-35172 in Resources */ = {isa = PBXBuildFile; fileRef = 9FE4B7D62E02687B006EF4A6 /* short-beep-35172 */; };
+		9FE4B7D72E02687B006EF4A6 /* short-beep-351721.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = 9FE4B7D62E02687B006EF4A6 /* short-beep-351721.mp3 */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -39,7 +39,7 @@
 		9FD2E4622F5E500D005AED0C /* Config/RelayDebug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/RelayDebug.xcconfig; sourceTree = "<group>"; };
 		9FD2E4632F5E500D005AED0D /* Config/RelayRelease.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/RelayRelease.xcconfig; sourceTree = "<group>"; };
 		9FDCE9C32E089EAD00F39677 /* critical scan beep.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "critical scan beep.wav"; sourceTree = "<group>"; };
-		9FE4B7D62E02687B006EF4A6 /* short-beep-35172 */ = {isa = PBXFileReference; lastKnownFileType = file; path = "short-beep-35172"; sourceTree = "<group>"; };
+		9FE4B7D62E02687B006EF4A6 /* short-beep-351721.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = "short-beep-351721.mp3"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -102,7 +102,7 @@
 		9F592D662DFF0B7D00525BF9 = {
 			isa = PBXGroup;
 			children = (
-				9FE4B7D62E02687B006EF4A6 /* short-beep-35172 */,
+				9FE4B7D62E02687B006EF4A6 /* short-beep-351721.mp3 */,
 				9FDCE9C32E089EAD00F39677 /* critical scan beep.wav */,
 				9F592D712DFF0B7D00525BF9 /* FootballScanningAI */,
 				9F592D7F2DFF0B7E00525BF9 /* FootballScanningAITests */,
@@ -251,7 +251,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				9FDCE9C42E089EAD00F39677 /* critical scan beep.wav in Resources */,
-				9FE4B7D72E02687B006EF4A6 /* short-beep-35172 in Resources */,
+				9FE4B7D72E02687B006EF4A6 /* short-beep-351721.mp3 in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -441,7 +441,7 @@
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				CODE_SIGN_ENTITLEMENTS = FootballScanningAI/FootballScanningAI.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 14;
+				CURRENT_PROJECT_VERSION = 15;
 				DEVELOPMENT_TEAM = 7XZF229B8W;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -485,7 +485,7 @@
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				CODE_SIGN_ENTITLEMENTS = FootballScanningAI/FootballScanningAI.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 14;
+				CURRENT_PROJECT_VERSION = 15;
 				DEVELOPMENT_TEAM = 7XZF229B8W;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;

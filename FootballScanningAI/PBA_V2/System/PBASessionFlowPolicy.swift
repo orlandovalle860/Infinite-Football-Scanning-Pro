@@ -1,5 +1,6 @@
 import Foundation
 
+@MainActor
 enum PBASessionFlowPolicy {
     /// UserDefaults key for the last training mode; keep in sync with ``TrainingModeSelectionView`` saves.
     static let pbaLastSelectedTrainingModeKey = "pba.lastSelectedTrainingMode"

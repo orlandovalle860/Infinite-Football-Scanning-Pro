@@ -7,6 +7,7 @@
 
 import SwiftUI
 
+@MainActor
 enum SoloTimeBasedDisplaySessionSupport {
     static func effectiveUsesAutoLoop(mode: TrainingMode) -> Bool {
         guard mode == .solo else { return mode.usesAutoLoop }

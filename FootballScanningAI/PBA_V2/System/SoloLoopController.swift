@@ -132,6 +132,7 @@ final class SoloLoopRunner: ObservableObject {
 
 extension SoloTimingSettings {
     /// Ensures a nominal travel is in the session store (does not clear an existing override from wall / pass-tempo calibration).
+    @MainActor
     static func applySoloAutoloopBallReturnToSessionStore() {
         if CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds == nil {
             let fallback = SoloWallCalibrationController.effectiveSoloWallReturnTimeSeconds()
@@ -156,6 +157,7 @@ extension SoloTimingSettings {
     }
 
     /// Solo autoloop: sync calibrated wall return into `CurrentSessionStore` and build matching loop timing.
+    @MainActor
     static func soloAutoloopSettings(wallController: SoloWallCalibrationController) -> SoloTimingSettings {
         let rt = max(0.05, wallController.calibratedReturnTime)
         CurrentSessionStore.shared.setExpectedBallTravelTimeOverrideSeconds(rt)
@@ -163,6 +165,7 @@ extension SoloTimingSettings {
     }
 
     /// Build autoloop timing from the current `CurrentSessionStore` override (or ``default`` return time if unset).
+    @MainActor
     static func autoloopSettingsFromSessionStore() -> SoloTimingSettings {
         let s = SoloTimingSettings.default
         let t = CurrentSessionStore.shared.expectedBallTravelTimeOverrideSeconds ?? s.returnTime

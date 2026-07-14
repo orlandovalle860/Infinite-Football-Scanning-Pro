@@ -8,6 +8,7 @@
 
 import Foundation
 
+@MainActor
 enum CoachRepFlowDecoupling {
     /// Coach may send `nextRep` without waiting for swipe logging to finish.
     static func maySendNextRep(blockComplete: Bool) -> Bool {

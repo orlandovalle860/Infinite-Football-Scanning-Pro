@@ -181,6 +181,7 @@ struct BlockShareSheetPayload: Identifiable {
 }
 
 /// Single builder for block-result sharing used by ``SessionSummaryScreenView`` and Display (iPad) results.
+@MainActor
 enum SessionBlockShare {
     static func activityItems(
         session: SessionResult,

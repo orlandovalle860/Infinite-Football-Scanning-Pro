@@ -9,6 +9,7 @@ import Combine
 import SwiftUI
 import UIKit
 
+@MainActor
 enum SoloActionIdleCue {
     static let tapHintShowDelay: TimeInterval = 0.2
 

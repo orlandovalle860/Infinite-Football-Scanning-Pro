@@ -16,6 +16,7 @@ extension Notification.Name {
     static let partnerDisplayRepEngineBecameReady = Notification.Name("PartnerDisplayRepEngineBecameReady")
 }
 
+@MainActor
 enum TimedSessionDisplayIntegration {
     static var controller: TimedSessionController { TimedSessionController.shared }
 

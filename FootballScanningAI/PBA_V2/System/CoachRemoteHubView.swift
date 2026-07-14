@@ -180,11 +180,9 @@ struct CoachRemoteHubView: View {
     }
 
     /// Leave a Home-pushed Coach Remote flow without permanently changing AppRole.
+    /// Done exits the coach stack only — pairing stays until Disconnect.
     private func exitTemporaryCoachRemoteToHome() {
-        if TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive {
-            TrainingPartnerConnectionCoordinator.shared.endPartnerTrainingSession(reason: "temporaryCoachRemoteDone")
-        }
-        partnerSessionActive = false
+        partnerSessionActive = TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive
         router.popToRoot(endingPartnerSession: false)
     }
 
@@ -216,11 +214,15 @@ struct CoachRemoteHubView: View {
         }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         lastUsedActivityKey = item.id
-        partnerCoordinator.restoreCoachTimedSessionMirrorIfNeeded()
         if let activity = item.activityKind {
-            partnerCoordinator.prepareCoachRemoteForBroadcastSessionStart(activity: activity)
+            partnerCoordinator.beginCoachHubActivityLaunch(activity: activity)
+        } else {
+            partnerCoordinator.restoreCoachTimedSessionMirrorIfNeeded()
         }
-        if router.path.last == item.route { return }
+        if router.path.last == item.route {
+            // Already on this remote (e.g. failed pop after end) — force a fresh push cycle.
+            router.popLast()
+        }
         router.push(item.route)
     }
 

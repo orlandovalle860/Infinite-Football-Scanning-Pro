@@ -13,13 +13,8 @@ enum HomeNavigationAction {
         if popToRootTrigger.isPlayerHomeLocalNavigationActive {
             popToRootTrigger.request = true
         }
-        // Temporary Partner → Coach Remote (player role): Home should exit the coach stack.
-        let endingPartner =
-            AppRole.resolved(from: UserDefaults.standard.string(forKey: AppRole.storageKey) ?? "") == .player
-            && TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive
-        if endingPartner {
-            TrainingPartnerConnectionCoordinator.shared.endPartnerTrainingSession(reason: "homeToolbarTemporaryCoachRemote")
-        }
+        // End Session / Home only leave the drill UI. Keep relay pairing until Disconnect
+        // (or idle teardown) — never treat player-role Home as ending partner training.
         router.popToRoot(endingPartnerSession: false)
     }
 }

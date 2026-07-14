@@ -1153,12 +1153,24 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         }
     }
 
-    /// Timed partner sessions are display-led once the display has announced a live timed container.
-    /// Until then, coach must send legacy ``sessionStarted`` so the iPad can leave passive standby.
+    /// Timed partner sessions are display-led once the display has an announced **live** timed drill.
+    /// Until then, coach must send legacy ``sessionStarted`` so the iPad can leave Home standby.
+    /// - Important: do not defer on a stale `displayTimedSessionAnnounced` alone after session end —
+    ///   that deadlocks hub Start Session (coach skips `sessionStarted`, iPad waits forever).
     func shouldCoachDeferToDisplayTimedSession() -> Bool {
         guard isPartnerTrainingSessionActive else { return false }
         restoreCoachTimedSessionMirrorIfNeeded()
-        return displayTimedSessionAnnounced
+        guard displayTimedSessionAnnounced else { return false }
+        return isDisplayRepEngineReady || TimedSessionController.shared.isSessionActive
+    }
+
+    /// Coach hub activity tile — clear stale timed-session flags so `sessionStarted` wakes display standby.
+    func beginCoachHubActivityLaunch(activity: ActivityKind) {
+        guard !CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
+        displayTimedSessionAnnounced = false
+        isDisplayRepEngineReady = false
+        CurrentSessionStore.shared.resetPartnerTimedSessionEndHandled()
+        applyCoachTimedSessionMirror(activityId: activity.sessionActivityActivityId)
     }
 
     /// Display (iPad): timed session container is live — coach tracks activity; rep UI waits for ``displayRepEngineReady``.
@@ -1280,12 +1292,16 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
     /// Coach phone only: display not ready or session ended.
     private func handleIncomingTimedSessionInactiveFromDisplay() {
         guard !CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
-        if isPartnerTrainingSessionActive, currentTimedSessionActivityId != nil {
-            print("[COACH STATE] timedSessionInactive ignored — display session active id=\(currentTimedSessionActivityId!)")
+        // Ignore only while a fully live drill is running. Stale `timedSessionInactive` after End Session
+        // must clear announce flags so the next hub Start Session can send `sessionStarted`.
+        if isPartnerTrainingSessionActive,
+           isDisplayRepEngineReady,
+           currentTimedSessionActivityId != nil {
+            print("[COACH STATE] timedSessionInactive ignored — live drill id=\(currentTimedSessionActivityId!)")
             return
         }
         #if DEBUG
-        print("[COACH STATE] timedSessionInactive — preserving last activity id=\(lastNonNilActivityId ?? "nil")")
+        print("[COACH STATE] timedSessionInactive — clearing announce/ready for next hub start")
         #endif
         isDisplayRepEngineReady = false
         displayTimedSessionAnnounced = false
@@ -1334,18 +1350,24 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         print("[RELAY IN] sessionEnded source=\(source.rawValue)")
         if CoachRemoteSessionStartGate.isPadPlayerRole() {
             guard source == .coach else { return }
-            guard TimedSessionController.shared.isManagingSession else { return }
+            // Partner timed session lives on the display TimedSessionController.
+            let timed = TimedSessionController.shared
+            guard timed.isManagingSession, timed.isSessionActive || SoloTimeBasedSession.isActive else {
+                print("[DISPLAY STATE] sessionEnded from coach ignored — no active timed session")
+                return
+            }
             NotificationCenter.default.post(name: .coachEndTimedSessionRequested, object: nil)
             return
         }
         guard source == .display else { return }
         guard isPartnerTrainingSessionActive else { return }
-        // Stale summary / surface-recycle sessionEnded while a new timed run is already live.
-        if isDisplayRepEngineReady, currentTimedSessionActivityId != nil {
-            print("[COACH STATE] sessionEnded from display ignored — timed session live id=\(currentTimedSessionActivityId!)")
+        // Accept end of the *current* live timed run. Do not ignore when ready/activityId are set —
+        // that is exactly when the coach must leave the drill UI. Dedup via tryMark; Train Again
+        // resets the flag on the next timedSessionActive.
+        guard CurrentSessionStore.shared.tryMarkPartnerTimedSessionEndHandled() else {
+            print("[COACH STATE] sessionEnded from display ignored — already handled")
             return
         }
-        guard CurrentSessionStore.shared.tryMarkPartnerTimedSessionEndHandled() else { return }
         handleIncomingSessionEndedForCoachMirror()
         NotificationCenter.default.post(name: .partnerTimedSessionEndedFromDisplay, object: nil)
     }

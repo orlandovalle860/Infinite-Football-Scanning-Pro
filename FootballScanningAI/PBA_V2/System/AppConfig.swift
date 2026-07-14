@@ -19,9 +19,16 @@ struct AppConfig {
     ///
     /// Set to `false` only when you want Debug runs to match TestFlight (no Tester Tools entry).
     #if DEBUG
+    /// Temporarily hide Home **Progress** + **Tester Tools** for App Store screenshots.
+    /// Set back to `false` when you're done capturing.
+    static let hideHomeChromeForAppStoreScreenshots = false
+
     private static let enableTesterToolsInDebugBuilds = true
-    static var testerMode: Bool { enableTesterToolsInDebugBuilds }
+    static var testerMode: Bool {
+        enableTesterToolsInDebugBuilds && !hideHomeChromeForAppStoreScreenshots
+    }
     #else
+    static let hideHomeChromeForAppStoreScreenshots = false
     static var testerMode: Bool { false }
     #endif
 }

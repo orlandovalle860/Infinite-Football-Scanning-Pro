@@ -27,6 +27,11 @@ enum TimedSessionDisplayIntegration {
         TimedSessionEnginePolicy.runEngineContinuously
     }
 
+    /// Display should restart engine chunks when either the timed session loops or the partner coach remote wraps (10/12).
+    static var shouldLoopEngineChunks: Bool {
+        runEngineContinuously || coachRemoteLoopsEngineChunks
+    }
+
     static var sessionMode: TrainingMode {
         usesSharedSession ? controller.mode : PBASessionFlowPolicy.lastSelectedTrainingMode()
     }
@@ -248,7 +253,9 @@ enum TimedSessionDisplayIntegration {
         restartEngineBlock: () -> Void,
         resumeReps: () -> Void
     ) -> Bool {
-        guard runEngineContinuously, controller.canAcceptSessionMutations else { return false }
+        // Partner coach remotes wrap at chunk size even when display restart must still run;
+        // require an active timed session mutation window so we never loop a finished/locked session.
+        guard shouldLoopEngineChunks, controller.canAcceptSessionMutations else { return false }
         controller.advanceCycleIfNeeded()
         restartEngineBlock()
         resumeReps()

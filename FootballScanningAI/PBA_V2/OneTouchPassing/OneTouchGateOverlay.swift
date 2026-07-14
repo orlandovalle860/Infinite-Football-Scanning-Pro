@@ -23,7 +23,8 @@ private enum OTPLaneAnimation {
     }
 
     static func teammatePulseOpacity(phase: CGFloat) -> Double {
-        0.72 + 0.20 * Double(easeInOutPingPong(phase: phase))
+        _ = phase
+        return 1
     }
 }
 
@@ -62,14 +63,9 @@ struct OneTouchGateOverlay: View {
 
     private var gradientColors: [Color] {
         if isGreen {
-            return [Color.green.opacity(0.92), Color.green.opacity(0.48), Color.green.opacity(0.06)]
+            return TrainingCueColors.teammateLaneGradient()
         }
-        let edge = min(0.96, wedgeStyle.opacity + 0.12)
-        return [
-            Color.red.opacity(edge),
-            Color.red.opacity(edge * 0.58),
-            Color.red.opacity(0.06)
-        ]
+        return TrainingCueColors.pressureLaneGradient()
     }
 
     /// One bar size for every gate — matches left/right lane dimensions (reference in landscape).

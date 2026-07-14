@@ -236,18 +236,16 @@ final class AuthManager: ObservableObject {
         }
     }
 
-    /// Permanently deletes the authenticated Supabase user via `delete_user` RPC, then clears local session.
-    /// Requires `SupabaseDeleteUserRpc.sql` deployed in the Supabase project (see that file).
+    /// Deletes the authenticated Supabase auth user via `rpc("delete_user")` (no parameters).
+    /// Local sign-out / navigation are handled by ``AccountDeletionService`` so cleanup always runs.
     func deleteAccount() async -> Bool {
-        guard ConnectionManager.shared.isHost else { return false }
-        guard let session = currentSession else { return false }
+        guard let session = currentSession else {
+            print("[AuthFlow-Debug] auth operation=deleteAccount skipped — no session")
+            return false
+        }
         let client = SupabaseClientManager.client
         do {
             try await client.rpc("delete_user").execute()
-            await MainActor.run {
-                currentSession = nil
-                lastError = nil
-            }
             print("[AuthFlow-Debug] auth operation=deleteAccount rpc=delete_user success userId=\(session.user.id.uuidString.lowercased())")
             return true
         } catch {

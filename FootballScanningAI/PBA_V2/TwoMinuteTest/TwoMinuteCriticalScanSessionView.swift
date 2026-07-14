@@ -603,7 +603,7 @@ struct TwoMinuteCriticalScanSessionView: View {
         hasSentSessionEnded = false
         repController.reset()
         if mode.requiresPhoneDisplayRelay {
-            partnerCoachRepGate.reset()
+            partnerCoachRepGate = PartnerCoachRepSequenceGate()
         }
         engine.restartBlockFromBeginning()
         syncRepController(with: engine.phase)
@@ -618,7 +618,7 @@ struct TwoMinuteCriticalScanSessionView: View {
 
     /// Applies a single coach-originated rep start: coach is source of truth for rep index; display only buffers until `waitingForNextRep`.
     private func applyPartnerCoachNextRep(repIndex: Int) {
-        guard sessionManager.isConnected else { return }
+        // Relay + Multipeer both deliver `nextRep`; do not gate on Multipeer-only sessionManager.isConnected.
         if SessionStartCueRepGate.deferCoachNextRepIfNeeded(
             repIndex: repIndex,
             instructionVisible: sessionStartCueContent != nil,
@@ -629,7 +629,23 @@ struct TwoMinuteCriticalScanSessionView: View {
             print("[PartnerCoach][2MT] nextRep coach ahead of displayTrackedNext: coach=\(repIndex) displayNext=\(partnerCoachRepGate.expectedNextCoachRepIndex)")
         }
         #endif
-        if case .complete = engine.phase { return }
+        let isTerminalPhase = { if case .complete = engine.phase { return true }; return false }()
+        if SoloTimeBasedDisplaySessionSupport.shouldRestartEngineForPartnerCoachChunkWrap(
+            repIndex: repIndex,
+            expectedNextCoachRepIndex: partnerCoachRepGate.expectedNextCoachRepIndex,
+            engineCurrentRepIndex: engine.currentRepIndex,
+            isTerminalPhase: isTerminalPhase,
+            chunkSize: blockTotalReps
+        ) {
+            restartPartnerEngineChunkForCoachWrap()
+        }
+        var wrapGate = partnerCoachRepGate
+        wrapGate.resetIfCoachWrappedToStartOfChunk(
+            repIndex: repIndex,
+            chunkSize: blockTotalReps,
+            loopsChunks: TimedSessionDisplayIntegration.shouldLoopEngineChunks
+        )
+        partnerCoachRepGate = wrapGate
         if case .waitingForNextRep = engine.phase, repIndex < partnerCoachRepGate.expectedNextCoachRepIndex {
             if repIndex + 1 == partnerCoachRepGate.expectedNextCoachRepIndex {
                 sendRepStartedAck(repIndex: repIndex)
@@ -651,6 +667,26 @@ struct TwoMinuteCriticalScanSessionView: View {
             return
         }
         _ = tryCommitPartnerCoachNextRep(repIndex: repIndex)
+    }
+
+    /// Full chunk reset when coach wraps to `nextRep(0)` at the 10-rep boundary (may arrive mid-rep after PASS).
+    private func restartPartnerEngineChunkForCoachWrap() {
+        TimedSessionDisplayIntegration.controller.advanceCycleIfNeeded()
+        SoloTimeBasedDisplaySessionSupport.resetDisplayRepStateForEngineChunkRestart(
+            mode: mode,
+            setNextRepIndex: { nextRepIndex = $0 },
+            setPendingNextRepIndex: { pendingNextRepIndex = $0 },
+            resetRepController: { repController.reset() },
+            resetPartnerCoachRepGate: { partnerCoachRepGate = PartnerCoachRepSequenceGate() }
+        )
+        engine.restartBlockFromBeginning()
+        syncRepController(with: engine.phase)
+        if mode.requiresPhoneDisplayRelay {
+            TrainingPartnerConnectionCoordinator.shared.syncDisplaySessionCurrentRepIndex(
+                0,
+                activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId
+            )
+        }
     }
 
     private func twoMTDisplayEngineIsMidRep(repIndex: Int) -> Bool {
@@ -683,8 +719,13 @@ struct TwoMinuteCriticalScanSessionView: View {
             return false
         }
         if repIndex < engine.currentRepIndex {
-            pendingNextRepIndex = nil
-            return false
+            if !SoloTimeBasedDisplaySessionSupport.allowsPartnerCoachChunkWrapNextRep(
+                repIndex: repIndex,
+                engineCurrentRepIndex: engine.currentRepIndex
+            ) {
+                pendingNextRepIndex = nil
+                return false
+            }
         }
         if repIndex == engine.currentRepIndex {
             guard case .waitingForNextRep = engine.phase else {
@@ -734,7 +775,6 @@ struct TwoMinuteCriticalScanSessionView: View {
     private func flushPendingPartnerCoachNextRepIfNeeded() {
         guard SessionStartCueRepGate.canStartRepEngine(instructionVisible: sessionStartCueContent != nil) else { return }
         guard let idx = pendingNextRepIndex else { return }
-        guard sessionManager.isConnected else { return }
         guard case .waitingForNextRep = engine.phase else { return }
         _ = tryCommitPartnerCoachNextRep(repIndex: idx)
     }
@@ -808,24 +848,40 @@ struct TwoMinuteCriticalScanSessionView: View {
             stopSoloAutoloop()
             PlayerFirstRunGuidanceStore.markCompletedFirstRun(activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId)
             pendingNextRepIndex = nil
-            if mode.requiresPhoneDisplayRelay {
+            if mode.requiresPhoneDisplayRelay, !TimedSessionDisplayIntegration.shouldLoopEngineChunks {
                 TrainingPartnerConnectionCoordinator.shared.syncDisplaySessionCurrentRepIndex(
                     blockTotalReps,
                     activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId
                 )
             }
             DispatchQueue.main.async {
+                // Coach may already have wrapped to nextRep(0) and restarted this chunk on this turn.
+                guard case .complete = self.engine.phase else { return }
                 if TimedSessionDisplayIntegration.continueAfterEnginePlanComplete(
                     restartEngineBlock: {
+                        let preservedPending = self.pendingNextRepIndex
                         SoloTimeBasedDisplaySessionSupport.resetDisplayRepStateForEngineChunkRestart(
                             mode: self.mode,
                             setNextRepIndex: { self.nextRepIndex = $0 },
                             setPendingNextRepIndex: { self.pendingNextRepIndex = $0 },
                             resetRepController: { self.repController.reset() },
-                            resetPartnerCoachRepGate: { self.partnerCoachRepGate.reset() }
+                            resetPartnerCoachRepGate: {
+                                self.partnerCoachRepGate = PartnerCoachRepSequenceGate()
+                            },
+                            clearPendingNextRep: preservedPending == nil
                         )
                         self.engine.restartBlockFromBeginning()
                         self.syncRepController(with: self.engine.phase)
+                        if self.mode.requiresPhoneDisplayRelay {
+                            TrainingPartnerConnectionCoordinator.shared.syncDisplaySessionCurrentRepIndex(
+                                0,
+                                activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId
+                            )
+                        }
+                        if let preservedPending {
+                            self.pendingNextRepIndex = preservedPending
+                            self.flushPendingPartnerCoachNextRepIfNeeded()
+                        }
                         if self.mode == .solo, self.effectiveUsesAutoLoop {
                             self.isSoloRunning = true
                         }
@@ -1079,6 +1135,13 @@ struct TwoMinuteCriticalScanSessionView: View {
         }
         if TimedSessionController.shared.shouldSkipActivitySessionCreation {
             TimedSessionController.shared.prepareActivitySegment(activity: .twoMinuteTest)
+        } else if mode.requiresPhoneDisplayRelay,
+                  !TimedSessionController.shared.isManagingSession,
+                  !TimedSessionController.shared.isSessionActive {
+            // Remount during End Session / summary dismiss — do not mint a parallel Supabase session.
+            #if DEBUG
+            PartnerPersistDebug.log("TwoMinuteCriticalScanSessionView onAppear — skip orphan session create (timed shell inactive)")
+            #endif
         } else {
             Task {
                 await sessionManager.startSession(

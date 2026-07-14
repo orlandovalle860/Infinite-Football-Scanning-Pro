@@ -3,32 +3,31 @@
 //  FootballScanningAI
 //
 //  Time-based training: duration selection, session state, and rep budget.
+//  V1 timed sessions use a single fixed block length; Free Play stays unlimited.
 //
 
 import Foundation
 
 enum SoloSessionDurationChoice: String, CaseIterable, Identifiable {
-    case fiveMin = "5min"
-    case tenMin = "10min"
-    case fifteenMin = "15min"
+    /// Fixed V1 timed block (180 seconds). Raw value kept stable for UserDefaults / analytics.
+    case threeMin = "3min"
     case free = "free"
 
     var id: String { rawValue }
 
+    /// Fixed timed-session length for all modes (solo + partner). Free Play ignores this.
+    static let timedSessionDurationSeconds: TimeInterval = 180
+
     var title: String {
         switch self {
-        case .fiveMin: return "5 minutes (Quick)"
-        case .tenMin: return "10 minutes (Standard)"
-        case .fifteenMin: return "15 minutes (Extended)"
+        case .threeMin: return "3-Minute Training Block"
         case .free: return "Train freely"
         }
     }
 
     var shortTitle: String {
         switch self {
-        case .fiveMin: return "5-minute session"
-        case .tenMin: return "10-minute session"
-        case .fifteenMin: return "15-minute session"
+        case .threeMin: return "3-Minute Training Block"
         case .free: return "Free session"
         }
     }
@@ -36,45 +35,42 @@ enum SoloSessionDurationChoice: String, CaseIterable, Identifiable {
     /// Soft rep guidance — not enforced.
     var repTarget: Int? {
         switch self {
-        case .fiveMin: return 20
-        case .tenMin: return 40
-        case .fifteenMin: return 60
+        case .threeMin: return 12
         case .free: return nil
         }
     }
 
     var durationSeconds: TimeInterval? {
         switch self {
-        case .fiveMin: return 5 * 60
-        case .tenMin: return 10 * 60
-        case .fifteenMin: return 15 * 60
+        case .threeMin: return Self.timedSessionDurationSeconds
         case .free: return nil
         }
     }
 
     var isTimed: Bool { durationSeconds != nil }
 
-    /// Compact label for session logs and analytics (e.g. `free`, `5m`, `10m`).
+    /// Compact label for session logs and analytics (e.g. `free`, `3m`).
     var logLabel: String {
         switch self {
         case .free: return "free"
-        case .fiveMin: return "5m"
-        case .tenMin: return "10m"
-        case .fifteenMin: return "15m"
+        case .threeMin: return "3m"
         }
     }
 
     static func loadLastSelected() -> SoloSessionDurationChoice {
-        guard let raw = UserDefaults.standard.string(forKey: AppStorageKeys.lastSessionDuration),
-              let choice = SoloSessionDurationChoice(rawValue: raw) else {
-            return .tenMin
+        guard let raw = UserDefaults.standard.string(forKey: AppStorageKeys.lastSessionDuration) else {
+            return .threeMin
         }
-        // Migrate legacy stored values.
+        if let choice = SoloSessionDurationChoice(rawValue: raw) {
+            return choice
+        }
+        // Migrate legacy timed values (5 / 10 / 15 / 20 min) → fixed 3-minute block.
         switch raw {
-        case "20min": return .fifteenMin
-        default: break
+        case "5min", "10min", "15min", "20min":
+            return .threeMin
+        default:
+            return .threeMin
         }
-        return choice
     }
 
     static func saveLastSelected(_ choice: SoloSessionDurationChoice) {

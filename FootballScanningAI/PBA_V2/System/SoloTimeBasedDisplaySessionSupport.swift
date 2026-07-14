@@ -90,18 +90,52 @@ enum SoloTimeBasedDisplaySessionSupport {
 
     /// Resets display rep cursor/controller when the engine begins a new timed-session chunk.
     /// Matches the rep-state portion of drill ``runItBackFromSummary`` without block-summary UI teardown.
+    /// - Important: ``resetPartnerCoachRepGate`` must **reassign** the `@State` gate (e.g. `gate = PartnerCoachRepSequenceGate()`),
+    ///   not only call `reset()` in place — otherwise partner `nextRep(0)` after a 10/12 chunk is treated as stale.
     static func resetDisplayRepStateForEngineChunkRestart(
         mode: TrainingMode,
         setNextRepIndex: (Int) -> Void,
         setPendingNextRepIndex: (Int?) -> Void,
         resetRepController: () -> Void,
-        resetPartnerCoachRepGate: (() -> Void)? = nil
+        resetPartnerCoachRepGate: (() -> Void)? = nil,
+        clearPendingNextRep: Bool = true
     ) {
         setNextRepIndex(0)
-        setPendingNextRepIndex(nil)
+        if clearPendingNextRep {
+            setPendingNextRepIndex(nil)
+        }
         resetRepController()
         if mode.requiresPhoneDisplayRelay {
             resetPartnerCoachRepGate?()
         }
+    }
+
+    /// Partner free-train: coach advances on PASS of the last chunk rep and may send `nextRep(0)` while the
+    /// display is still mid-rep or stuck with `currentRepIndex` from the previous chunk. Without a full
+    /// engine restart, `tryCommit` rejects `0 < currentRepIndex` and the coach loops TAP TO START forever.
+    static func shouldRestartEngineForPartnerCoachChunkWrap(
+        repIndex: Int,
+        expectedNextCoachRepIndex: Int,
+        engineCurrentRepIndex: Int,
+        isTerminalPhase: Bool,
+        chunkSize: Int
+    ) -> Bool {
+        guard TimedSessionDisplayIntegration.shouldLoopEngineChunks else { return false }
+        guard repIndex == 0, chunkSize > 0 else { return false }
+        if isTerminalPhase { return true }
+        if expectedNextCoachRepIndex >= chunkSize { return true }
+        // Gate was already wrap-reset to 0, but engine never restarted (failed mid-rep force-ready path).
+        if expectedNextCoachRepIndex == 0 && engineCurrentRepIndex > 0 { return true }
+        return false
+    }
+
+    /// Allow coach `nextRep(0)` after a chunk wrap even when the engine cursor is still on the prior rep.
+    static func allowsPartnerCoachChunkWrapNextRep(
+        repIndex: Int,
+        engineCurrentRepIndex: Int
+    ) -> Bool {
+        TimedSessionDisplayIntegration.shouldLoopEngineChunks
+            && repIndex == 0
+            && engineCurrentRepIndex > 0
     }
 }

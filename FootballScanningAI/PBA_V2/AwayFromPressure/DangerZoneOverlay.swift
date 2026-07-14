@@ -245,11 +245,7 @@ struct DangerZoneOverlay: View {
                     WedgeCuePath.path(gate: gate, style: style, fieldWidth: w, fieldHeight: h)
                         .fill(
                             LinearGradient(
-                                colors: [
-                                    Color.red.opacity(style.opacity),
-                                    Color.red.opacity(style.opacity * 0.92),
-                                    Color.red.opacity(style.opacity * 0.72)
-                                ],
+                                colors: TrainingCueColors.pressureWedgeGradient(),
                                 startPoint: wedgeGradientStart,
                                 endPoint: wedgeGradientEnd
                             )
@@ -295,7 +291,8 @@ struct DangerZoneOverlay: View {
 
     private var overlayOpacity: Double {
         guard isDecisionRevealActive else { return 0 }
-        return 0.35 + 0.65 * Double(revealProgress)
+        // Fully opaque once revealed; edge→center growth still comes from `revealProgress` scale.
+        return revealProgress > 0 ? 1 : 0
     }
 
     /// Resets without animation, then advances `revealProgress` on the next main run so we escape a parent `.animation(nil, …)` transaction (same frame as cue opacity / phase changes).

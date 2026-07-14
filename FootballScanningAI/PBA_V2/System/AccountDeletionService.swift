@@ -8,7 +8,10 @@
 import Foundation
 
 enum AccountDeletionService {
-    /// Attempts `deleteUser()`, then always runs local sign-out cleanup. Returns whether auth deletion succeeded.
+    /// 1) `rpc("delete_user")` while authenticated  
+    /// 2) Always run existing sign-out cleanup (local caches + auth session)  
+    /// 3) `performSignOut` pops navigation to root/home  
+    /// Returns whether the Supabase RPC succeeded.
     @MainActor
     static func performAccountDeletion(
         profileManager: UserProfileManager,
@@ -18,6 +21,7 @@ enum AccountDeletionService {
     ) async -> Bool {
         print("[AccountDeletion] delete account requested")
         let authDeleted = await AuthManager.shared.deleteAccount()
+        // Always sign out and return home — even if the RPC failed — so the device is never left mid-session.
         await AccountSignOutService.performSignOut(
             profileManager: profileManager,
             playerStore: playerStore,

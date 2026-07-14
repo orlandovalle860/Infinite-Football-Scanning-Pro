@@ -60,6 +60,17 @@ enum AppRoute: Hashable {
             return false
         }
     }
+
+    /// Activity coach remote pushed from the Coach Remote hub.
+    var isCoachActivityRemote: Bool {
+        switch self {
+        case .twoMinuteCoachRemote, .dribbleOrPassCoachRemote,
+             .awayFromPressureCoachRemote, .oneTouchPassingCoachRemote:
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 @MainActor

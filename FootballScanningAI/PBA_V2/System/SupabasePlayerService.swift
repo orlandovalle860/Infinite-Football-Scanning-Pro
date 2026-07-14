@@ -222,10 +222,10 @@ final class SupabasePlayerService {
         return filtered
     }
 
-    /// Insert a new player for the current user (e.g. after account creation). Uses the given id, name, and optional age/team/position.
-    /// Requires host device and authenticated user; user_id in the row is set to auth.uid(). Throws if not host, not signed in, or Supabase not configured.
+    /// Insert a new player for the current authenticated user (e.g. after account creation).
+    /// Not gated on Multipeer host/display role — account onboarding must work on every device.
     func insertPlayer(id: UUID, name: String, age: Int? = nil, team: String? = nil, position: String? = nil) async throws {
-        guard ConnectionManager.shared.isHost else { throw SupabasePlayerError.notConfigured }
+        guard Config.isSupabaseConfigured else { throw SupabasePlayerError.notConfigured }
         guard let userId = AuthManager.shared.currentUserId else {
             throw SupabasePlayerError.notAuthenticated
         }
@@ -234,16 +234,35 @@ final class SupabasePlayerService {
         let userIdStr = userId.uuidString.lowercased()
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let row = SupabasePlayerRow(
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let createdAt = iso.string(from: Date())
+        let fullRow = SupabasePlayerRow(
             id: idStr,
             user_id: userIdStr,
-            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
-            created_at: iso.string(from: Date()),
+            name: trimmedName,
+            created_at: createdAt,
             age: age,
             team: team?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
             position: position?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         )
-        try await client.from("players").insert(row).execute()
+        do {
+            try await client.from("players").insert(fullRow).execute()
+        } catch {
+            #if DEBUG
+            print("[PBA-Debug] players insert (full columns) failed: \(error.localizedDescription) — retrying core columns")
+            #endif
+            // Schema may omit age/team/position — match fetchPlayersForCurrentUser fallback.
+            let coreRow = SupabasePlayerRow(
+                id: idStr,
+                user_id: userIdStr,
+                name: trimmedName,
+                created_at: createdAt,
+                age: nil,
+                team: nil,
+                position: nil
+            )
+            try await client.from("players").insert(coreRow).execute()
+        }
         markSynced(id: id)
     }
 

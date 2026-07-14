@@ -1,5 +1,31 @@
 import Foundation
 import CoreGraphics
+import SwiftUI
+
+/// Outdoor-readable training cue colors. Tunable from field feedback (sun glare / black background).
+enum TrainingCueColors {
+    /// Vermillion / orange-red — higher luminance than system red so pressure cues don’t bleed into black outdoors.
+    static let pressure = Color(red: 1.0, green: 0.38, blue: 0.18)
+    /// Teammate / open-option green — same hue as before, fully opaque.
+    static let teammate = Color.green
+
+    /// Defender lane bars (AFP / DOP / OTP): solid fill (no translucent fade into black).
+    static func pressureLaneGradient(edgeOpacity: Double = 1) -> [Color] {
+        _ = edgeOpacity
+        return [pressure, pressure, pressure]
+    }
+
+    /// Full pressure wedge fill (DangerZoneOverlay): solid.
+    static func pressureWedgeGradient(styleOpacity: CGFloat = 1) -> [Color] {
+        _ = styleOpacity
+        return [pressure, pressure, pressure]
+    }
+
+    /// Teammate lane bars (DOP / OTP): solid green.
+    static func teammateLaneGradient() -> [Color] {
+        [teammate, teammate, teammate]
+    }
+}
 
 /// Playable field as a square centered in the display rect — wedge sizing uses `squareSize` only.
 struct WedgeFieldGeometry {

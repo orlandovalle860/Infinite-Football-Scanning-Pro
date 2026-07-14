@@ -317,11 +317,19 @@ struct DribbleOrPassCoachRemoteView: View {
     }
 
     private func broadcastCoachSessionStartIfNeeded() {
-        guard !didBroadcastCoachSessionStart else { return }
-        didBroadcastCoachSessionStart = true
+        if didBroadcastCoachSessionStart {
+            let c = TrainingPartnerConnectionCoordinator.shared
+            // After End Session soft-reset, allow a fresh sessionStarted even if this remote stayed mounted.
+            let softIdle = c.isPartnerTrainingSessionActive
+                && !c.displayTimedSessionAnnounced
+                && !c.isDisplayRepEngineReady
+            guard softIdle else { return }
+            didBroadcastCoachSessionStart = false
+        }
         if TrainingPartnerConnectionCoordinator.shared.shouldCoachDeferToDisplayTimedSession() {
             return
         }
+        didBroadcastCoachSessionStart = true
         TrainingPartnerConnectionCoordinator.shared.prepareCoachRemoteForBroadcastSessionStart(activity: .dribbleOrPass)
         TrainingPartnerConnectionCoordinator.shared.broadcastSessionStartedFromCoach(activity: .dribbleOrPass, totalReps: totalReps)
     }

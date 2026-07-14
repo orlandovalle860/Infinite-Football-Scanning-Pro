@@ -95,7 +95,7 @@ final class TimedSessionController: ObservableObject {
         return .completed
     }
 
-    /// Human-readable duration for logs and analytics (`free`, `5m`, `10m`, `15m`).
+    /// Human-readable duration for logs and analytics (`free`, `3m`).
     var durationLabel: String {
         durationChoice?.logLabel ?? "unknown"
     }
@@ -271,7 +271,7 @@ final class TimedSessionController: ObservableObject {
         objectWillChange.send()
     }
 
-    /// iPad partner display: coach sent ``sessionStarted`` — begin with last-selected duration (free, 5m, etc.) without an extra Start tap.
+    /// iPad partner display: coach sent ``sessionStarted`` — begin with last-selected duration (free or 3-minute block) without an extra Start tap.
     func beginPartnerSessionFromCoachIfNeeded() {
         guard !isManagingSession, !isSessionActive else { return }
         guard !SoloTimeBasedSession.isActive else { return }
@@ -437,7 +437,9 @@ final class TimedSessionController: ObservableObject {
             if showsSummary {
                 showSummary = true
             } else {
-                onPersisted?()
+                // End Session / Home: drop the timed shell immediately so the next coach
+                // `sessionStarted` can navigate from Connected standby (pairing stays live).
+                releaseShellAfterEndWithoutSummary(then: onPersisted)
             }
             return
         }
@@ -458,11 +460,34 @@ final class TimedSessionController: ObservableObject {
             return
         }
 
-        persistSessionSummary(completionType: completionType, onPersisted: onPersisted)
+        // Persist first (needs CurrentSessionStore), then clear the managing shell.
+        persistSessionSummary(completionType: completionType, onPersisted: { [weak self] in
+            guard let self else { return }
+            // A new coach-started session may already be managing — don't wipe it.
+            if self.isManagingSession {
+                onPersisted?()
+                return
+            }
+            self.releaseShellAfterEndWithoutSummary(then: onPersisted)
+        })
         isSessionActive = false
+        // Unlock navigation immediately — don't wait on Supabase before the next sessionStarted.
+        isManagingSession = false
+        sessionLocked = false
         if trainingMode == .partner {
             TrainingPartnerConnectionCoordinator.shared.broadcastTimedSessionInactiveFromDisplay()
+            TrainingPartnerConnectionCoordinator.shared.softResetAfterTimedPartnerSessionEnd()
         }
+    }
+
+    /// Clears the timed-session shell after End Session without summary. Pairing is preserved.
+    private func releaseShellAfterEndWithoutSummary(then onPersisted: (() -> Void)?) {
+        let wasPartner = trainingMode == .partner
+        clear()
+        if wasPartner {
+            TrainingPartnerConnectionCoordinator.shared.softResetAfterTimedPartnerSessionEnd()
+        }
+        onPersisted?()
     }
 
     func completeSummaryDone(popToRoot: () -> Void) {

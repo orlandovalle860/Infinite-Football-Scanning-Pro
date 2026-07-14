@@ -9,6 +9,12 @@ struct PartnerCoachRepSequenceGate: Equatable {
         expectedNextCoachRepIndex = 0
     }
 
+    /// Timed partner free-train: coach wraps to `nextRep(0)` after the last chunk rep while the gate may still expect `chunkSize`.
+    mutating func resetIfCoachWrappedToStartOfChunk(repIndex: Int, chunkSize: Int, loopsChunks: Bool) {
+        guard loopsChunks, chunkSize > 0, repIndex == 0, expectedNextCoachRepIndex >= chunkSize else { return }
+        reset()
+    }
+
     mutating func recordNextRepSuccessfullyApplied(_ repIndex: Int) {
         expectedNextCoachRepIndex = repIndex + 1
     }

@@ -18,7 +18,7 @@ enum AppStorageKeys {
     static let soloReturnTime = "soloReturnTime"
     /// Transient: next solo display session should force inline wall calibration (consumed on appear).
     static let soloForceInlineCalibration = "pba.soloWallCalibration.forceInline"
-    /// Last solo session duration choice (`10min`, `15min`, `20min`, `free`).
+    /// Last session duration choice (`3min`, `free`). Legacy `5min`/`10min`/`15min`/`20min` migrate to `3min`.
     static let lastSessionDuration = "lastSessionDuration"
     /// Last solo training style (`quick`, `action`).
     static let lastTrainingStyle = "lastTrainingStyle"

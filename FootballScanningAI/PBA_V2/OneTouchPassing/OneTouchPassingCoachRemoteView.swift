@@ -286,11 +286,18 @@ struct OneTouchPassingCoachRemoteView: View {
     }
 
     private func broadcastCoachSessionStartIfNeeded() {
-        guard !didBroadcastCoachSessionStart else { return }
-        didBroadcastCoachSessionStart = true
+        if didBroadcastCoachSessionStart {
+            let c = TrainingPartnerConnectionCoordinator.shared
+            let softIdle = c.isPartnerTrainingSessionActive
+                && !c.displayTimedSessionAnnounced
+                && !c.isDisplayRepEngineReady
+            guard softIdle else { return }
+            didBroadcastCoachSessionStart = false
+        }
         if TrainingPartnerConnectionCoordinator.shared.shouldCoachDeferToDisplayTimedSession() {
             return
         }
+        didBroadcastCoachSessionStart = true
         TrainingPartnerConnectionCoordinator.shared.prepareCoachRemoteForBroadcastSessionStart(activity: .oneTouchPassing)
         TrainingPartnerConnectionCoordinator.shared.broadcastSessionStartedFromCoach(activity: .oneTouchPassing, totalReps: totalReps)
     }

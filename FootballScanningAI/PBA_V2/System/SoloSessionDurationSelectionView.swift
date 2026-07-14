@@ -26,7 +26,7 @@ struct SoloSessionDurationSelectionView: View {
         if selectedDuration == .free {
             return "Train freely until you or the coach ends the session. Tap Start when ready."
         }
-        return "Choose how long to train, then tap Start before the coach begins reps."
+        return "3-Minute Training Block. Tap Start before the coach begins reps."
     }
 
     var body: some View {

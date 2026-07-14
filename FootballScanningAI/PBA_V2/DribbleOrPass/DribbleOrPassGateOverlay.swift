@@ -23,7 +23,8 @@ private enum DOPLaneAnimation {
     }
 
     static func teammatePulseOpacity(phase: CGFloat) -> Double {
-        0.72 + 0.20 * Double(easeInOutPingPong(phase: phase))
+        _ = phase
+        return 1
     }
 }
 
@@ -31,16 +32,11 @@ struct DribbleOrPassGateOverlay: View {
     /// Static mini teammate lane for session-start cue (same gradient + shape as gameplay; no animation).
     struct SessionStartInlineTeammateBar: View {
         let length: CGFloat
-        var opacity: Double = 0.75
+        var opacity: Double = 1
 
         private var thickness: CGFloat { length * 0.35 }
 
         var body: some View {
-            let colors = [
-                Color.green.opacity(0.92),
-                Color.green.opacity(0.48),
-                Color.green.opacity(0.06)
-            ]
             UnevenRoundedRectangle(
                 topLeadingRadius: 0,
                 bottomLeadingRadius: 0,
@@ -49,7 +45,7 @@ struct DribbleOrPassGateOverlay: View {
             )
             .fill(
                 LinearGradient(
-                    colors: colors,
+                    colors: TrainingCueColors.teammateLaneGradient(),
                     startPoint: .leading,
                     endPoint: .trailing
                 )
@@ -100,14 +96,9 @@ struct DribbleOrPassGateOverlay: View {
     private var gradientColors: [Color] {
         switch content {
         case .opponent:
-            let edge = min(0.96, wedgeStyle.opacity + 0.12)
-            return [
-                Color.red.opacity(edge),
-                Color.red.opacity(edge * 0.58),
-                Color.red.opacity(0.06)
-            ]
+            return TrainingCueColors.pressureLaneGradient()
         case .teammate:
-            return [Color.green.opacity(0.92), Color.green.opacity(0.48), Color.green.opacity(0.06)]
+            return TrainingCueColors.teammateLaneGradient()
         case .open:
             return []
         }

@@ -199,9 +199,14 @@ struct TimedSessionContainerView: View {
         guard timedSession.isManagingSession, timedSession.isSessionActive else { return }
 
         let completionType = timedSession.userInitiatedEndCompletionType
+        // Match display End Session: leave pairing live and return to Connected standby
+        // without leaving a locked timed shell that blocks the next coach Start Session.
         timedSession.finishSession(
             completionType: completionType,
-            showsSummary: true,
+            showsSummary: false,
+            onPersisted: {
+                goHome()
+            },
             peerInitiated: true
         )
     }

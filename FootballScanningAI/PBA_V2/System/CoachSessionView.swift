@@ -46,7 +46,6 @@ enum SessionPhase {
 }
 
 struct CoachSessionView: View {
-    @Environment(\.dismiss) private var dismiss
     /// Shown as de-emphasized header copy (nav bar title is cleared on coach remotes).
     let coachRemoteHeaderTitle: String
     /// Block "Rep X of Y" — off for timer-driven partner coach remotes.
@@ -90,6 +89,8 @@ struct CoachSessionView: View {
     /// Read-only: cancel UI nudge if partner session ends or link drops (does not send relay traffic).
     @ObservedObject private var partnerSessionCoordinator: TrainingPartnerConnectionCoordinator
     @ObservedObject private var timedSession = TimedSessionController.shared
+    @EnvironmentObject private var router: AppRouter
+    @Environment(\.dismiss) private var dismiss
 
     @State private var phase: SessionPhase = .idle
     @State private var lastDirection: SwipeDirection? = nil
@@ -109,6 +110,13 @@ struct CoachSessionView: View {
     @State private var firstRunEphemeralGuidanceText: String?
     @State private var firstRunEphemeralGuidanceOpacity: Double = 0
     @State private var firstRunEphemeralGuidanceToken = UUID()
+
+    /// Live partner timed drill — leave via End Session, not nav back (hub auto-reopens the drill).
+    private var hidesNavigationBackDuringLivePartnerDrill: Bool {
+        partnerSessionCoordinator.isPartnerTrainingSessionActive
+            && (partnerSessionCoordinator.isDisplayRepEngineReady
+                || partnerSessionCoordinator.currentTimedSessionActivityId != nil)
+    }
 
     init(
         coachRemoteHeaderTitle: String = "",
@@ -273,16 +281,18 @@ struct CoachSessionView: View {
         )
         .navigationBarBackButtonHidden(true)
         .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) {
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "chevron.backward")
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(Color.white.opacity(0.48))
+            if !hidesNavigationBackDuringLivePartnerDrill {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        navigateBackFromCoachRemote()
+                    } label: {
+                        Image(systemName: "chevron.backward")
+                            .font(.system(size: 17, weight: .medium))
+                            .foregroundStyle(Color.white.opacity(0.48))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Back")
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Back")
             }
         }
         .background(DisableSwipeBack())
@@ -531,6 +541,20 @@ struct CoachSessionView: View {
         }
     }
 
+    private func navigateBackFromCoachRemote() {
+        // Prefer AppRouter so NavigationPath stays in sync; `dismiss()` is often a no-op
+        // with path-based stacks and can leave the hub to immediately re-push this drill.
+        if router.path.contains(.coachRemote) {
+            router.returnToCoachRemoteHubAfterSessionEnd()
+            return
+        }
+        if !router.path.isEmpty {
+            router.popLast()
+            return
+        }
+        dismiss()
+    }
+
     private func triggerHaptic(style: UIImpactFeedbackGenerator.FeedbackStyle) {
         #if canImport(UIKit)
         let generator = UIImpactFeedbackGenerator(style: style)
@@ -750,6 +774,7 @@ struct DisableSwipeBack: UIViewControllerRepresentable {
         onPassTriggered: nil,
         onDirectionLogged: nil
     )
+    .environmentObject(AppRouter())
 }
 
 /// Coach remote idle state while the iPad display picks duration, reconnects, or starts the timed session.

@@ -16,7 +16,7 @@ struct PremiumPaywallView: View {
         VStack(spacing: 16) {
             Spacer()
 
-            Text("Train now. Track your progress with cloud sync coming soon.")
+            Text("Train now. Track your progress.")
                 .font(.title3.weight(.semibold))
                 .foregroundColor(.white)
                 .multilineTextAlignment(.center)

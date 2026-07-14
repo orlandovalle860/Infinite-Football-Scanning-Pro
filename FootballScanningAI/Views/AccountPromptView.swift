@@ -483,6 +483,9 @@ struct CreatePlayerAfterAuthView: View {
                         position: enteredPosition.isEmpty ? nil : enteredPosition
                     )
                 } catch {
+                    #if DEBUG
+                    print("[CreatePlayer] insert failed: \(error)")
+                    #endif
                     let listRetry = try? await SupabasePlayerService.shared.fetchPlayersForCurrentUser()
                     if let first = listRetry?.first, let existingId = first.uuid {
                         await MainActor.run {

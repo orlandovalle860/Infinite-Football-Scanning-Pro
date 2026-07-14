@@ -201,7 +201,7 @@ struct CoachTrainingContainerView: View {
     private func handleDisplayEndedTimedSession() {
         guard partnerCoordinator.isPartnerTrainingSessionActive else { return }
         partnerCoordinator.softResetAfterTimedPartnerSessionEnd()
-        router.popToRoot(endingPartnerSession: false)
+        router.returnToCoachRemoteHubAfterSessionEnd()
     }
 
     private func triggerSwitchBannerHaptic() {

@@ -881,8 +881,11 @@ struct MainAppView: View {
             return
         }
 
-        if TimedSessionController.shared.isManagingSession {
-            let timed = TimedSessionController.shared
+        let onTimedRoute = router.path.contains { if case .timedSession = $0 { return true }; return false }
+        let timed = TimedSessionController.shared
+        // Only reuse an in-flight drill. After End Session the shell can still look "managing"
+        // briefly — rebroadcasting timedSessionActive from standby deadlocks coach Start Session.
+        if timed.isManagingSession, timed.isSessionActive, !timed.sessionLocked, onTimedRoute {
             if timed.currentActivity == activity {
                 TrainingPartnerConnectionCoordinator.shared.broadcastTimedSessionActiveFromDisplay(activity: activity)
                 AppRoleDebug.log("sessionStarted display rebroadcast active activity=\(activity.rawValue)")
@@ -891,6 +894,13 @@ struct MainAppView: View {
                 AppRoleDebug.log("sessionStarted timed container switch activity=\(activity.rawValue)")
             }
             return
+        }
+        if timed.isManagingSession || timed.sessionLocked || timed.isSessionActive {
+            AppRoleDebug.log(
+                "sessionStarted clearing stale timed shell managing=\(timed.isManagingSession) active=\(timed.isSessionActive) locked=\(timed.sessionLocked) onTimedRoute=\(onTimedRoute)"
+            )
+            timed.clear()
+            TrainingPartnerConnectionCoordinator.shared.softResetAfterTimedPartnerSessionEnd()
         }
 
         let route: AppRoute = .timedSession(activity: activity, mode: .partner)
@@ -2342,14 +2352,16 @@ struct IntroView: View {
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("Progress") {
-                    router.push(.progress)
-                    if authManager.currentSession == nil {
-                        showLoginSheet = true
+            if !AppConfig.hideHomeChromeForAppStoreScreenshots {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Progress") {
+                        router.push(.progress)
+                        if authManager.currentSession == nil {
+                            showLoginSheet = true
+                        }
                     }
+                    .foregroundColor(.white.opacity(0.9))
                 }
-                .foregroundColor(.white.opacity(0.9))
             }
 #if DEBUG
             if AppConfig.testerMode {
@@ -3082,9 +3094,6 @@ struct IntroView: View {
 
     private func startPartnerSession() {
         let coordinator = TrainingPartnerConnectionCoordinator.shared
-        if coordinator.isPartnerTrainingSessionActive {
-            return
-        }
         let mode: TrainingMode = .partner
         PBASessionFlowPolicy.persistTrainingMode(mode)
 
@@ -3092,11 +3101,23 @@ struct IntroView: View {
         // Coach (iPhone): temporary Coach Remote flow — do NOT flip AppRole permanently.
         #if canImport(UIKit)
         if UIDevice.current.userInterfaceIdiom == .phone {
+            // Pairing already live after End Session / Done — reopen Coach Remote (do not no-op).
+            if coordinator.isPartnerTrainingSessionActive {
+                AppRoleDebug.log("routing_decision reason=home_partner_reopen_coach_remote_pairing_active")
+                if router.path.last != .coachRemote {
+                    router.push(.coachRemote)
+                }
+                return
+            }
             AppRoleDebug.log("routing_decision reason=home_partner_start_phone_temporary_coach_remote")
             router.push(.coachRemote)
             return
         }
         #endif
+        // iPad: Connected standby owns the waiting UI while pairing is live.
+        if coordinator.isPartnerTrainingSessionActive {
+            return
+        }
         router.push(.partnerPairing)
     }
 
@@ -3249,7 +3270,7 @@ struct IntroView: View {
     }
 
     private var homeComingSoonHint: some View {
-        Text("Train now. Track your progress with cloud sync coming soon.")
+        Text("Train now. Track your progress.")
             .font(.footnote)
             .foregroundColor(.white.opacity(0.45))
             .multilineTextAlignment(.center)

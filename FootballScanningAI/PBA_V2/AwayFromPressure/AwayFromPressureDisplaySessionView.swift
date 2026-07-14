@@ -408,7 +408,7 @@ struct AwayFromPressureDisplaySessionView: View {
             stopSoloAutoloop()
             PlayerFirstRunGuidanceStore.markCompletedFirstRun(activityId: ActivityKind.awayFromPressure.sessionActivityActivityId)
             pendingNextRepIndex = nil
-            if mode.requiresPhoneDisplayRelay {
+            if mode.requiresPhoneDisplayRelay, !TimedSessionDisplayIntegration.shouldLoopEngineChunks {
                 TrainingPartnerConnectionCoordinator.shared.syncDisplaySessionCurrentRepIndex(
                     blockTotalReps,
                     activityId: ActivityKind.awayFromPressure.sessionActivityActivityId
@@ -424,17 +424,33 @@ struct AwayFromPressureDisplaySessionView: View {
             blockSummaryShowTimingAdaptationFeedback =
                 abs(CurrentSessionStore.shared.calibrationFactor(for: calId) - 1.0) > 0.001
             DispatchQueue.main.async {
+                // Coach may already have wrapped to nextRep(0) and restarted this chunk on this turn.
+                guard case .blockComplete = self.engine.phase else { return }
                 if TimedSessionDisplayIntegration.continueAfterEnginePlanComplete(
                     restartEngineBlock: {
+                        let preservedPending = self.pendingNextRepIndex
                         SoloTimeBasedDisplaySessionSupport.resetDisplayRepStateForEngineChunkRestart(
                             mode: self.mode,
                             setNextRepIndex: { self.nextRepIndex = $0 },
                             setPendingNextRepIndex: { self.pendingNextRepIndex = $0 },
                             resetRepController: { self.repController.reset() },
-                            resetPartnerCoachRepGate: { self.partnerCoachRepGate.reset() }
+                            resetPartnerCoachRepGate: {
+                                self.partnerCoachRepGate = PartnerCoachRepSequenceGate()
+                            },
+                            clearPendingNextRep: preservedPending == nil
                         )
                         self.engine.restartBlockFromBeginning()
                         self.syncRepController(with: self.engine.phase)
+                        if self.mode.requiresPhoneDisplayRelay {
+                            TrainingPartnerConnectionCoordinator.shared.syncDisplaySessionCurrentRepIndex(
+                                0,
+                                activityId: ActivityKind.awayFromPressure.sessionActivityActivityId
+                            )
+                        }
+                        if let preservedPending {
+                            self.pendingNextRepIndex = preservedPending
+                            self.flushPendingPartnerCoachNextRepIfNeeded()
+                        }
                         self.isSoloRunning = true
                     },
                     resumeReps: { self.tryStartSoloAutoloop() }
@@ -1382,7 +1398,7 @@ struct AwayFromPressureDisplaySessionView: View {
         repController.reset()
         pendingNextRepIndex = nil
         if mode.requiresPhoneDisplayRelay {
-            partnerCoachRepGate.reset()
+            partnerCoachRepGate = PartnerCoachRepSequenceGate()
         }
         engine.restartBlockFromBeginning()
         syncRepController(with: engine.phase)
@@ -1526,7 +1542,23 @@ struct AwayFromPressureDisplaySessionView: View {
             print("[PartnerCoach][AFP] nextRep coach ahead of displayTrackedNext: coach=\(repIndex) displayNext=\(partnerCoachRepGate.expectedNextCoachRepIndex)")
         }
         #endif
-        if case .blockComplete = engine.phase { return }
+        let isTerminalPhase = { if case .blockComplete = engine.phase { return true }; return false }()
+        if SoloTimeBasedDisplaySessionSupport.shouldRestartEngineForPartnerCoachChunkWrap(
+            repIndex: repIndex,
+            expectedNextCoachRepIndex: partnerCoachRepGate.expectedNextCoachRepIndex,
+            engineCurrentRepIndex: engine.currentRepIndex,
+            isTerminalPhase: isTerminalPhase,
+            chunkSize: blockTotalReps
+        ) {
+            restartPartnerEngineChunkForCoachWrap()
+        }
+        var wrapGate = partnerCoachRepGate
+        wrapGate.resetIfCoachWrappedToStartOfChunk(
+            repIndex: repIndex,
+            chunkSize: blockTotalReps,
+            loopsChunks: TimedSessionDisplayIntegration.shouldLoopEngineChunks
+        )
+        partnerCoachRepGate = wrapGate
         if case .waitingForNextRep = engine.phase, repIndex < partnerCoachRepGate.expectedNextCoachRepIndex {
             if repIndex + 1 == partnerCoachRepGate.expectedNextCoachRepIndex {
                 sendRepStartedAck(repIndex: repIndex)
@@ -1548,6 +1580,25 @@ struct AwayFromPressureDisplaySessionView: View {
             return
         }
         _ = tryCommitPartnerCoachNextRep(repIndex: repIndex)
+    }
+
+    private func restartPartnerEngineChunkForCoachWrap() {
+        TimedSessionDisplayIntegration.controller.advanceCycleIfNeeded()
+        SoloTimeBasedDisplaySessionSupport.resetDisplayRepStateForEngineChunkRestart(
+            mode: mode,
+            setNextRepIndex: { nextRepIndex = $0 },
+            setPendingNextRepIndex: { pendingNextRepIndex = $0 },
+            resetRepController: { repController.reset() },
+            resetPartnerCoachRepGate: { partnerCoachRepGate = PartnerCoachRepSequenceGate() }
+        )
+        engine.restartBlockFromBeginning()
+        syncRepController(with: engine.phase)
+        if mode.requiresPhoneDisplayRelay {
+            TrainingPartnerConnectionCoordinator.shared.syncDisplaySessionCurrentRepIndex(
+                0,
+                activityId: ActivityKind.awayFromPressure.sessionActivityActivityId
+            )
+        }
     }
 
     private func afpDisplayEngineIsMidRep(repIndex: Int) -> Bool {
@@ -1580,8 +1631,13 @@ struct AwayFromPressureDisplaySessionView: View {
             return false
         }
         if repIndex < engine.currentRepIndex {
-            pendingNextRepIndex = nil
-            return false
+            if !SoloTimeBasedDisplaySessionSupport.allowsPartnerCoachChunkWrapNextRep(
+                repIndex: repIndex,
+                engineCurrentRepIndex: engine.currentRepIndex
+            ) {
+                pendingNextRepIndex = nil
+                return false
+            }
         }
         if repIndex == engine.currentRepIndex {
             guard case .waitingForNextRep = engine.phase else {

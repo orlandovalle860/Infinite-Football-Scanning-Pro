@@ -470,16 +470,27 @@ final class AuthManager: ObservableObject {
 
         // Prefer Edge Function: Apple /auth/revoke + delete players/sessions + auth user.
         // Body is raw Data — no custom Decodable/Encodable types (avoids Swift 6 MainActor isolation errors).
+        // Bound the invoke so a hung Edge Function can’t leave Delete Account looking dead forever.
         do {
             var payload: [String: Any] = [:]
             if let appleAuthorizationCode {
                 payload["authorizationCode"] = appleAuthorizationCode
             }
             let body = try JSONSerialization.data(withJSONObject: payload)
-            try await client.functions.invoke(
-                "delete-account",
-                options: FunctionInvokeOptions(body: body)
-            )
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    try await client.functions.invoke(
+                        "delete-account",
+                        options: FunctionInvokeOptions(body: body)
+                    )
+                }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: 25_000_000_000)
+                    throw CancellationError()
+                }
+                try await group.next()!
+                group.cancelAll()
+            }
             print("[AuthFlow-Debug] delete-account OK uid=\(uid)")
             return true
         } catch {

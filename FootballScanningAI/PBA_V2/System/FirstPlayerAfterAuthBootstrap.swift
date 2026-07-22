@@ -6,20 +6,34 @@
 //  name or email again (Guideline 4 / SIWA HIG). Uses the account-holder name from Apple
 //  when available; otherwise a neutral default. Extra players still use AddPlayerView.
 //
+//  Concurrency: only one bootstrap runs at a time (Login sheet + session onChange + hydrate
+//  can otherwise insert two identical rows with the Apple account name).
+//
 
 import Foundation
 
 enum FirstPlayerAfterAuthBootstrap {
+    @MainActor private static var isRunning = false
+    @MainActor private static var waiters: [CheckedContinuation<Bool, Never>] = []
+
     /// Display name for the first training profile when the roster is empty.
+    /// Prefer Apple account name. Never use Hide My Email local-parts (e.g. `y4tj7vtdhn@privaterelay…`).
     static func defaultFirstPlayerName() -> String {
         if let apple = AuthManager.shared.accountHolderFullName?.trimmingCharacters(in: .whitespacesAndNewlines),
            !apple.isEmpty {
             return apple
         }
-        if let email = AuthManager.shared.currentUserEmail,
-           let local = email.split(separator: "@").first,
-           !local.isEmpty {
-            return String(local)
+        if let email = AuthManager.shared.currentUserEmail?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !email.isEmpty {
+            let lower = email.lowercased()
+            // Sign in with Apple private relay — local part is a random token, not a display name.
+            if lower.hasSuffix("@privaterelay.appleid.com") || lower.contains("privaterelay.appleid.com") {
+                return "Player"
+            }
+            if let local = email.split(separator: "@").first,
+               !local.isEmpty {
+                return String(local)
+            }
         }
         return "Player"
     }
@@ -35,12 +49,57 @@ enum FirstPlayerAfterAuthBootstrap {
         twoMinuteTestResult: TwoMinuteTestResult?,
         context: String
     ) async -> Bool {
-        profileManager.reconcileWithSupabasePlayerList(remoteList, playerStore: playerStore)
+        // Serialize without nesting a MainActor Task (that pattern can deadlock the launch spinner).
+        if isRunning {
+            print("[FirstPlayerBootstrap] context=\(context) awaiting in-flight bootstrap")
+            return await withCheckedContinuation { continuation in
+                waiters.append(continuation)
+            }
+        }
+        isRunning = true
+        let result = await ensureFirstPlayerIfNeededLocked(
+            remoteList: remoteList,
+            profileManager: profileManager,
+            playerStore: playerStore,
+            progressStore: progressStore,
+            twoMinuteTestResult: twoMinuteTestResult,
+            context: context
+        )
+        isRunning = false
+        let pending = waiters
+        waiters.removeAll()
+        for waiter in pending {
+            waiter.resume(returning: result)
+        }
+        return result
+    }
 
-        // Returning user (or any non-empty roster): reconcile already hydrated locals and preserved selection.
-        // Never insert another row and never show a name form.
-        if !remoteList.isEmpty {
-            print("[FirstPlayerBootstrap] context=\(context) existingPlayers=\(remoteList.count) — no create")
+    @MainActor
+    private static func ensureFirstPlayerIfNeededLocked(
+        remoteList: [SupabasePlayer],
+        profileManager: UserProfileManager,
+        playerStore: PlayerStore,
+        progressStore: ProgressStore?,
+        twoMinuteTestResult: TwoMinuteTestResult?,
+        context: String
+    ) async -> Bool {
+        // Re-fetch under the lock so a concurrent caller that already inserted is visible.
+        let authoritative: [SupabasePlayer]
+        if let latest = try? await SupabasePlayerService.shared.fetchPlayersForCurrentUser() {
+            authoritative = latest
+        } else {
+            authoritative = remoteList
+        }
+
+        profileManager.reconcileWithSupabasePlayerList(authoritative, playerStore: playerStore)
+
+        if !authoritative.isEmpty {
+            removeUnsyncedLocalsNotInRemote(
+                remoteIds: Set(authoritative.compactMap(\.uuid)),
+                profileManager: profileManager,
+                playerStore: playerStore
+            )
+            print("[FirstPlayerBootstrap] context=\(context) existingPlayers=\(authoritative.count) — no create")
             return true
         }
 
@@ -50,14 +109,29 @@ enum FirstPlayerAfterAuthBootstrap {
         }
 
         let name = defaultFirstPlayerName()
-        let playerId = UUID()
+        // Promote an existing local profile when present — avoids local leftover + new Apple-named row.
+        let playerId: UUID
+        if let local = profileManager.currentProfile ?? profileManager.profiles.first {
+            playerId = local.id
+        } else if let localPlayer = playerStore.selectedPlayerId.flatMap({ id in
+            playerStore.players.first(where: { $0.id == id })
+        }) ?? playerStore.players.first {
+            playerId = localPlayer.id
+        } else {
+            playerId = UUID()
+        }
+
         do {
             try await SupabasePlayerService.shared.insertPlayer(id: playerId, name: name)
         } catch {
-            // Race: another device created a row — adopt it.
             if let listRetry = try? await SupabasePlayerService.shared.fetchPlayersForCurrentUser(),
                !listRetry.isEmpty {
                 profileManager.reconcileWithSupabasePlayerList(listRetry, playerStore: playerStore)
+                removeUnsyncedLocalsNotInRemote(
+                    remoteIds: Set(listRetry.compactMap(\.uuid)),
+                    profileManager: profileManager,
+                    playerStore: playerStore
+                )
                 print("[FirstPlayerBootstrap] context=\(context) insertConflict adoptedExisting count=\(listRetry.count)")
                 return true
             }
@@ -66,6 +140,11 @@ enum FirstPlayerAfterAuthBootstrap {
         }
 
         hydrateLocal(id: playerId, name: name, profileManager: profileManager, playerStore: playerStore)
+        removeOtherLocalProfiles(
+            keeping: playerId,
+            profileManager: profileManager,
+            playerStore: playerStore
+        )
         AuthFlowOnboardingSync.markLocalAndSyncRemoteCompleted()
         if let result = twoMinuteTestResult, let progressStore {
             saveTwoMinuteTestSession(result: result, playerId: playerId, profileManager: profileManager, progressStore: progressStore)
@@ -75,16 +154,62 @@ enum FirstPlayerAfterAuthBootstrap {
         return true
     }
 
+    /// Drop never-synced local drafts that are not on the server (prevents duplicate Switch Player rows after SIWA).
+    private static func removeUnsyncedLocalsNotInRemote(
+        remoteIds: Set<UUID>,
+        profileManager: UserProfileManager,
+        playerStore: PlayerStore
+    ) {
+        let extras = profileManager.profiles.filter { profile in
+            !remoteIds.contains(profile.id) && !SupabasePlayerService.shared.isPlayerSynced(profile.id)
+        }
+        for profile in extras {
+            print("[FirstPlayerBootstrap] removing unsynced local duplicate id=\(profile.id.uuidString.lowercased()) name=\(profile.name)")
+            profileManager.deleteProfile(profile)
+            playerStore.removePlayer(id: profile.id)
+        }
+        playerStore.persist()
+    }
+
+    private static func removeOtherLocalProfiles(
+        keeping keepId: UUID,
+        profileManager: UserProfileManager,
+        playerStore: PlayerStore
+    ) {
+        let extras = profileManager.profiles.filter { $0.id != keepId }
+        for profile in extras {
+            print("[FirstPlayerBootstrap] removing extra local profile id=\(profile.id.uuidString.lowercased()) name=\(profile.name)")
+            if SupabasePlayerService.shared.isPlayerSynced(profile.id) {
+                SupabasePlayerService.shared.unmarkSynced(id: profile.id)
+            }
+            profileManager.deleteProfile(profile)
+            playerStore.removePlayer(id: profile.id)
+        }
+        playerStore.persist()
+    }
+
     private static func hydrateLocal(
         id: UUID,
         name: String,
         profileManager: UserProfileManager,
         playerStore: PlayerStore
     ) {
-        if !profileManager.profiles.contains(where: { $0.id == id }) {
+        if let idx = profileManager.profiles.firstIndex(where: { $0.id == id }) {
+            var p = profileManager.profiles[idx]
+            if p.name != name {
+                p.name = name
+                profileManager.profiles[idx] = p
+                profileManager.saveProfiles()
+            }
+        } else {
             profileManager.addProfileWithId(id, name: name)
         }
-        if !playerStore.players.contains(where: { $0.id == id }) {
+        if playerStore.players.contains(where: { $0.id == id }) {
+            if playerStore.players.first(where: { $0.id == id })?.name != name {
+                playerStore.removePlayer(id: id)
+                playerStore.addPlayer(id: id, name: name)
+            }
+        } else {
             playerStore.addPlayer(id: id, name: name)
         }
         SupabasePlayerService.shared.markPlayersAsSynced([id])

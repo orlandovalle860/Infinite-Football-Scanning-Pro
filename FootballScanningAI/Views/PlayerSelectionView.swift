@@ -185,9 +185,13 @@ struct PlayerSelectionView: View {
     }
 
     private func performDeleteAccount() {
-        guard signOutUXPhase == .idle else { return }
+        guard signOutUXPhase == .idle else {
+            print("[AccountDeletion] Delete Account ignored — UX phase=\(signOutUXPhase)")
+            return
+        }
         Task {
-            let deleted = await AccountDeletionService.performAccountDeletion(
+            let deleted = await SignOutUXRunner.runDeleteAccount(
+                phase: $signOutUXPhase,
                 profileManager: profileManager,
                 playerStore: playerStore,
                 progressStore: progressStore,

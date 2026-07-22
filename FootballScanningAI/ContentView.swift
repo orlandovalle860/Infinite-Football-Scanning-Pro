@@ -651,6 +651,7 @@ struct MainAppView: View {
     @State private var showsTopToggle: Bool = true
     @State private var showLoginSheet: Bool = false
     @State private var hasHydratedPlayersForSession: Bool = false
+    @State private var isHydratingPlayers: Bool = false
     @AppStorage(hasCompletedInitialTestKey) private var hasCompletedInitialTest = false
     @AppStorage(hasSeenIntroKey) private var hasSeenIntro = false
     @AppStorage(coachDeviceShownHomeKey) private var coachDeviceShownHome = false
@@ -1135,6 +1136,7 @@ struct MainAppView: View {
             .onChange(of: authManager.currentSession != nil) { _, hasSession in
                 if !hasSession {
                     hasHydratedPlayersForSession = false
+                    isHydratingPlayers = false
                 } else { hydratePlayersIfNeeded() }
                 logLaunchRouting(reason: "session_changed hasSession=\(hasSession)")
             }
@@ -1196,12 +1198,19 @@ struct MainAppView: View {
     /// When signed in, fetch players from Supabase and hydrate stores once per session.
     /// Empty roster → auto-create first player from Apple/account identity (Guideline 4 / SIWA).
     private func hydratePlayersIfNeeded() {
-        guard Config.isSupabaseConfigured, authManager.currentSession != nil, !hasHydratedPlayersForSession else {
-            LaunchProfileDebug.log("hydrate_skipped supabase=\(Config.isSupabaseConfigured) session=\(authManager.currentSession != nil) alreadyHydrated=\(hasHydratedPlayersForSession)")
+        guard Config.isSupabaseConfigured, authManager.currentSession != nil,
+              !hasHydratedPlayersForSession, !isHydratingPlayers else {
+            LaunchProfileDebug.log("hydrate_skipped supabase=\(Config.isSupabaseConfigured) session=\(authManager.currentSession != nil) alreadyHydrated=\(hasHydratedPlayersForSession) inFlight=\(isHydratingPlayers)")
             return
         }
+        isHydratingPlayers = true
         LaunchProfileDebug.log("hydrate_start fetching players for current user")
         Task {
+            defer {
+                Task { @MainActor in
+                    isHydratingPlayers = false
+                }
+            }
             do {
                 let list = try await SupabasePlayerService.shared.fetchPlayersForCurrentUser()
                 let ok = await FirstPlayerAfterAuthBootstrap.ensureFirstPlayerIfNeeded(
@@ -3315,10 +3324,14 @@ struct IntroView: View {
     }
 
     private func performDeleteAccount() {
-        guard signOutUXPhase == .idle else { return }
+        guard signOutUXPhase == .idle else {
+            print("[AccountDeletion] Delete Account ignored — UX phase=\(signOutUXPhase)")
+            return
+        }
         hasSeenIntro = false
         Task {
-            let deleted = await AccountDeletionService.performAccountDeletion(
+            let deleted = await SignOutUXRunner.runDeleteAccount(
+                phase: $signOutUXPhase,
                 profileManager: profileManager,
                 playerStore: playerStore,
                 progressStore: progressStore,

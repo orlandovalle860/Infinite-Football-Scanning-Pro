@@ -24,7 +24,6 @@ struct PlayerSelectionView: View {
     @State private var isLoading = true
     @State private var loadError: String?
     @State private var showAddPlayer = false
-    @State private var newPlayerName = ""
 
     var body: some View {
         Group {
@@ -148,7 +147,17 @@ struct PlayerSelectionView: View {
         }
         .onAppear { loadPlayers() }
         .sheet(isPresented: $showAddPlayer) {
-            addPlayerSheet
+            AddPlayerView(
+                profileManager: profileManager,
+                playerStore: playerStore,
+                allowsCancel: true,
+                onCancel: { showAddPlayer = false },
+                onComplete: {
+                    showAddPlayer = false
+                    loadPlayers()
+                }
+            )
+            .environmentObject(progressStore)
         }
     }
 
@@ -186,37 +195,6 @@ struct PlayerSelectionView: View {
             )
             if !deleted {
                 showDeleteAccountFailureAlert = true
-            }
-        }
-    }
-
-    private var addPlayerSheet: some View {
-        NavigationStack {
-            VStack(spacing: 20) {
-                TextField("Player name", text: $newPlayerName)
-                    .textContentType(.name)
-                    .padding(14)
-                    .background(Color(.systemGray6))
-                    .cornerRadius(10)
-                    .padding(.horizontal, 24)
-                Spacer()
-            }
-            .padding(.top, 24)
-            .navigationTitle("Add player")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        showAddPlayer = false
-                        newPlayerName = ""
-                    }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        addNewPlayer()
-                    }
-                    .disabled(newPlayerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
             }
         }
     }
@@ -263,29 +241,5 @@ struct PlayerSelectionView: View {
         }
         playerStore.persist()
         // Root will re-render and show Home when selectedPlayerId is set
-    }
-
-    private func addNewPlayer() {
-        let name = newPlayerName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else { return }
-        let playerId = UUID()
-        Task {
-            do {
-                try await SupabasePlayerService.shared.insertPlayer(id: playerId, name: name)
-                await MainActor.run {
-                    profileManager.addProfileWithId(playerId, name: name)
-                    playerStore.addPlayer(id: playerId, name: name)
-                    AnalyticsManager.shared.track(.playerCreated, playerId: playerId)
-                    newPlayerName = ""
-                    showAddPlayer = false
-                    remotePlayers.append(SupabasePlayer(id: playerId.uuidString.lowercased(), name: name, user_id: nil, created_at: ISO8601DateFormatter().string(from: Date()), age: nil, team: nil, position: nil))
-                    selectPlayer(id: playerId, name: name)
-                }
-            } catch {
-                await MainActor.run {
-                    loadError = UserFacingErrorMessage.message(from: error)
-                }
-            }
-        }
     }
 }

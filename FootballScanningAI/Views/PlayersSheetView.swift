@@ -7,7 +7,6 @@ struct PlayersSheetView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var showAddPlayerSheet = false
-    @State private var newPlayerName = ""
     @State private var pendingDeleteProfile: UserProfile?
     @State private var showDeleteConfirm = false
     @State private var showCannotDeleteLastPlayerAlert = false
@@ -44,7 +43,6 @@ struct PlayersSheetView: View {
                 }
 
                 Button {
-                    newPlayerName = ""
                     showAddPlayerSheet = true
                 } label: {
                     HStack {
@@ -65,21 +63,18 @@ struct PlayersSheetView: View {
             .padding(20)
         }
         .sheet(isPresented: $showAddPlayerSheet) {
-            AddPlayerSheet(
-                initialName: newPlayerName,
+            AddPlayerView(
+                profileManager: profileManager,
+                playerStore: playerStore,
+                allowsCancel: true,
                 onCancel: { showAddPlayerSheet = false },
-                onAdd: { enteredName in
-                    let trimmed = enteredName.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let finalName = trimmed.isEmpty ? "Player \(profileManager.profiles.count + 1)" : trimmed
-                    let newProfile = profileManager.addProfile(name: finalName, email: nil, age: nil, team: nil, position: nil)
-                    playerStore.addPlayer(id: newProfile.id, name: finalName)
-                    profileManager.switchToProfile(newProfile)
-                    playerStore.selectPlayer(id: newProfile.id)
+                onComplete: {
                     showAddPlayerSheet = false
                     dismiss()
                 }
             )
-            .presentationDetents([.height(240)])
+            .environmentObject(progressStore)
+            .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
         .confirmationDialog(
@@ -202,41 +197,6 @@ struct PlayersSheetView: View {
         }
         if playerStore.players.isEmpty {
             dismiss()
-        }
-    }
-}
-
-private struct AddPlayerSheet: View {
-    let initialName: String
-    let onCancel: () -> Void
-    let onAdd: (String) -> Void
-    @State private var name: String = ""
-    @FocusState private var nameFocused: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Add New Player")
-                .font(.headline.weight(.semibold))
-                .foregroundColor(.white)
-            TextField("Player name", text: $name)
-                .textFieldStyle(.roundedBorder)
-                .focused($nameFocused)
-            HStack {
-                Button("Cancel", role: .cancel) { onCancel() }
-                    .foregroundColor(.white.opacity(0.85))
-                Spacer()
-                Button("Add") { onAdd(name) }
-                    .fontWeight(.semibold)
-            }
-        }
-        .padding(18)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color(red: 0.08, green: 0.08, blue: 0.12))
-        .onAppear {
-            name = initialName
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                nameFocused = true
-            }
         }
     }
 }

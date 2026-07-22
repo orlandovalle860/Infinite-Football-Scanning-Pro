@@ -34,6 +34,21 @@ final class AuthManager: ObservableObject {
         currentSession?.user.email
     }
 
+    /// Account-holder display name from Sign in with Apple (auth `user_metadata.full_name`), not a player profile name.
+    /// One account may own many `public.players` rows; this value must not be auto-copied into `players.name`.
+    var accountHolderFullName: String? {
+        if let meta = Self.fullNameFromUserMetadata(currentSession?.user) {
+            return meta
+        }
+        if let cached = lastAppleProvidedFullName?.trimmingCharacters(in: .whitespacesAndNewlines), !cached.isEmpty {
+            return cached
+        }
+        return nil
+    }
+
+    /// Matches `auth.users.raw_user_meta_data` key for the authenticated Apple account holder’s name.
+    static let fullNameMetadataKey = "full_name"
+
     /// Error message from last auth operation (e.g. sign in failed). Clear when starting a new operation.
     @Published var lastError: String?
 
@@ -43,6 +58,8 @@ final class AuthManager: ObservableObject {
     private var authStateTask: Task<Void, Never>?
     /// Raw nonce for the current Sign in with Apple request. Set in handleAppleRequest, consumed in handleAppleCompletion, then cleared.
     private var currentAppleSignInNonce: String?
+    /// Full name from the most recent Apple credential (first authorization only). Account-holder cache only — never auto-applied to player profiles.
+    private var lastAppleProvidedFullName: String?
 
     init() {
         // Restore session from keychain on launch.
@@ -175,6 +192,8 @@ final class AuthManager: ObservableObject {
     }
 
     /// Handle Sign in with Apple completion. Call from SignInWithAppleButton onCompletion (e.g. from a Task).
+    /// Captures `fullName` on first authorization (Apple only returns it once) and persists it to Supabase `user_metadata`.
+    /// Never clears an existing saved name when Apple returns nil/empty on a later sign-in.
     func handleAppleCompletion(_ result: Result<ASAuthorization, Error>) async {
         switch result {
         case .failure(let error):
@@ -192,15 +211,36 @@ final class AuthManager: ObservableObject {
                 await MainActor.run { lastError = "Sign in with Apple did not return an identity token. Try again." }
                 return
             }
+            // Apple provides fullName only on the first authorization — capture immediately.
+            let appleFullName = Self.displayName(from: credential.fullName)
+            let appleEmail = credential.email
+            let authorizationCode: String? = {
+                guard let data = credential.authorizationCode else { return nil }
+                return String(data: data, encoding: .utf8)
+            }()
+            print("[SIWA-Name] appleReturnedFullName=\(appleFullName != nil) value=\(appleFullName ?? "nil") appleReturnedEmail=\(appleEmail != nil) email=\(appleEmail ?? "nil") authorizationCode=\(authorizationCode != nil)")
             let nonceToUse = currentAppleSignInNonce
             await MainActor.run { currentAppleSignInNonce = nil }
-            await signInWithApple(idToken: idToken, nonce: nonceToUse)
+            await signInWithApple(
+                idToken: idToken,
+                nonce: nonceToUse,
+                fullName: appleFullName,
+                authorizationCode: authorizationCode
+            )
         }
     }
 
     /// Sign in with Apple: pass the identity token from ASAuthorizationAppleIDCredential.
+    /// When `fullName` is present (first auth), saves it to auth `user_metadata.full_name` as the **account holder** name only.
+    /// Does not create or update `public.players` rows. If Apple omitted the name, existing metadata is left untouched.
+    /// When `authorizationCode` is present, best-effort stores an Apple refresh token via Edge Function for later revocation on account delete.
     /// Call from the view after receiving the credential from SignInWithAppleButton. No-op on coach remote (non-host).
-    func signInWithApple(idToken: String, nonce: String? = nil) async {
+    func signInWithApple(
+        idToken: String,
+        nonce: String? = nil,
+        fullName: String? = nil,
+        authorizationCode: String? = nil
+    ) async {
         guard ConnectionManager.shared.isHost else { return }
         lastError = nil
         let client = SupabaseClientManager.client
@@ -216,9 +256,117 @@ final class AuthManager: ObservableObject {
                 lastError = nil
                 AnalyticsManager.shared.track(.accountCreated, userId: session.user.id)
             }
-            print("[AuthFlow-Debug] auth operation=signInWithApple auth.uid=\(session.user.id.uuidString.lowercased()) email=\(session.user.email ?? "nil")")
+            let existingSaved = Self.fullNameFromUserMetadata(session.user)
+            print("[SIWA-Name] signInOK auth.uid=\(session.user.id.uuidString.lowercased()) email=\(session.user.email ?? "nil") appleFullName=\(fullName ?? "nil") existingSavedFullName=\(existingSaved ?? "nil")")
+            if let fullName, !fullName.isEmpty {
+                await MainActor.run { lastAppleProvidedFullName = fullName }
+                let saved = await persistFullNameToUserMetadata(fullName)
+                print("[SIWA-Name] persistAfterAppleName success=\(saved) name=\(fullName)")
+            } else {
+                // Do not overwrite — Apple omitted the name on this authorization.
+                print("[SIWA-Name] skipPersist appleNameEmptyOrNil=true keptExisting=\(existingSaved ?? "nil")")
+            }
+            if let authorizationCode, !authorizationCode.isEmpty {
+                await storeAppleRefreshToken(authorizationCode: authorizationCode)
+            }
         } catch {
+            print("[SIWA-Name] signInFailed error=\(error.localizedDescription)")
             await MainActor.run { lastError = UserFacingErrorMessage.message(from: error) }
+        }
+    }
+
+    /// Best-effort: exchange Apple authorization code for refresh token and store on user_metadata (Edge Function `store-apple-token`).
+    private func storeAppleRefreshToken(authorizationCode: String) async {
+        let client = SupabaseClientManager.client
+        struct Body: Encodable { let authorizationCode: String }
+        do {
+            try await client.functions.invoke(
+                "store-apple-token",
+                options: FunctionInvokeOptions(body: Body(authorizationCode: authorizationCode))
+            )
+            print("[SIWA-Revoke] store-apple-token OK")
+        } catch {
+            // Function may be undeployed or Apple secrets missing — account still works; delete will fall back / retry revoke.
+            print("[SIWA-Revoke] store-apple-token failed error=\(error.localizedDescription)")
+        }
+    }
+
+    /// Formats Apple `PersonNameComponents` into a non-empty display name, or nil if Apple provided nothing usable.
+    static func displayName(from components: PersonNameComponents?) -> String? {
+        guard let components else { return nil }
+        let formatter = PersonNameComponentsFormatter()
+        formatter.style = .default
+        let formatted = formatter.string(from: components).trimmingCharacters(in: .whitespacesAndNewlines)
+        if !formatted.isEmpty { return formatted }
+        let parts = [components.givenName, components.middleName, components.familyName]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let joined = parts.joined(separator: " ")
+        return joined.isEmpty ? nil : joined
+    }
+
+    /// Reads the saved **account-holder** display name from auth `user_metadata` (set on first Sign in with Apple).
+    /// This is not a player profile name.
+    static func fullNameFromUserMetadata(_ user: User?) -> String? {
+        guard let meta = user?.userMetadata else { return nil }
+        for key in [fullNameMetadataKey, "name", "fullName"] {
+            if let value = stringMetadata(meta[key]) {
+                return value
+            }
+        }
+        let given = stringMetadata(meta["given_name"]) ?? stringMetadata(meta["givenName"])
+        let family = stringMetadata(meta["family_name"]) ?? stringMetadata(meta["familyName"])
+        let parts = [given, family].compactMap { $0 }
+        let joined = parts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        return joined.isEmpty ? nil : joined
+    }
+
+    private static func stringMetadata(_ value: AnyJSON?) -> String? {
+        guard let value else { return nil }
+        switch value {
+        case .string(let s):
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            return t.isEmpty ? nil : t
+        default:
+            return nil
+        }
+    }
+
+    /// Persists a non-empty **account-holder** name to `auth.users.raw_user_meta_data.full_name` (merges; does not wipe other keys).
+    /// Refuses empty/nil input so an empty Apple name can never clear an existing account-holder name.
+    /// Does not write to `public.players`.
+    @discardableResult
+    func persistFullNameToUserMetadata(_ fullName: String) async -> Bool {
+        let trimmed = fullName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            print("[SIWA-Name] persistSkipped reason=emptyName refusedOverwrite=true")
+            return false
+        }
+        guard currentUserId != nil else {
+            print("[SIWA-Name] persistSkipped reason=noAuthUid")
+            return false
+        }
+        // Compare against stored metadata only (not the in-memory Apple cache).
+        if Self.fullNameFromUserMetadata(currentSession?.user) == trimmed {
+            print("[SIWA-Name] persistSkipped reason=alreadyMatches existing=\(trimmed)")
+            return true
+        }
+        let client = SupabaseClientManager.client
+        do {
+            _ = try await client.auth.update(
+                user: UserAttributes(data: [Self.fullNameMetadataKey: .string(trimmed)])
+            )
+            // AuthClient already merges the updated user into its session store.
+            if let session = try? await client.auth.session {
+                await MainActor.run { currentSession = session }
+            } else {
+                await refreshSessionFromSupabase()
+            }
+            print("[SIWA-Name] persistOK field=auth.users.raw_user_meta_data.full_name value=\(trimmed)")
+            return true
+        } catch {
+            print("[SIWA-Name] persistFailed error=\(error.localizedDescription)")
+            return false
         }
     }
 
@@ -233,20 +381,46 @@ final class AuthManager: ObservableObject {
         await MainActor.run {
             currentSession = nil
             lastError = nil
+            lastAppleProvidedFullName = nil
         }
     }
 
-    /// Deletes the authenticated Supabase auth user via `rpc("delete_user")` (no parameters).
-    /// Local sign-out / navigation are handled by ``AccountDeletionService`` so cleanup always runs.
-    func deleteAccount() async -> Bool {
+    /// Deletes the account: prefers Edge Function `delete-account` (Apple token revoke + players/history + auth user),
+    /// then falls back to `rpc("delete_user")` which deletes players/history + auth user.
+    /// Local sign-out / navigation are handled by ``AccountDeletionService``.
+    /// - Parameter appleAuthorizationCode: Optional fresh SIWA authorization code for Apple token revocation (TN3194).
+    func deleteAccount(appleAuthorizationCode: String? = nil) async -> Bool {
         guard let session = currentSession else {
             print("[AuthFlow-Debug] auth operation=deleteAccount skipped — no session")
             return false
         }
         let client = SupabaseClientManager.client
+        let uid = session.user.id.uuidString.lowercased()
+
+        // Prefer Edge Function: Apple /auth/revoke + delete players/sessions + auth user.
+        struct DeleteBody: Encodable { let authorizationCode: String? }
+        struct DeleteResponse: Decodable {
+            let ok: Bool?
+            let appleRevoked: Bool?
+            let appleConfigured: Bool?
+            let playersDeleted: Int?
+        }
+        do {
+            let response: DeleteResponse = try await client.functions.invoke(
+                "delete-account",
+                options: FunctionInvokeOptions(body: DeleteBody(authorizationCode: appleAuthorizationCode)),
+                decoder: JSONDecoder()
+            )
+            print("[AuthFlow-Debug] delete-account OK uid=\(uid) appleRevoked=\(response.appleRevoked ?? false) appleConfigured=\(response.appleConfigured ?? false) playersDeleted=\(response.playersDeleted ?? -1)")
+            return true
+        } catch {
+            print("[AuthFlow-Debug] delete-account Edge Function failed error=\(error.localizedDescription) — falling back to rpc(delete_user)")
+        }
+
+        // Fallback: SQL rpc deletes players + related history + auth.users (Apple revoke only via Edge Function).
         do {
             try await client.rpc("delete_user").execute()
-            print("[AuthFlow-Debug] auth operation=deleteAccount rpc=delete_user success userId=\(session.user.id.uuidString.lowercased())")
+            print("[AuthFlow-Debug] auth operation=deleteAccount rpc=delete_user success userId=\(uid) note=apple_token_revoke_requires_delete-account_edge_function")
             return true
         } catch {
             await MainActor.run { lastError = UserFacingErrorMessage.message(from: error) }

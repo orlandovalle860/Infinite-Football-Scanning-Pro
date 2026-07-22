@@ -88,7 +88,7 @@ class UserProfileManager: ObservableObject {
         return newProfile
     }
 
-    /// Add a profile with a specific id (e.g. after inserting into Supabase from CreatePlayerAfterAuthView). Does not sync to Supabase.
+    /// Add a profile with a specific id (e.g. after inserting into Supabase from AddPlayerView). Does not sync to Supabase.
     func addProfileWithId(_ id: UUID, name: String) {
         let newProfile = UserProfile(id: id, name: name)
         profiles.append(newProfile)

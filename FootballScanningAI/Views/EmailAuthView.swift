@@ -2,7 +2,7 @@
 //  EmailAuthView.swift
 //  FootballScanningAI
 //
-//  Email/password sign in and sign up. On success, checks for existing player; if none, presents CreatePlayerAfterAuthView; else navigates to Home.
+//  Email/password sign in and sign up. On success, checks for existing player; if none, presents AddPlayerView; else navigates to Home.
 //
 
 import SwiftUI
@@ -138,10 +138,11 @@ struct EmailAuthView: View {
             attemptError = nil
         }
         .fullScreenCover(isPresented: $showCreatePlayerAfterAuth) {
-            CreatePlayerAfterAuthView(
+            AddPlayerView(
                 profileManager: profileManager,
                 playerStore: playerStore,
                 twoMinuteTestResult: twoMinuteTestResult,
+                allowsCancel: false,
                 onComplete: {
                     showCreatePlayerAfterAuth = false
                     onComplete()

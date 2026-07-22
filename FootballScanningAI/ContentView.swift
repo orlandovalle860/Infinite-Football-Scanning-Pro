@@ -417,10 +417,11 @@ struct PostAuthView: View {
                     .padding(24)
                 }
             } else if showCreatePlayer {
-                CreatePlayerAfterAuthView(
+                AddPlayerView(
                     profileManager: profileManager,
                     playerStore: playerStore,
                     twoMinuteTestResult: nil,
+                    allowsCancel: false,
                     onComplete: {
                         showCreatePlayer = false
                         if let selectedId = playerStore.selectedPlayerId,
@@ -1083,10 +1084,11 @@ struct MainAppView: View {
     private var mainAppWithCreatePlayerSheet: some View {
         mainAppWithLoginSheet
             .sheet(isPresented: $showCreatePlayerAfterAuth) {
-                CreatePlayerAfterAuthView(
+                AddPlayerView(
                     profileManager: profileManager,
                     playerStore: playerStore,
                     twoMinuteTestResult: nil,
+                    allowsCancel: false,
                     onComplete: {
                         showCreatePlayerAfterAuth = false
                         if let selectedId = playerStore.selectedPlayerId,
@@ -2332,6 +2334,10 @@ struct IntroView: View {
                     VisionPlayBrandingView(style: .prominentDark)
                         .frame(maxWidth: 420)
                         .frame(maxWidth: .infinity)
+                    // Expose existing PlayersSheetView (switch / add / delete) — already wired via showPlayersSheet.
+                    if authManager.currentSession != nil || !profileManager.profiles.isEmpty {
+                        homePlayersButton
+                    }
                     homeMainTrainingSection
                     homeComingSoonHint
                     signedInAccountActions
@@ -3177,30 +3183,46 @@ struct IntroView: View {
     }
 #endif
 
+    /// Opens existing `PlayersSheetView` (switch / add / delete). Visible on Home when signed in or when local profiles exist.
+    private var homePlayersButton: some View {
+        Button {
+            hasSeenPlayerSwitcherTooltip = true
+            showPlayersSheet = true
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "person.2.fill")
+                    .font(.subheadline.weight(.semibold))
+                Text("Players")
+                    .font(.subheadline.weight(.semibold))
+                if let name = playerStore.selectedPlayer?.name ?? profileManager.currentProfile?.name {
+                    Text("·")
+                        .foregroundColor(.white.opacity(0.45))
+                    Text(name)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundColor(.white.opacity(0.8))
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.down")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.7))
+            }
+            .foregroundColor(.white)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(maxWidth: 420)
+            .background(Color.white.opacity(0.12))
+            .cornerRadius(12)
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
+        .accessibilityLabel("Players")
+        .accessibilityHint("Switch, add, or manage player profiles")
+    }
+
     /// Top: player selector only (toolbar holds small utility icons).
     private var homePlayerBar: some View {
-        HStack {
-            Button {
-                hasSeenPlayerSwitcherTooltip = true
-                showPlayersSheet = true
-            } label: {
-                HStack(spacing: 6) {
-                    Text(playerStore.selectedPlayer?.name ?? "Player")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(.white)
-                    Text("▼")
-                        .font(.caption.weight(.semibold))
-                        .foregroundColor(.white.opacity(0.8))
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(Color.white.opacity(0.12))
-                .cornerRadius(10)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Selected player profile")
-            Spacer()
-        }
+        homePlayersButton
     }
 
     /// Main training controls: mode toggle, primary start, secondary warmup.

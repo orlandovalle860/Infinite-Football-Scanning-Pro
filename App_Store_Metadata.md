@@ -107,7 +107,9 @@ See the Game. Train the decision.
 
 VisionPlay is a football training app. Core drills use visual and audio cues on screen; no camera or microphone is required for training.
 
-VisionPlay supports multiple player profiles under one authenticated account. Sign in with Apple authenticates the account holder and provides the account holder’s name and email. The subsequent “Add a Player” form collects the name of the athlete being trained, who may be the account holder, a child, or another player. The app does not ask the user to re-enter their Sign in with Apple account name or email.
+VisionPlay supports multiple player profiles under one authenticated account. Sign in with Apple authenticates the account holder and provides the account holder’s name and email via Authentication Services. The app does **not** ask for name or email again after Sign in with Apple. The first training profile is created automatically from the Apple account name (or a default). Users may optionally add additional athlete profiles later; that is separate from Sign in with Apple identity.
+
+App Privacy: We do not track users. User ID and other declared data types are for App Functionality / Account Management only — not for tracking. No App Tracking Transparency prompt is shown because we do not track.
 
 Solo test path: Open app → start Meet the Ball → complete a short block → view summary.
 

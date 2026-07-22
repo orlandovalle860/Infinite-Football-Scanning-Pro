@@ -382,7 +382,6 @@ struct PostAuthView: View {
     @EnvironmentObject private var coachRemoteRequiredPrompt: CoachRemoteRequiredPromptController
 
     @State private var hasFetched = false
-    @State private var showCreatePlayer = false
     @State private var playerFetchFailed = false
     @State private var loadGeneration = 0
 
@@ -416,22 +415,6 @@ struct PostAuthView: View {
                     }
                     .padding(24)
                 }
-            } else if showCreatePlayer {
-                AddPlayerView(
-                    profileManager: profileManager,
-                    playerStore: playerStore,
-                    twoMinuteTestResult: nil,
-                    allowsCancel: false,
-                    onComplete: {
-                        showCreatePlayer = false
-                        if let selectedId = playerStore.selectedPlayerId,
-                           let selectedProfile = profileManager.profile(id: selectedId) {
-                            profileManager.switchToProfile(selectedProfile)
-                            playerStore.persist()
-                        }
-                    }
-                )
-                .environmentObject(progressStore)
             } else {
                 MainAppView(profileManager: profileManager, settingsViewModel: settingsViewModel, router: router)
             }
@@ -448,15 +431,22 @@ struct PostAuthView: View {
             guard !hasFetched else { return }
             do {
                 let list = try await SupabasePlayerService.shared.fetchPlayersForCurrentUser()
+                let ok = await FirstPlayerAfterAuthBootstrap.ensureFirstPlayerIfNeeded(
+                    remoteList: list,
+                    profileManager: profileManager,
+                    playerStore: playerStore,
+                    progressStore: progressStore,
+                    twoMinuteTestResult: nil,
+                    context: "post_auth"
+                )
                 await MainActor.run {
                     hasFetched = true
-                    playerFetchFailed = false
-                    profileManager.reconcileWithSupabasePlayerList(list, playerStore: playerStore)
-                    showCreatePlayer = profileManager.profiles.isEmpty
+                    playerFetchFailed = !ok
                 }
+                let refreshed = (try? await SupabasePlayerService.shared.fetchPlayersForCurrentUser()) ?? list
                 await AuthFlowOnboardingSync.resolveAndApplyOnboardingStateAfterLogin(
                     email: AuthManager.shared.currentUserEmail,
-                    playerList: list,
+                    playerList: refreshed,
                     context: "post_auth",
                     profileManager: profileManager
                 )
@@ -464,7 +454,6 @@ struct PostAuthView: View {
                 await MainActor.run {
                     hasFetched = true
                     playerFetchFailed = true
-                    showCreatePlayer = false
                 }
                 print("[AuthFlow-Debug] context=post_auth fetchPlayers failed error=\(error.localizedDescription) routing=show_retry (not treating as empty roster)")
             }
@@ -661,7 +650,6 @@ struct MainAppView: View {
     @EnvironmentObject private var coachRemoteRequiredPrompt: CoachRemoteRequiredPromptController
     @State private var showsTopToggle: Bool = true
     @State private var showLoginSheet: Bool = false
-    @State private var showCreatePlayerAfterAuth: Bool = false
     @State private var hasHydratedPlayersForSession: Bool = false
     @AppStorage(hasCompletedInitialTestKey) private var hasCompletedInitialTest = false
     @AppStorage(hasSeenIntroKey) private var hasSeenIntro = false
@@ -1083,23 +1071,6 @@ struct MainAppView: View {
 
     private var mainAppWithCreatePlayerSheet: some View {
         mainAppWithLoginSheet
-            .sheet(isPresented: $showCreatePlayerAfterAuth) {
-                AddPlayerView(
-                    profileManager: profileManager,
-                    playerStore: playerStore,
-                    twoMinuteTestResult: nil,
-                    allowsCancel: false,
-                    onComplete: {
-                        showCreatePlayerAfterAuth = false
-                        if let selectedId = playerStore.selectedPlayerId,
-                           let selectedProfile = profileManager.profile(id: selectedId) {
-                            profileManager.switchToProfile(selectedProfile)
-                            playerStore.persist()
-                        }
-                    }
-                )
-                .environmentObject(progressStore)
-            }
     }
 
     private var mainAppWithDashboardAudienceSheet: some View {
@@ -1164,7 +1135,6 @@ struct MainAppView: View {
             .onChange(of: authManager.currentSession != nil) { _, hasSession in
                 if !hasSession {
                     hasHydratedPlayersForSession = false
-                    showCreatePlayerAfterAuth = false
                 } else { hydratePlayersIfNeeded() }
                 logLaunchRouting(reason: "session_changed hasSession=\(hasSession)")
             }
@@ -1223,7 +1193,8 @@ struct MainAppView: View {
         mainAppRoutingObservers
     }
 
-    /// When signed in, fetch players from Supabase and hydrate stores once per session. If no players, offer Create Player sheet.
+    /// When signed in, fetch players from Supabase and hydrate stores once per session.
+    /// Empty roster → auto-create first player from Apple/account identity (Guideline 4 / SIWA).
     private func hydratePlayersIfNeeded() {
         guard Config.isSupabaseConfigured, authManager.currentSession != nil, !hasHydratedPlayersForSession else {
             LaunchProfileDebug.log("hydrate_skipped supabase=\(Config.isSupabaseConfigured) session=\(authManager.currentSession != nil) alreadyHydrated=\(hasHydratedPlayersForSession)")
@@ -1233,17 +1204,23 @@ struct MainAppView: View {
         Task {
             do {
                 let list = try await SupabasePlayerService.shared.fetchPlayersForCurrentUser()
+                let ok = await FirstPlayerAfterAuthBootstrap.ensureFirstPlayerIfNeeded(
+                    remoteList: list,
+                    profileManager: profileManager,
+                    playerStore: playerStore,
+                    progressStore: progressStore,
+                    twoMinuteTestResult: nil,
+                    context: "hydrate"
+                )
                 await MainActor.run {
-                    LaunchProfileDebug.log("hydrate_success remoteRowCount=\(list.count) — reconciling local stores")
+                    LaunchProfileDebug.log("hydrate_success remoteRowCount=\(list.count) firstPlayerReady=\(ok)")
                     hasHydratedPlayersForSession = true
-                    profileManager.reconcileWithSupabasePlayerList(list, playerStore: playerStore)
-                    // Use remote row count — reconcile may no-op on non-display devices, leaving locals empty while server has players.
-                    showCreatePlayerAfterAuth = list.isEmpty
                     logLaunchRouting(reason: "after_reconcile remoteRows=\(list.count) localProfiles=\(profileManager.profiles.count)")
                 }
+                let refreshed = (try? await SupabasePlayerService.shared.fetchPlayersForCurrentUser()) ?? list
                 await AuthFlowOnboardingSync.resolveAndApplyOnboardingStateAfterLogin(
                     email: authManager.currentUserEmail,
-                    playerList: list,
+                    playerList: refreshed,
                     context: "hydrate",
                     profileManager: profileManager
                 )
@@ -1251,10 +1228,9 @@ struct MainAppView: View {
                 await MainActor.run {
                     LaunchProfileDebug.log("hydrate_failed error=\(error.localizedDescription)")
                     hasHydratedPlayersForSession = true
-                    showCreatePlayerAfterAuth = false
                     logLaunchRouting(reason: "hydrate_catch")
                 }
-                print("[AuthFlow-Debug] context=hydrate fetchPlayers failed error=\(error.localizedDescription) routing=keep_local_state (not opening create_player)")
+                print("[AuthFlow-Debug] context=hydrate fetchPlayers failed error=\(error.localizedDescription) routing=keep_local_state")
                 await AuthFlowOnboardingSync.resolveAndApplyOnboardingStateAfterLogin(
                     email: authManager.currentUserEmail,
                     playerList: [],

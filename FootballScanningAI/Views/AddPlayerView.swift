@@ -2,20 +2,20 @@
 //  AddPlayerView.swift
 //  FootballScanningAI
 //
-//  Single Add Player experience for first player after auth and for adding more later.
-//  Collects only Player name. Account-holder identity (SIWA) is separate and never auto-copied here.
+//  Optional “Add a Player” for additional athletes (Players sheet / selection).
+//  First player after Sign in with Apple is created automatically — do not present this as a required post-SIWA form.
 //
 
 import SwiftUI
 
-/// Shared “Add a Player” form — one source of truth for player creation UI and persistence.
+/// Shared “Add a Player” form for adding more players later (cancelable). First player after auth uses FirstPlayerAfterAuthBootstrap.
 struct AddPlayerView: View {
     @ObservedObject var profileManager: UserProfileManager
     @ObservedObject var playerStore: PlayerStore
     /// When set (e.g. after 2‑Minute Test + auth), saves that session to the new player.
     var twoMinuteTestResult: TwoMinuteTestResult? = nil
-    /// When true, shows Cancel in the toolbar (nested sheets / optional add). Forced first-player after auth typically passes false.
-    var allowsCancel: Bool = false
+    /// When true, shows Cancel in the toolbar. Prefer true for optional add-player flows.
+    var allowsCancel: Bool = true
     var onCancel: (() -> Void)? = nil
     var onComplete: () -> Void
     @EnvironmentObject private var progressStore: ProgressStore
@@ -31,7 +31,7 @@ struct AddPlayerView: View {
                 Text("Add a Player")
                     .font(.title2.bold())
                     .foregroundColor(.primary)
-                Text("Create a profile for the player who will be training. This can be you or another player.")
+                Text("Add another athlete who will train on this account. This is separate from your Sign in with Apple account name.")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)

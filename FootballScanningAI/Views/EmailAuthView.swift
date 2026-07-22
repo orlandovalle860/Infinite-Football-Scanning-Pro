@@ -2,7 +2,7 @@
 //  EmailAuthView.swift
 //  FootballScanningAI
 //
-//  Email/password sign in and sign up. On success, checks for existing player; if none, presents AddPlayerView; else navigates to Home.
+//  Email/password sign in and sign up. On success, ensures a first player exists (auto from account identity) then Home.
 //
 
 import SwiftUI
@@ -20,7 +20,6 @@ struct EmailAuthView: View {
     @State private var email = ""
     @State private var password = ""
     @State private var isLoading = false
-    @State private var showCreatePlayerAfterAuth = false
     @State private var isCheckingPlayers = false
     /// Only set after a login/signup attempt fails; cleared when user edits email or password.
     @State private var attemptError: String?
@@ -137,19 +136,6 @@ struct EmailAuthView: View {
             auth.lastError = nil
             attemptError = nil
         }
-        .fullScreenCover(isPresented: $showCreatePlayerAfterAuth) {
-            AddPlayerView(
-                profileManager: profileManager,
-                playerStore: playerStore,
-                twoMinuteTestResult: twoMinuteTestResult,
-                allowsCancel: false,
-                onComplete: {
-                    showCreatePlayerAfterAuth = false
-                    onComplete()
-                }
-            )
-            .environmentObject(progressStore)
-        }
         .overlay {
             if isCheckingPlayers {
                 Color.black.opacity(0.3)
@@ -199,7 +185,7 @@ struct EmailAuthView: View {
         }
     }
 
-    /// After auth: fetch players for current user. If none → Create Player. If any → hydrate stores and go to Home.
+    /// After auth: fetch players; if none, auto-create first player from account identity (no name form).
     private func checkExistingPlayersAndRoute() async {
         guard auth.currentSession != nil else { return }
         // Guest may have finished baseline locally without this sheet carrying twoMinuteTestResult (e.g. email login from Home).
@@ -210,23 +196,31 @@ struct EmailAuthView: View {
         defer { Task { @MainActor in isCheckingPlayers = false } }
         do {
             let list = try await SupabasePlayerService.shared.fetchPlayersForCurrentUser()
+            let ok = await FirstPlayerAfterAuthBootstrap.ensureFirstPlayerIfNeeded(
+                remoteList: list,
+                profileManager: profileManager,
+                playerStore: playerStore,
+                progressStore: progressStore,
+                twoMinuteTestResult: twoMinuteTestResult,
+                context: "email_auth"
+            )
             await MainActor.run {
-                profileManager.reconcileWithSupabasePlayerList(list, playerStore: playerStore)
-                showCreatePlayerAfterAuth = profileManager.profiles.isEmpty
-                if !showCreatePlayerAfterAuth {
+                if ok {
                     onComplete()
+                } else {
+                    attemptError = "Could not finish setting up your profile. Check your connection and try again."
                 }
             }
+            let refreshed = (try? await SupabasePlayerService.shared.fetchPlayersForCurrentUser()) ?? list
             await AuthFlowOnboardingSync.resolveAndApplyOnboardingStateAfterLogin(
                 email: auth.currentUserEmail,
-                playerList: list,
+                playerList: refreshed,
                 context: "email_auth",
                 profileManager: profileManager
             )
         } catch {
             await MainActor.run {
                 attemptError = "Could not load your players. Check your connection and try again."
-                showCreatePlayerAfterAuth = false
             }
             print("[AuthFlow-Debug] context=email_auth fetchPlayers failed error=\(error.localizedDescription) routing=show_error (not treating as empty roster)")
         }

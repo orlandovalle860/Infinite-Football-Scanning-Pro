@@ -23,7 +23,6 @@ struct AccountPromptView: View {
     var onAccountComplete: (() -> Void)? = nil
 
     @State private var showEmailAuth = false
-    @State private var showCreatePlayerAfterAuth = false
     @State private var isAppleSignInLoading = false
     @State private var isCheckingPlayers = false
 
@@ -97,22 +96,9 @@ struct AccountPromptView: View {
                     .scaleEffect(1.2)
             }
         }
-        .fullScreenCover(isPresented: $showCreatePlayerAfterAuth) {
-            AddPlayerView(
-                profileManager: profileManager,
-                playerStore: playerStore,
-                twoMinuteTestResult: twoMinuteTestResult,
-                allowsCancel: false,
-                onComplete: {
-                    showCreatePlayerAfterAuth = false
-                    onAccountComplete?()
-                }
-            )
-            .environmentObject(progressStore)
-        }
     }
 
-    /// After auth: fetch players for current user. If none → Create Player. If any → hydrate stores and go to Home.
+    /// After auth: fetch players; if none, auto-create first player from Apple/account identity (no name/email form).
     private func checkExistingPlayersAndRoute() {
         guard AuthManager.shared.currentSession != nil else { return }
         // Guest may have completed baseline locally; sync flag + metadata even when twoMinuteTestResult isn't passed through.
@@ -124,23 +110,31 @@ struct AccountPromptView: View {
             defer { Task { @MainActor in isCheckingPlayers = false } }
             do {
                 let list = try await SupabasePlayerService.shared.fetchPlayersForCurrentUser()
+                let ok = await FirstPlayerAfterAuthBootstrap.ensureFirstPlayerIfNeeded(
+                    remoteList: list,
+                    profileManager: profileManager,
+                    playerStore: playerStore,
+                    progressStore: progressStore,
+                    twoMinuteTestResult: twoMinuteTestResult,
+                    context: "apple_auth"
+                )
                 await MainActor.run {
-                    profileManager.reconcileWithSupabasePlayerList(list, playerStore: playerStore)
-                    showCreatePlayerAfterAuth = profileManager.profiles.isEmpty
-                    if !showCreatePlayerAfterAuth {
+                    if ok {
                         onAccountComplete?()
+                    } else {
+                        auth.lastError = "Could not finish setting up your profile. Check your connection and try again."
                     }
                 }
+                let refreshed = (try? await SupabasePlayerService.shared.fetchPlayersForCurrentUser()) ?? list
                 await AuthFlowOnboardingSync.resolveAndApplyOnboardingStateAfterLogin(
                     email: AuthManager.shared.currentUserEmail,
-                    playerList: list,
+                    playerList: refreshed,
                     context: "apple_auth",
                     profileManager: profileManager
                 )
             } catch {
                 await MainActor.run {
                     auth.lastError = "Could not load your players. Check your connection and try again."
-                    showCreatePlayerAfterAuth = false
                 }
                 print("[AuthFlow-Debug] context=apple_auth fetchPlayers failed error=\(error.localizedDescription) routing=show_error (not treating as empty roster)")
             }

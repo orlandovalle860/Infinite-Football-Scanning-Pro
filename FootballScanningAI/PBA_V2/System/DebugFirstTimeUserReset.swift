@@ -36,6 +36,8 @@ enum DebugFirstTimeUserReset {
         "pba_daily_progress_date",
         "pending_badge_unlocks",
         "pending_badge_tier_unlocks",
+        "bestEarlyStreak.",
+        "earlySessionStreak.",
     ]
 
     private static let explicitKeysToRemove: [String] = [
@@ -77,6 +79,11 @@ enum DebugFirstTimeUserReset {
         "pba_player_identity",
         "pba_daily_date",
         "pba_daily_blocks",
+        "activity_stats_total_counts_v1",
+        "activity_stats_weekly_counts_v1",
+        "activity_stats_weekly_anchor_v1",
+        "activity_stats_sessions_today_v1",
+        "activity_stats_sessions_today_anchor_v1",
         "userProfiles",
         "currentProfileId",
         "isProfileCreated",
@@ -96,6 +103,11 @@ enum DebugFirstTimeUserReset {
         profileManager.clearAllForSignOut()
         playerStore.clearAll()
         progressStore.clearAllSessionsForDebugReset()
+        ActivityStatsStore.shared.clearAllForSignOut()
+        SoloLifetimeRepCounter.clearAllForSignOut()
+        PostSessionFeedbackStore.clearAllForSignOut()
+        BestEarlyStreakStore.clearAllForSignOut()
+        EarlySessionStreakStore.clearAllForSignOut()
         SupabaseDecisionService.shared.clearPendingDecisionsQueue()
         CurrentSessionStore.shared.clear()
         router.resetToHome()

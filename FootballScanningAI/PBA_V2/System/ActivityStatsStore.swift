@@ -44,6 +44,18 @@ final class ActivityStatsStore: ObservableObject {
         persist()
     }
 
+    /// Clears weekly + all-time Progress totals (account delete / sign-out). Device-scoped — not tied to auth uid.
+    func clearAllForSignOut() {
+        totalCounts = [:]
+        weeklyCounts = [:]
+        sessionsToday = 0
+        defaults.removeObject(forKey: totalCountsKey)
+        defaults.removeObject(forKey: weeklyCountsKey)
+        defaults.removeObject(forKey: weeklyAnchorKey)
+        defaults.removeObject(forKey: sessionsTodayKey)
+        defaults.removeObject(forKey: sessionsTodayAnchorKey)
+    }
+
     private func load() {
         totalCounts = defaults.dictionary(forKey: totalCountsKey) as? [String: Int] ?? [:]
         weeklyCounts = defaults.dictionary(forKey: weeklyCountsKey) as? [String: Int] ?? [:]

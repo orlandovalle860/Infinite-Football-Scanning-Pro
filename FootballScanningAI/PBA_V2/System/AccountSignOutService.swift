@@ -29,6 +29,13 @@ enum AccountSignOutService {
         progressStore.clearAllSessionsForSignOut()
         print("[SignOut-Debug] local session history cleared (ProgressStore)")
 
+        ActivityStatsStore.shared.clearAllForSignOut()
+        SoloLifetimeRepCounter.clearAllForSignOut()
+        PostSessionFeedbackStore.clearAllForSignOut()
+        BestEarlyStreakStore.clearAllForSignOut()
+        EarlySessionStreakStore.clearAllForSignOut()
+        print("[SignOut-Debug] Progress totals / solo lifetime reps / streaks cleared")
+
         profileManager.clearAllForSignOut()
         print("[SignOut-Debug] local profile caches cleared (UserProfileManager)")
 

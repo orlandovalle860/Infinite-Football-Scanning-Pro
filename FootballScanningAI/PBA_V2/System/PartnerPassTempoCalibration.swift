@@ -1,27 +1,70 @@
 import SwiftUI
 
 enum PartnerPassTempoCalibrationStore {
-    private static let storedAverageKey = "partnerPassTempoCalibration.averageTravelTimeSeconds"
-    private static let storedAtKey = "partnerPassTempoCalibration.savedAt"
-    private static let storedModeKey = "partnerPassTempoCalibration.trainingMode"
+    private static let legacyAverageKey = "partnerPassTempoCalibration.averageTravelTimeSeconds"
+    private static let legacyAtKey = "partnerPassTempoCalibration.savedAt"
+    private static let legacyModeKey = "partnerPassTempoCalibration.trainingMode"
+    private static let keyPrefix = "partnerPassTempoCalibration."
     static let defaultAverageTravelTimeSeconds: Double = 0.7
 
-    static func save(averageTravelTimeSeconds: Double?, trainingMode: TrainingMode? = nil) {
+    private static func averageKey(playerId: UUID) -> String {
+        "\(keyPrefix)\(playerId.uuidString.lowercased()).averageTravelTimeSeconds"
+    }
+
+    private static func savedAtKey(playerId: UUID) -> String {
+        "\(keyPrefix)\(playerId.uuidString.lowercased()).savedAt"
+    }
+
+    private static func modeKey(playerId: UUID) -> String {
+        "\(keyPrefix)\(playerId.uuidString.lowercased()).trainingMode"
+    }
+
+    /// Migrates pre–per-player global keys onto this player once, then removes the globals.
+    private static func migrateLegacyIfNeeded(for playerId: UUID) {
+        guard UserDefaults.standard.object(forKey: averageKey(playerId: playerId)) == nil,
+              UserDefaults.standard.object(forKey: legacyAverageKey) != nil else { return }
+        let avg = UserDefaults.standard.double(forKey: legacyAverageKey)
+        UserDefaults.standard.set(avg, forKey: averageKey(playerId: playerId))
+        if UserDefaults.standard.object(forKey: legacyAtKey) != nil {
+            UserDefaults.standard.set(
+                UserDefaults.standard.double(forKey: legacyAtKey),
+                forKey: savedAtKey(playerId: playerId)
+            )
+        }
+        if let mode = UserDefaults.standard.string(forKey: legacyModeKey) {
+            UserDefaults.standard.set(mode, forKey: modeKey(playerId: playerId))
+        }
+        UserDefaults.standard.removeObject(forKey: legacyAverageKey)
+        UserDefaults.standard.removeObject(forKey: legacyAtKey)
+        UserDefaults.standard.removeObject(forKey: legacyModeKey)
+    }
+
+    static func save(
+        averageTravelTimeSeconds: Double?,
+        trainingMode: TrainingMode? = nil,
+        playerId: UUID? = nil
+    ) {
         guard let averageTravelTimeSeconds else { return }
-        UserDefaults.standard.set(averageTravelTimeSeconds, forKey: storedAverageKey)
-        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: storedAtKey)
+        guard let playerId = playerId ?? CalibrationPlayerScope.activePlayerId() else {
+            print("[Calibration] partner save skipped — no active playerId")
+            return
+        }
+        UserDefaults.standard.set(averageTravelTimeSeconds, forKey: averageKey(playerId: playerId))
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: savedAtKey(playerId: playerId))
         if let trainingMode {
-            UserDefaults.standard.set(trainingMode.rawValue, forKey: storedModeKey)
+            UserDefaults.standard.set(trainingMode.rawValue, forKey: modeKey(playerId: playerId))
         }
     }
 
-    static func savedAverageTravelTimeSeconds() -> Double? {
-        guard UserDefaults.standard.object(forKey: storedAverageKey) != nil else { return nil }
-        return UserDefaults.standard.double(forKey: storedAverageKey)
+    static func savedAverageTravelTimeSeconds(playerId: UUID? = nil) -> Double? {
+        guard let playerId = playerId ?? CalibrationPlayerScope.activePlayerId() else { return nil }
+        migrateLegacyIfNeeded(for: playerId)
+        guard UserDefaults.standard.object(forKey: averageKey(playerId: playerId)) != nil else { return nil }
+        return UserDefaults.standard.double(forKey: averageKey(playerId: playerId))
     }
 
-    static func seededAverageTravelTimeSeconds() -> Double {
-        savedAverageTravelTimeSeconds() ?? defaultAverageTravelTimeSeconds
+    static func seededAverageTravelTimeSeconds(playerId: UUID? = nil) -> Double {
+        savedAverageTravelTimeSeconds(playerId: playerId) ?? defaultAverageTravelTimeSeconds
     }
 
     /// Silent rolling refinement used by partner sessions (no UI/blocking).
@@ -29,13 +72,14 @@ enum PartnerPassTempoCalibrationStore {
     static func updateRollingAverageTravelTime(
         observedSeconds: Double,
         trainingMode: TrainingMode? = .partner,
-        smoothingFactor: Double = 0.25
+        smoothingFactor: Double = 0.25,
+        playerId: UUID? = nil
     ) -> Double {
         let clampedObserved = min(1.5, max(0.35, observedSeconds))
-        let previous = seededAverageTravelTimeSeconds()
+        let previous = seededAverageTravelTimeSeconds(playerId: playerId)
         let alpha = min(0.6, max(0.05, smoothingFactor))
         let updated = previous + (clampedObserved - previous) * alpha
-        save(averageTravelTimeSeconds: updated, trainingMode: trainingMode)
+        save(averageTravelTimeSeconds: updated, trainingMode: trainingMode, playerId: playerId)
         return updated
     }
 
@@ -43,28 +87,54 @@ enum PartnerPassTempoCalibrationStore {
         savedAverageTravelTimeSeconds() != nil
     }
 
-    static func lastCalibratedDate() -> Date? {
-        guard UserDefaults.standard.object(forKey: storedAtKey) != nil else { return nil }
-        return Date(timeIntervalSince1970: UserDefaults.standard.double(forKey: storedAtKey))
+    static func hasSavedCalibration(playerId: UUID) -> Bool {
+        savedAverageTravelTimeSeconds(playerId: playerId) != nil
     }
 
-    static func lastCalibratedLabel() -> String? {
-        guard let date = lastCalibratedDate() else { return nil }
+    /// Clears all pass-tempo calibration (legacy + every player). Call on account deletion.
+    static func clearSavedCalibration() {
+        UserDefaults.standard.removeObject(forKey: legacyAverageKey)
+        UserDefaults.standard.removeObject(forKey: legacyAtKey)
+        UserDefaults.standard.removeObject(forKey: legacyModeKey)
+        let defaults = UserDefaults.standard
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix(keyPrefix) {
+            defaults.removeObject(forKey: key)
+        }
+    }
+
+    /// Clears calibration for one player (e.g. player deleted).
+    static func clearSavedCalibration(playerId: UUID) {
+        UserDefaults.standard.removeObject(forKey: averageKey(playerId: playerId))
+        UserDefaults.standard.removeObject(forKey: savedAtKey(playerId: playerId))
+        UserDefaults.standard.removeObject(forKey: modeKey(playerId: playerId))
+    }
+
+    static func lastCalibratedDate(playerId: UUID? = nil) -> Date? {
+        guard let playerId = playerId ?? CalibrationPlayerScope.activePlayerId() else { return nil }
+        migrateLegacyIfNeeded(for: playerId)
+        guard UserDefaults.standard.object(forKey: savedAtKey(playerId: playerId)) != nil else { return nil }
+        return Date(timeIntervalSince1970: UserDefaults.standard.double(forKey: savedAtKey(playerId: playerId)))
+    }
+
+    static func lastCalibratedLabel(playerId: UUID? = nil) -> String? {
+        guard let date = lastCalibratedDate(playerId: playerId) else { return nil }
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
         return formatter.localizedString(for: date, relativeTo: Date())
     }
 
-    static func lastCalibratedTrainingMode() -> TrainingMode? {
-        guard let raw = UserDefaults.standard.string(forKey: storedModeKey) else { return nil }
+    static func lastCalibratedTrainingMode(playerId: UUID? = nil) -> TrainingMode? {
+        guard let playerId = playerId ?? CalibrationPlayerScope.activePlayerId() else { return nil }
+        migrateLegacyIfNeeded(for: playerId)
+        guard let raw = UserDefaults.standard.string(forKey: modeKey(playerId: playerId)) else { return nil }
         return TrainingMode(rawValue: raw)
     }
 
-    static func requiresCalibration(for trainingMode: TrainingMode) -> Bool {
-        guard hasSavedCalibration else { return true }
+    static func requiresCalibration(for trainingMode: TrainingMode, playerId: UUID? = nil) -> Bool {
+        guard let playerId = playerId ?? CalibrationPlayerScope.activePlayerId() else { return true }
+        guard hasSavedCalibration(playerId: playerId) else { return true }
         // Backward compatibility: older installs may have a saved average without stored mode metadata.
-        // Treat that as valid calibration to avoid forcing users into unexpected recalibration screens.
-        guard let lastMode = lastCalibratedTrainingMode() else { return false }
+        guard let lastMode = lastCalibratedTrainingMode(playerId: playerId) else { return false }
         return lastMode != trainingMode
     }
 }
@@ -161,4 +231,3 @@ struct DisplayCalibrationWaitingView: View {
         }
     }
 }
-

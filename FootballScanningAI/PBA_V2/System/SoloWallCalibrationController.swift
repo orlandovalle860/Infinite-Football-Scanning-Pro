@@ -76,25 +76,62 @@ final class SoloWallCalibrationController: ObservableObject {
         case needsInlineThreePass
     }
 
-    /// Solo-only cached wall return time from ``AppStorageKeys/soloReturnTime`` (no partner-store fallback).
-    static func effectiveSoloWallReturnTimeSeconds() -> TimeInterval? {
-        let saved = UserDefaults.standard.double(forKey: AppStorageKeys.soloReturnTime)
+    /// Solo-only cached wall return time for the **active player** (no partner-store fallback).
+    static func effectiveSoloWallReturnTimeSeconds(playerId: UUID? = nil) -> TimeInterval? {
+        guard let playerId = playerId ?? CalibrationPlayerScope.activePlayerId() else { return nil }
+        migrateLegacySoloReturnTimeIfNeeded(for: playerId)
+        let key = AppStorageKeys.soloReturnTimeKey(playerId: playerId)
+        let saved = UserDefaults.standard.double(forKey: key)
         guard saved > minimumUserDefaultsSoloReturnTimeSeconds else { return nil }
         return min(max(saved, 0.2), 5.0)
     }
 
-    /// Call on local (non–Coach Remote) display appear for **Solo** to load ``AppStorageKeys/soloReturnTime`` or start inline calibration.
+    /// One-time: copy legacy device-wide `soloReturnTime` onto this player, then remove the legacy key.
+    private static func migrateLegacySoloReturnTimeIfNeeded(for playerId: UUID) {
+        let scoped = AppStorageKeys.soloReturnTimeKey(playerId: playerId)
+        guard UserDefaults.standard.object(forKey: scoped) == nil,
+              UserDefaults.standard.object(forKey: AppStorageKeys.soloReturnTime) != nil else { return }
+        let legacy = UserDefaults.standard.double(forKey: AppStorageKeys.soloReturnTime)
+        UserDefaults.standard.set(legacy, forKey: scoped)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.soloReturnTime)
+    }
+
+    /// Clears all solo wall calibration (legacy + every player). Call on account deletion.
+    static func clearSavedSoloWallCalibration() {
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.soloReturnTime)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.soloForceInlineCalibration)
+        let defaults = UserDefaults.standard
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix("soloReturnTime.") {
+            defaults.removeObject(forKey: key)
+        }
+    }
+
+    /// Clears solo wall calibration for one player.
+    static func clearSavedSoloWallCalibration(playerId: UUID) {
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.soloReturnTimeKey(playerId: playerId))
+    }
+
+    /// Call on local (non–Coach Remote) display appear for **Solo** to load this player's return time or start inline calibration.
     func prepareSoloLocalDisplay(trainingMode: TrainingMode, nominalTravelSeconds: Double) -> SoloWallBoot {
         self.trainingMode = trainingMode
         if !isCalibrating {
             calibrationSequenceHasStarted = false
         }
-        let saved = UserDefaults.standard.double(forKey: AppStorageKeys.soloReturnTime)
+        guard let playerId = CalibrationPlayerScope.activePlayerId() else {
+            print("[Calibration] solo boot — no active playerId; requiring inline calibration")
+            resetForInlineCalibration(nominalTravelSeconds: nominalTravelSeconds)
+            return .needsInlineThreePass
+        }
+        Self.migrateLegacySoloReturnTimeIfNeeded(for: playerId)
+        let key = AppStorageKeys.soloReturnTimeKey(playerId: playerId)
+        let saved = UserDefaults.standard.double(forKey: key)
         if saved > Self.minimumUserDefaultsSoloReturnTimeSeconds {
             let c = min(max(saved, 0.2), 5.0)
             applyCachedReturnTime(c)
+            print("[Calibration] solo boot playerId=\(playerId.uuidString.lowercased()) usingCached=\(c)")
             return .cachedTravelSeconds(c)
         }
+        print("[Calibration] solo boot playerId=\(playerId.uuidString.lowercased()) needsInlineThreePass")
         resetForInlineCalibration(nominalTravelSeconds: nominalTravelSeconds)
         return .needsInlineThreePass
     }
@@ -256,8 +293,18 @@ final class SoloWallCalibrationController: ObservableObject {
 
         calibratedReturnTime = clamped
         CurrentSessionStore.shared.setExpectedBallTravelTimeOverrideSeconds(clamped)
-        PartnerPassTempoCalibrationStore.save(averageTravelTimeSeconds: clamped, trainingMode: trainingMode)
-        UserDefaults.standard.set(clamped, forKey: AppStorageKeys.soloReturnTime)
+        let playerId = CalibrationPlayerScope.activePlayerId()
+        PartnerPassTempoCalibrationStore.save(
+            averageTravelTimeSeconds: clamped,
+            trainingMode: trainingMode,
+            playerId: playerId
+        )
+        if let playerId {
+            UserDefaults.standard.set(clamped, forKey: AppStorageKeys.soloReturnTimeKey(playerId: playerId))
+            print("[Calibration] solo saved playerId=\(playerId.uuidString.lowercased()) returnTime=\(clamped)")
+        } else {
+            print("[Calibration] solo finish — no active playerId; value not persisted to UserDefaults")
+        }
         isCalibrating = false
         calibrationCount = 0
         calibrationTimes = []

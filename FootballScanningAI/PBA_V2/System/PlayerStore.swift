@@ -137,6 +137,8 @@ final class PlayerStore: ObservableObject {
         if selectedPlayerId == id {
             selectedPlayerId = players.first?.id
         }
+        PartnerPassTempoCalibrationStore.clearSavedCalibration(playerId: id)
+        SoloWallCalibrationController.clearSavedSoloWallCalibration(playerId: id)
         persist()
     }
 

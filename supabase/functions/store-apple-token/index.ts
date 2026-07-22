@@ -19,6 +19,8 @@ const APPLE_CLIENT_ID = Deno.env.get("APPLE_CLIENT_ID") ?? "";
 const APPLE_TEAM_ID = Deno.env.get("APPLE_TEAM_ID") ?? "";
 const APPLE_KEY_ID = Deno.env.get("APPLE_KEY_ID") ?? "";
 const APPLE_PRIVATE_KEY = (Deno.env.get("APPLE_PRIVATE_KEY") ?? "").replace(/\\n/g, "\n");
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 async function makeAppleClientSecret(): Promise<string> {
   const pem = APPLE_PRIVATE_KEY;
@@ -65,15 +67,17 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
     }
 
-    const supabase = createClient(
-      Deno.env.get("SUPABASE_URL")!,
+    // Verify the caller with their JWT (getUser works with Authorization header alone).
+    const userClient = createClient(
+      SUPABASE_URL,
       Deno.env.get("SUPABASE_ANON_KEY")!,
       { global: { headers: { Authorization: authHeader } } },
     );
-    const { data: userData, error: userError } = await supabase.auth.getUser();
+    const { data: userData, error: userError } = await userClient.auth.getUser();
     if (userError || !userData.user) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
     }
+    const user = userData.user;
 
     const body = await req.json() as { authorizationCode?: string };
     const authorizationCode = body.authorizationCode?.trim();
@@ -107,8 +111,13 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: "No Apple tokens returned" }), { status: 400 });
     }
 
-    const { error: updateError } = await supabase.auth.updateUser({
-      data: {
+    // updateUser() requires a full local auth session; Edge Functions only have the JWT header.
+    // Persist via service-role admin after verifying the caller above.
+    const admin = createClient(SUPABASE_URL, SERVICE_ROLE);
+    const existingMeta = (user.user_metadata ?? {}) as Record<string, unknown>;
+    const { error: updateError } = await admin.auth.admin.updateUserById(user.id, {
+      user_metadata: {
+        ...existingMeta,
         apple_refresh_token: refreshToken ?? null,
         apple_access_token: accessToken ?? null,
       },

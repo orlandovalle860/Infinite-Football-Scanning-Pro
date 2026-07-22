@@ -55,6 +55,18 @@ enum BestEarlyStreakStore {
         }
         return new
     }
+
+    static func clearForPlayer(_ playerId: UUID) {
+        UserDefaults.standard.removeObject(forKey: key(for: playerId))
+    }
+
+    static func clearAllForSignOut() {
+        let defaults = UserDefaults.standard
+        let prefix = "bestEarlyStreak."
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix(prefix) {
+            defaults.removeObject(forKey: key)
+        }
+    }
 }
 
 enum EarlySessionStreakStore {
@@ -74,6 +86,14 @@ enum EarlySessionStreakStore {
         let correct = session.correctCount
         let early = session.speedCounts.fast
         return correct * 100 >= total * 90 && early * 100 >= total * 60
+    }
+
+    static func clearAllForSignOut() {
+        let defaults = UserDefaults.standard
+        let prefix = "earlySessionStreak."
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix(prefix) {
+            defaults.removeObject(forKey: key)
+        }
     }
 
     /// Call after each scored session save. Returns the new streak count.

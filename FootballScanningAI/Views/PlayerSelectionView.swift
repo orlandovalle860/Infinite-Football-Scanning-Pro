@@ -138,7 +138,7 @@ struct PlayerSelectionView: View {
                 performDeleteAccount()
             }
         } message: {
-            Text("Are you sure you want to permanently delete your account? This action cannot be undone.")
+            Text("This permanently deletes your VisionPlay account and signs you out. Apple may email you that Sign in with Apple was removed for this app. This cannot be undone.")
         }
         .alert("Delete Account", isPresented: $showDeleteAccountFailureAlert) {
             Button("OK", role: .cancel) {}

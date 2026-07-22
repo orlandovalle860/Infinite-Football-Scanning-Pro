@@ -24,6 +24,15 @@ enum SoloLifetimeRepCounter {
         return next
     }
 
+    /// Clears lifetime solo corner-badge totals (account delete / sign-out).
+    static func clearAllForSignOut() {
+        let defaults = UserDefaults.standard
+        let prefix = "pba.soloLifetimeReps."
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix(prefix) {
+            defaults.removeObject(forKey: key)
+        }
+    }
+
     static func formattedTotal(_ count: Int) -> String {
         count == 1 ? "1 rep" : "\(count) reps"
     }

@@ -11,6 +11,8 @@ import Supabase
 import Combine
 import AuthenticationServices
 import CryptoKit
+import UIKit
+import ObjectiveC
 
 /// Manages Supabase auth state. Use shared instance; observe for UI updates.
 final class AuthManager: ObservableObject {
@@ -278,17 +280,86 @@ final class AuthManager: ObservableObject {
     /// Best-effort: exchange Apple authorization code for refresh token and store on user_metadata (Edge Function `store-apple-token`).
     private func storeAppleRefreshToken(authorizationCode: String) async {
         let client = SupabaseClientManager.client
-        struct Body: Encodable { let authorizationCode: String }
         do {
+            // Encode as Data (not a Decodable/Encodable type) to avoid MainActor isolation issues
+            // under SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor with concurrent functions.invoke.
+            let body = try JSONSerialization.data(
+                withJSONObject: ["authorizationCode": authorizationCode]
+            )
             try await client.functions.invoke(
                 "store-apple-token",
-                options: FunctionInvokeOptions(body: Body(authorizationCode: authorizationCode))
+                options: FunctionInvokeOptions(body: body)
             )
             print("[SIWA-Revoke] store-apple-token OK")
         } catch {
             // Function may be undeployed or Apple secrets missing — account still works; delete will fall back / retry revoke.
-            print("[SIWA-Revoke] store-apple-token failed error=\(error.localizedDescription)")
+            var detail = error.localizedDescription
+            if let functionsError = error as? FunctionsError,
+               case let .httpError(code, data) = functionsError {
+                let body = String(data: data, encoding: .utf8) ?? "<non-utf8 \(data.count) bytes>"
+                detail = "status=\(code) body=\(body)"
+            }
+            print("[SIWA-Revoke] store-apple-token failed \(detail)")
         }
+    }
+
+    /// Optional: presents Sign in with Apple for a **fresh** authorization code (TN3194).
+    /// Not used by the default delete flow — that revokes via `apple_refresh_token` from `store-apple-token`
+    /// so users are not shown a “Sign in” sheet while deleting. Kept for manual/fallback use.
+    /// Returns nil if the user cancels or the sheet cannot be presented.
+    @MainActor
+    func requestAppleAuthorizationCodeForAccountDeletion() async -> String? {
+        guard let window = Self.keyWindowForAppleAuth() else {
+            print("[AccountDeletion] Apple auth code skipped — no key window")
+            return nil
+        }
+        return await withCheckedContinuation { continuation in
+            let provider = ASAuthorizationAppleIDProvider()
+            let request = provider.createRequest()
+            // Revoke only needs a fresh authorization code; do not request name/email again.
+            request.requestedScopes = []
+
+            let coordinator = AppleAuthorizationCodeCoordinator(window: window) { result in
+                switch result {
+                case .success(let authorization):
+                    let code: String? = {
+                        guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
+                              let data = credential.authorizationCode,
+                              let s = String(data: data, encoding: .utf8),
+                              !s.isEmpty else { return nil }
+                        return s
+                    }()
+                    print("[AccountDeletion] Apple auth code for revoke obtained=\(code != nil)")
+                    continuation.resume(returning: code)
+                case .failure(let error):
+                    let ns = error as NSError
+                    if ns.domain == ASAuthorizationError.errorDomain, ns.code == ASAuthorizationError.canceled.rawValue {
+                        print("[AccountDeletion] Apple auth code canceled by user — delete continues without fresh code")
+                    } else {
+                        print("[AccountDeletion] Apple auth code failed error=\(error.localizedDescription)")
+                    }
+                    continuation.resume(returning: nil)
+                }
+            }
+            // Retain coordinator for the lifetime of the controller callback.
+            objc_setAssociatedObject(request, &AppleAuthorizationCodeCoordinator.assocKey, coordinator, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+            let controller = ASAuthorizationController(authorizationRequests: [request])
+            controller.delegate = coordinator
+            controller.presentationContextProvider = coordinator
+            controller.performRequests()
+        }
+    }
+
+    @MainActor
+    private static func keyWindowForAppleAuth() -> UIWindow? {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first { $0.isKeyWindow }
+            ?? UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first
     }
 
     /// Formats Apple `PersonNameComponents` into a non-empty display name, or nil if Apple provided nothing usable.
@@ -398,20 +469,18 @@ final class AuthManager: ObservableObject {
         let uid = session.user.id.uuidString.lowercased()
 
         // Prefer Edge Function: Apple /auth/revoke + delete players/sessions + auth user.
-        struct DeleteBody: Encodable { let authorizationCode: String? }
-        struct DeleteResponse: Decodable {
-            let ok: Bool?
-            let appleRevoked: Bool?
-            let appleConfigured: Bool?
-            let playersDeleted: Int?
-        }
+        // Body is raw Data — no custom Decodable/Encodable types (avoids Swift 6 MainActor isolation errors).
         do {
-            let response: DeleteResponse = try await client.functions.invoke(
+            var payload: [String: Any] = [:]
+            if let appleAuthorizationCode {
+                payload["authorizationCode"] = appleAuthorizationCode
+            }
+            let body = try JSONSerialization.data(withJSONObject: payload)
+            try await client.functions.invoke(
                 "delete-account",
-                options: FunctionInvokeOptions(body: DeleteBody(authorizationCode: appleAuthorizationCode)),
-                decoder: JSONDecoder()
+                options: FunctionInvokeOptions(body: body)
             )
-            print("[AuthFlow-Debug] delete-account OK uid=\(uid) appleRevoked=\(response.appleRevoked ?? false) appleConfigured=\(response.appleConfigured ?? false) playersDeleted=\(response.playersDeleted ?? -1)")
+            print("[AuthFlow-Debug] delete-account OK uid=\(uid)")
             return true
         } catch {
             print("[AuthFlow-Debug] delete-account Edge Function failed error=\(error.localizedDescription) — falling back to rpc(delete_user)")
@@ -427,5 +496,37 @@ final class AuthManager: ObservableObject {
             print("[AuthFlow-Debug] auth operation=deleteAccount rpc=delete_user failed error=\(error.localizedDescription)")
             return false
         }
+    }
+}
+
+/// Presents ASAuthorizationController and returns the credential result (used at account deletion for a fresh Apple auth code).
+private final class AppleAuthorizationCodeCoordinator: NSObject, ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding {
+    static var assocKey: UInt8 = 0
+
+    private let window: UIWindow
+    private let onResult: (Result<ASAuthorization, Error>) -> Void
+    private var hasResumed = false
+
+    init(window: UIWindow, onResult: @escaping (Result<ASAuthorization, Error>) -> Void) {
+        self.window = window
+        self.onResult = onResult
+    }
+
+    func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
+        window
+    }
+
+    func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) {
+        resumeOnce(.success(authorization))
+    }
+
+    func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) {
+        resumeOnce(.failure(error))
+    }
+
+    private func resumeOnce(_ result: Result<ASAuthorization, Error>) {
+        guard !hasResumed else { return }
+        hasResumed = true
+        onResult(result)
     }
 }

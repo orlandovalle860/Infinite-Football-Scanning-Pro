@@ -145,4 +145,14 @@ enum PostSessionFeedbackStore {
         let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: date) ?? date
         return calendarDayString(for: yesterday)
     }
+
+    /// Clears device-scoped post-session / home streak stats (account delete / sign-out).
+    static func clearAllForSignOut() {
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: totalSessionsKey)
+        defaults.removeObject(forKey: totalRepsKey)
+        defaults.removeObject(forKey: longestSessionDurationKey)
+        defaults.removeObject(forKey: lastTrainingDayKey)
+        defaults.removeObject(forKey: currentStreakDaysKey)
+    }
 }

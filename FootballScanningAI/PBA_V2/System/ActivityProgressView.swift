@@ -29,7 +29,6 @@ struct ActivityProgressView: View {
 
 struct ActivityProgressPanelView: View {
     let showTitle: Bool
-    var showsInsights: Bool = true
     @ObservedObject private var stats = ActivityStatsStore.shared
 
     private static let activityIds = [
@@ -53,43 +52,10 @@ struct ActivityProgressPanelView: View {
     private var weeklyMaxCount: Int { max(weeklyRows.map(\.count).max() ?? 0, 1) }
     private var allTimeMaxCount: Int { max(allTimeRows.map(\.count).max() ?? 0, 1) }
 
-    private var insightLines: [String] {
-        guard let maxWeekly = weeklyRows.max(by: { $0.count < $1.count }),
-              let minWeekly = weeklyRows.min(by: { $0.count < $1.count }),
-              maxWeekly.count > 0 else {
-            return ["Complete a session to start building your trend lines."]
-        }
-        let threshold = 10
-        guard maxWeekly.count - minWeekly.count >= threshold else {
-            return ["Your weekly training is balanced across activities."]
-        }
-        return [
-            "You trained \(maxWeekly.name) most this week.",
-            "You trained \(minWeekly.name) least this week."
-        ]
-    }
-
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
-                if showTitle {
-                    header
-                }
-                sectionCard(
-                    title: "THIS WEEK",
-                    totalReps: weeklyTotal,
-                    rows: weeklyRows,
-                    maxCount: weeklyMaxCount
-                )
-                sectionCard(
-                    title: "ALL TIME",
-                    totalReps: allTimeTotal,
-                    rows: allTimeRows,
-                    maxCount: allTimeMaxCount
-                )
-                if showsInsights {
-                    insightCard
-                }
+                trainingTotalsBlock
                 aboutFooter
             }
             .padding(.horizontal, 20)
@@ -98,15 +64,27 @@ struct ActivityProgressPanelView: View {
         }
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Training Totals")
-                .font(.title2)
-                .fontWeight(.bold)
-                .foregroundStyle(.primary)
-            Text("Activity Name • Reps")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+    /// Title + week/all-time sections as one block so a summary can sit above without reflowing the page.
+    private var trainingTotalsBlock: some View {
+        VStack(alignment: .leading, spacing: 28) {
+            if showTitle {
+                Text("Training Totals")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                    .foregroundStyle(.primary)
+            }
+            sectionCard(
+                title: "THIS WEEK",
+                totalReps: weeklyTotal,
+                rows: weeklyRows,
+                maxCount: weeklyMaxCount
+            )
+            sectionCard(
+                title: "ALL TIME",
+                totalReps: allTimeTotal,
+                rows: allTimeRows,
+                maxCount: allTimeMaxCount
+            )
         }
     }
 
@@ -146,32 +124,10 @@ struct ActivityProgressPanelView: View {
     }
 
     private var aboutFooter: some View {
-        VStack(spacing: 4) {
-            Text("VisionPlay")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
-            Text("Formerly PBA Training")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 8)
-    }
-
-    private var insightCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("INSIGHT")
-                .font(.caption)
-                .fontWeight(.semibold)
-                .foregroundStyle(.secondary)
-            ForEach(insightLines, id: \.self) { line in
-                Text(line)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(14)
-        .background(Color.gray.opacity(0.12))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        Text("VisionPlay")
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity)
+            .padding(.top, 8)
     }
 }

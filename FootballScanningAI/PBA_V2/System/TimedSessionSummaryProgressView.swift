@@ -55,7 +55,7 @@ struct TimedSessionSummaryProgressView: View {
                         onDone: onDone
                     )
                 case .progress:
-                    ActivityProgressPanelView(showTitle: false, showsInsights: false)
+                    ActivityProgressPanelView(showTitle: false)
                 }
             }
             .padding(.top, 52)

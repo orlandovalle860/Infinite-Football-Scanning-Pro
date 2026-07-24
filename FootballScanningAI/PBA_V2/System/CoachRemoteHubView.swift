@@ -18,9 +18,12 @@ struct CoachRemoteHubView: View {
     @ObservedObject private var partnerCoordinator = TrainingPartnerConnectionCoordinator.shared
     @AppStorage(AppRole.storageKey) private var appRoleRaw: String = AppRole.player.rawValue
     @AppStorage("coachRemoteLastUsedActivityV1") private var lastUsedActivityKey: String = ""
+    @AppStorage(VisionPlayGuideWelcomeStore.hasSeenKey) private var hasSeenGuideWelcome = false
     @State private var partnerSessionActive = false
     @State private var showDisconnectCoachConfirm = false
     @State private var activityTapBlockedMessage: String?
+    @State private var showGuideWelcome = false
+    @State private var guidePresentation: VisionPlayGuidePresentation?
 
     private var coachLinkReadyForActivities: Bool {
         CoachRemoteHubLaunchPolicy.canOpenActivitySelection
@@ -126,12 +129,33 @@ struct CoachRemoteHubView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .sheet(isPresented: $showGuideWelcome) {
+            VisionPlayGuideWelcomeSheet(
+                onViewGuide: {
+                    hasSeenGuideWelcome = true
+                    showGuideWelcome = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        guidePresentation = .page(.welcome)
+                    }
+                },
+                onSkip: {
+                    hasSeenGuideWelcome = true
+                    showGuideWelcome = false
+                }
+            )
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.hidden)
+        }
+        .sheet(item: $guidePresentation) { presentation in
+            VisionPlayGuideView(initialPage: presentation.initialPage)
+        }
         .onAppear {
             partnerSessionActive = TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive
             Task {
                 await partnerCoordinator.attemptCoachRelayAutoReconnectFromStoredJoinCodeIfNeeded(reason: "coach_hub_onAppear")
             }
             openCoachRemoteForLiveTimedSessionIfNeeded()
+            presentGuideWelcomeIfNeeded()
         }
         .onChange(of: coachRelayRemoteService.connectionState) { _, _ in
             partnerSessionActive = TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive
@@ -184,6 +208,14 @@ struct CoachRemoteHubView: View {
     private func exitTemporaryCoachRemoteToHome() {
         partnerSessionActive = TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive
         router.popToRoot(endingPartnerSession: false)
+    }
+
+    private func presentGuideWelcomeIfNeeded() {
+        // Temporary Partner push from Home already had a chance to show the welcome on Home.
+        guard AppRole.resolved(from: appRoleRaw) == .coachRemote else { return }
+        guard !hasSeenGuideWelcome else { return }
+        guard !showGuideWelcome else { return }
+        showGuideWelcome = true
     }
 
     /// Display started / resumed a timed partner session (e.g. Train Again) — open the matching coach remote from the hub.

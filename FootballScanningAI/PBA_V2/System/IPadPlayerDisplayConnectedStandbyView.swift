@@ -2,7 +2,8 @@
 //  IPadPlayerDisplayConnectedStandbyView.swift
 //  FootballScanningAI
 //
-//  Player iPad when coach link is live: display-only — no training or role-switch UI.
+//  Player iPad when coach link is live: display-only — waiting for coach to start a session.
+//  Disconnect returns to Home so Solo / re-pair is always reachable without force-quit.
 //
 
 import SwiftUI
@@ -13,6 +14,10 @@ struct IPadPlayerDisplayConnectedStandbyView: View {
 
     /// UI-only: brief “Connected” beat before showing the waiting subtitle (see `.task(id:)`).
     @State private var showWaitingSubtitle = false
+    @State private var showDisconnectConfirmation = false
+
+    @EnvironmentObject private var router: AppRouter
+    @EnvironmentObject private var popToRootTrigger: PopToRootTrigger
 
     var body: some View {
         ZStack {
@@ -27,6 +32,8 @@ struct IPadPlayerDisplayConnectedStandbyView: View {
             .ignoresSafeArea()
 
             VStack(spacing: 18) {
+                Spacer(minLength: 0)
+
                 Text("Connected")
                     .font(.system(size: 34, weight: .bold, design: .rounded))
                     .foregroundColor(.white)
@@ -39,12 +46,36 @@ struct IPadPlayerDisplayConnectedStandbyView: View {
                         .padding(.horizontal, 40)
                         .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
+
+                Spacer(minLength: 0)
+
+                Button {
+                    showDisconnectConfirmation = true
+                } label: {
+                    Text("Disconnect")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white.opacity(0.72))
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 12)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Disconnect")
+                .accessibilityHint("Ends the coach connection and returns to Home")
+                .padding(.bottom, 36)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationBarBackButtonHidden(true)
         .toolbar(.hidden, for: .navigationBar)
         .preferredColorScheme(.dark)
+        .alert("Disconnect from Coach?", isPresented: $showDisconnectConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Disconnect", role: .destructive) {
+                disconnectFromCoachAndReturnHome()
+            }
+        } message: {
+            Text("This will end the current connection and return you to the VisionPlay Home screen.")
+        }
         .task(id: coachLinkActive) {
             guard coachLinkActive else {
                 showWaitingSubtitle = false
@@ -57,5 +88,12 @@ struct IPadPlayerDisplayConnectedStandbyView: View {
                 showWaitingSubtitle = true
             }
         }
+    }
+
+    private func disconnectFromCoachAndReturnHome() {
+        TrainingPartnerConnectionCoordinator.shared.disconnectPlayerDisplayFromCoach(
+            reason: "iPadConnectedStandby.disconnect"
+        )
+        HomeNavigationAction.goHome(router: router, popToRootTrigger: popToRootTrigger)
     }
 }

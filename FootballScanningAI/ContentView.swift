@@ -803,10 +803,14 @@ struct MainAppView: View {
     }
 
     /// Player iPad with an active coach/display link — Home is replaced by a passive standby (no training or role switching).
+    /// Requires an active partner training run so Disconnect (which clears that flag immediately) returns to Home
+    /// without waiting for async relay teardown.
     private var iPadPlayerDisplayConnectedStandby: Bool {
         guard CoachRemoteSessionStartGate.isPadPlayerRole() else { return false }
         _ = coachRelayRemoteService.connectionState
         _ = relayDisplaySession.isCoachPaired
+        _ = partnerTrainingCoordinator.isPartnerTrainingSessionActive
+        guard partnerTrainingCoordinator.isPartnerTrainingSessionActive else { return false }
         return CoachRemoteSessionStartGate.iPadDisplayCoachRelayLinkIsLive()
     }
 
@@ -1725,6 +1729,9 @@ struct IntroView: View {
     @EnvironmentObject private var router: AppRouter
     @EnvironmentObject private var coachRemoteRequiredPrompt: CoachRemoteRequiredPromptController
     @State private var showHowItWorks = false
+    @State private var guidePresentation: VisionPlayGuidePresentation?
+    @AppStorage(VisionPlayGuideWelcomeStore.hasSeenKey) private var hasSeenGuideWelcome = false
+    @State private var showGuideWelcome = false
     @State private var showStatusUpgrade = false
     @State private var upgradedStatus: PlayerStatus?
     @State private var showPlayersSheet = false
@@ -2344,26 +2351,35 @@ struct IntroView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if !AppConfig.hideHomeChromeForAppStoreScreenshots {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Progress") {
-                        router.push(.progress)
-                        if authManager.currentSession == nil {
-                            showLoginSheet = true
-                        }
-                    }
-                    .foregroundColor(.white.opacity(0.9))
-                }
-            }
 #if DEBUG
-            if AppConfig.testerMode {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Tester Tools") {
-                        router.push(.debugMenu)
+                if AppConfig.testerMode {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Tester Tools") {
+                            router.push(.debugMenu)
+                        }
+                        .foregroundColor(.white.opacity(0.9))
                     }
-                    .foregroundColor(.white.opacity(0.9))
+                }
+#endif
+                ToolbarItem(placement: .topBarTrailing) {
+                    HStack(spacing: 16) {
+                        Button("Guide") {
+                            guidePresentation = .contents
+                        }
+                        .foregroundColor(.white.opacity(0.9))
+                        .accessibilityLabel("Guide")
+                        .accessibilityHint("Opens the VisionPlay reference guide")
+
+                        Button("Progress") {
+                            router.push(.progress)
+                            if authManager.currentSession == nil {
+                                showLoginSheet = true
+                            }
+                        }
+                        .foregroundColor(.white.opacity(0.9))
+                    }
                 }
             }
-#endif
         }
 #if DEBUG
         .alert("Reset complete", isPresented: $showDebugResetDoneAlert) {
@@ -2434,6 +2450,26 @@ struct IntroView: View {
             PBABeepSelectorView()
         }
         .sheet(isPresented: $showHowItWorks) { HowItWorksView() }
+        .sheet(isPresented: $showGuideWelcome) {
+            VisionPlayGuideWelcomeSheet(
+                onViewGuide: {
+                    hasSeenGuideWelcome = true
+                    showGuideWelcome = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        guidePresentation = .page(.welcome)
+                    }
+                },
+                onSkip: {
+                    hasSeenGuideWelcome = true
+                    showGuideWelcome = false
+                }
+            )
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.hidden)
+        }
+        .sheet(item: $guidePresentation) { presentation in
+            VisionPlayGuideView(initialPage: presentation.initialPage)
+        }
         .overlay {
             if showStatusUpgrade, let s = upgradedStatus {
                 statusUpgradeToast(status: s)
@@ -3081,6 +3117,13 @@ struct IntroView: View {
         highlightPrimaryAction = false
         try? await Task.sleep(for: .milliseconds(400))
         highlightPrimaryAction = true
+        presentGuideWelcomeIfNeeded()
+    }
+
+    private func presentGuideWelcomeIfNeeded() {
+        guard !hasSeenGuideWelcome else { return }
+        guard !showGuideWelcome else { return }
+        showGuideWelcome = true
     }
 
     private func startPartnerSession() {

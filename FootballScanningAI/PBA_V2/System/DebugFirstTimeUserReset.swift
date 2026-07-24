@@ -46,6 +46,7 @@ enum DebugFirstTimeUserReset {
         hasCompletedPocketOnboardingStepsKey,
         AppStorageKeys.hasLaunchedBefore,
         FirstSessionOnboardingStore.hasCompletedFirstSessionKey,
+        VisionPlayGuideWelcomeStore.hasSeenKey,
         "pba.lastLoginPromptDay",
         "pba.loginPromptDeclinedDay",
         "pba.reenableFirstSessionLoginPrompt",

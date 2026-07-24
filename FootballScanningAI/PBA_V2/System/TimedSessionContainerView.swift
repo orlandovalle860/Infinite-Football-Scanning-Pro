@@ -26,6 +26,7 @@ struct TimedSessionContainerView: View {
 
     @State private var showActivityPicker = false
     @State private var showEndSessionConfirmation = false
+    @State private var guidePresentation: VisionPlayGuidePresentation?
     @State private var displayedActivity: ActivityKind
     @State private var repPulseScale: CGFloat = 1
 
@@ -112,6 +113,9 @@ struct TimedSessionContainerView: View {
                 }
             )
             .presentationDetents([.medium])
+        }
+        .sheet(item: $guidePresentation) { presentation in
+            VisionPlayGuideView(initialPage: presentation.initialPage)
         }
         .onReceive(NotificationCenter.default.publisher(for: .timedSessionSwitchActivity)) { notification in
             guard let activity = notification.object as? ActivityKind else { return }
@@ -298,17 +302,32 @@ struct TimedSessionContainerView: View {
 
     private var sessionTopBar: some View {
         HStack(alignment: .center, spacing: 0) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(displayedActivity.displayName)
-                    .font(.caption.weight(.semibold))
-                    .foregroundColor(.yellow.opacity(0.92))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                Text("Activity")
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.45))
+            HStack(alignment: .center, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(displayedActivity.displayName)
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.yellow.opacity(0.92))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    Text("Activity")
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.45))
+                }
+
+                Button {
+                    guidePresentation = .page(VisionPlayGuidePageID.page(for: displayedActivity))
+                } label: {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.7))
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Guide")
+                .accessibilityHint("Opens the guide for \(displayedActivity.displayName)")
             }
-            .frame(maxWidth: 120, alignment: .leading)
+            .frame(maxWidth: 148, alignment: .leading)
             .padding(.leading, 4)
 
             Spacer(minLength: 0)

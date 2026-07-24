@@ -963,6 +963,7 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         lastKnownValidRelaySessionId = nil
         clearSoftResumeInterruptionState()
         relayLifecycleBanner = .hidden
+        CurrentSessionStore.shared.clear()
 
         let finishLocalTeardown: () -> Void = { [weak self] in
             guard let self else { return }
@@ -991,6 +992,42 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         notifyPeerOfPartnerTrainingEndedIfNeeded {
             finishLocalTeardown()
         }
+    }
+
+    /// Player Display Disconnect from Connected standby — ends an active partner run, or forcibly clears an orphan warm-up link so Home is never trapped.
+    @MainActor
+    func disconnectPlayerDisplayFromCoach(reason: String = "iPadConnectedStandby.disconnect") {
+        if isPartnerTrainingSessionActive {
+            endPartnerTrainingSession(reason: reason, notifyPeer: true)
+            return
+        }
+        #if DEBUG
+        EndTrainingDebug.log("disconnectPlayerDisplayFromCoach — orphan link teardown reason=\(reason)")
+        #endif
+        clearMidSessionPartnerDisconnectState()
+        relaySessionMutationToken += 1
+        isPartnerDisplayCountdownActive = false
+        currentTimedSessionActivityId = nil
+        isDisplayRepEngineReady = false
+        displayTimedSessionAnnounced = false
+        lastNonNilActivityId = nil
+        TimedSessionController.shared.prepareCoachRemoteForPartnerDurationSelection()
+        currentJoinCode = nil
+        displaySessionState = nil
+        partnerDisplaySurfaceId = UUID()
+        clearRecordedCoachRelayJoinCode()
+        sessionCalibrationResolved = false
+        sessionCalibrationAverageTravelTime = nil
+        sessionCalibrationMode = nil
+        trackedRelaySessionId = nil
+        lastKnownValidRelaySessionId = nil
+        clearSoftResumeInterruptionState()
+        relayLifecycleBanner = .hidden
+        CurrentSessionStore.shared.clear()
+        relayDisplaySession.tearDown()
+        coachRelayRemoteService.disconnect()
+        ConnectionManager.shared.stopHosting()
+        ConnectionManager.shared.stopBrowsing()
     }
 
     private func handleIncomingPartnerTrainingEndedFromPeer() {

@@ -100,7 +100,7 @@ See the Game. Train the decision.
 ## Contact
 
 - **Developer**: Orlando Valle
-- **Support Email**: orlandovalle860@gmail.com
+- **Support Email**: support@infinite-football.com
 - **Privacy Policy URL**: https://orlandovalle860.github.io/Infinite-Football-Scanning-Pro/privacy_policy.html
 
 ## App Review Notes
@@ -121,4 +121,4 @@ The app may transmit training session data using an anonymous identifier before 
 
 Privacy Policy: https://orlandovalle860.github.io/Infinite-Football-Scanning-Pro/privacy_policy.html
 
-Contact: orlandovalle860@gmail.com
+Contact: support@infinite-football.com

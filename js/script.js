@@ -726,7 +726,7 @@ document.addEventListener('DOMContentLoaded', function() {
     - Performance optimizations
     
     🛠️ Built with premium quality standards
-    📧 Contact: support@infinitefootball.com
+    📧 Contact: support@infinite-football.com
     
     Enjoy the premium experience! 🏈
     `);

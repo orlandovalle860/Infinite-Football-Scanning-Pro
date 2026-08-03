@@ -158,7 +158,7 @@ The website is fully responsive and optimized for:
 ## 📞 Support
 
 For questions or customization help:
-- **Email**: orlandovalle860@gmail.com
+- **Email**: support@infinite-football.com
 - **Business Hours**: Monday-Friday 9:00 AM - 6:00 PM
 
 ## 📄 License

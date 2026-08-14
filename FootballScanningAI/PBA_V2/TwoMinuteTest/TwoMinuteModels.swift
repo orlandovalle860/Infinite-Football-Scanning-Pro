@@ -91,6 +91,17 @@ enum TwoMinuteMessage: Codable {
     case timedSessionInactive(timestamp: Date)
     /// Display → coach: instruction / countdown cue finished — coach may show TAP TO START.
     case displayRepEngineReady(activityId: String, timestamp: Date)
+    /// Display → coach: authoritative live-session state after reconnect (not a new setup event).
+    case partnerSessionSnapshot(
+        activityId: String,
+        timedSessionActive: Bool,
+        displayRepEngineReady: Bool,
+        countdownFinished: Bool,
+        repIndex: Int?,
+        timestamp: Date
+    )
+    /// Coach → display: ask the iPad to re-send ``partnerSessionSnapshot``.
+    case requestPartnerSessionSnapshot(timestamp: Date)
     /// Coach → display: discard finished block, reset rep 0, dismiss results; same session / connection. Wire kind: `startNextBlock`.
     case startNextBlock(timestamp: Date)
     /// Coach → display: switch timed-session activity (coach remote owns selection).
@@ -108,6 +119,9 @@ enum TwoMinuteMessage: Codable {
         case relaySessionId
         case averageTravelTimeSeconds
         case totalReps
+        case isTimedSessionActive
+        case isDisplayRepEngineReady
+        case countdownFinished
     }
 
     init(from decoder: Decoder) throws {
@@ -177,6 +191,17 @@ enum TwoMinuteMessage: Codable {
                 activityId: try c.decode(String.self, forKey: .activityId),
                 timestamp: try c.decode(Date.self, forKey: .timestamp)
             )
+        case "partnerSessionSnapshot":
+            self = .partnerSessionSnapshot(
+                activityId: try c.decode(String.self, forKey: .activityId),
+                timedSessionActive: try c.decode(Bool.self, forKey: .isTimedSessionActive),
+                displayRepEngineReady: try c.decode(Bool.self, forKey: .isDisplayRepEngineReady),
+                countdownFinished: try c.decode(Bool.self, forKey: .countdownFinished),
+                repIndex: try c.decodeIfPresent(Int.self, forKey: .repIndex),
+                timestamp: try c.decode(Date.self, forKey: .timestamp)
+            )
+        case "requestPartnerSessionSnapshot":
+            self = .requestPartnerSessionSnapshot(timestamp: try c.decode(Date.self, forKey: .timestamp))
         case "startNextBlock":
             self = .startNextBlock(timestamp: try c.decode(Date.self, forKey: .timestamp))
         case "activityChanged":
@@ -264,6 +289,24 @@ enum TwoMinuteMessage: Codable {
             try c.encode("displayRepEngineReady", forKey: .kind)
             try c.encode(activityId, forKey: .activityId)
             try c.encode(timestamp, forKey: .timestamp)
+        case .partnerSessionSnapshot(
+            let activityId,
+            let timedSessionActive,
+            let displayRepEngineReady,
+            let countdownFinished,
+            let repIndex,
+            let timestamp
+        ):
+            try c.encode("partnerSessionSnapshot", forKey: .kind)
+            try c.encode(activityId, forKey: .activityId)
+            try c.encode(timedSessionActive, forKey: .isTimedSessionActive)
+            try c.encode(displayRepEngineReady, forKey: .isDisplayRepEngineReady)
+            try c.encode(countdownFinished, forKey: .countdownFinished)
+            try c.encodeIfPresent(repIndex, forKey: .repIndex)
+            try c.encode(timestamp, forKey: .timestamp)
+        case .requestPartnerSessionSnapshot(let timestamp):
+            try c.encode("requestPartnerSessionSnapshot", forKey: .kind)
+            try c.encode(timestamp, forKey: .timestamp)
         case .startNextBlock(let timestamp):
             try c.encode("startNextBlock", forKey: .kind)
             try c.encode(timestamp, forKey: .timestamp)
@@ -281,7 +324,7 @@ extension TwoMinuteMessage {
         switch self {
         case .nextRep, .passTriggered, .exitLogged, .firstTouchLogged, .incorrectDecision:
             return true
-        case .repStarted, .beepArmed, .coachPaired, .sessionEnded, .partnerTrainingEnded, .partnerSessionCheckpoint, .calibrationPassTapped, .calibrationArrivalTapped, .calibrationFinished, .sessionStarted, .timedSessionActive, .timedSessionInactive, .displayRepEngineReady, .startNextBlock, .activityChanged:
+        case .repStarted, .beepArmed, .coachPaired, .sessionEnded, .partnerTrainingEnded, .partnerSessionCheckpoint, .calibrationPassTapped, .calibrationArrivalTapped, .calibrationFinished, .sessionStarted, .timedSessionActive, .timedSessionInactive, .displayRepEngineReady, .partnerSessionSnapshot, .requestPartnerSessionSnapshot, .startNextBlock, .activityChanged:
             return false
         }
     }

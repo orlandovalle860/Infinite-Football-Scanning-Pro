@@ -439,6 +439,7 @@ final class TimedSessionController: ObservableObject {
             } else {
                 // End Session / Home: drop the timed shell immediately so the next coach
                 // `sessionStarted` can navigate from Connected standby (pairing stays live).
+                PartnerSetupLog.display("display timed session cleared completion=\(completionType) showsSummary=false")
                 releaseShellAfterEndWithoutSummary(then: onPersisted)
             }
             return

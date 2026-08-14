@@ -843,7 +843,7 @@ struct DribbleOrPassDisplaySessionView: View {
             break
         case .startNextBlock:
             break
-        case .timedSessionActive, .timedSessionInactive, .displayRepEngineReady, .activityChanged:
+        case .timedSessionActive, .timedSessionInactive, .displayRepEngineReady, .activityChanged, .partnerSessionSnapshot, .requestPartnerSessionSnapshot:
             break
         }
     }
@@ -1248,6 +1248,7 @@ struct DribbleOrPassDisplaySessionView: View {
             && sessionTransportMode == .relayWebSocket
             && !partnerRelaySession.isCoachPaired
             && !TrainingPartnerConnectionCoordinator.shared.isMidSessionPartnerDisconnect
+            && !TrainingPartnerConnectionCoordinator.shared.shouldSuppressDisplaySetupOverlayForLiveTimedSession
     }
 
     /// Partner: countdown only after coach is connected (Multipeer) or paired on relay. Solo: always ready.
@@ -1811,7 +1812,9 @@ struct DribbleOrPassDisplaySessionView: View {
 
     @ViewBuilder
     private var waitingForCoachRelayOverlay: some View {
-        if shouldShowRelayWaiting {
+        if TrainingPartnerConnectionCoordinator.shared.shouldShowDisplayCoachReconnectRecoveryCode {
+            PartnerRelayCoachReconnectRecoveryOverlay(joinCode: partnerRelaySession.joinCode)
+        } else if shouldShowRelayWaiting {
             PartnerRelayDisplayWaitingOverlay(
                 joinCode: partnerRelaySession.joinCode,
                 activityTitle: "Dribble or Pass",

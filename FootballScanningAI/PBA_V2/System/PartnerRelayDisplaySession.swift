@@ -18,7 +18,8 @@ final class PartnerRelayDisplaySession: ObservableObject {
     @Published private(set) var joinCode: String?
     /// Relay WebSocket lifecycle (searching … connected … disconnected).
     @Published private(set) var socketConnectionState: ConnectionState = .disconnected
-    /// `true` after `control.peer_joined`, `false` after `peer_left` or socket disconnect.
+    /// `true` after `control.peer_joined` or `control.ack` with `peerPresent: true`.
+    /// Cleared immediately on `peer_left`, `stopHosting()`, or `tearDown()`; on socket disconnect, cleared only after a 1.5s debounce if still disconnected.
     @Published private(set) var isCoachPaired: Bool = false
     /// Relay server session id (HTTP/WebSocket config); used for reconnect checkpoint logging.
     @Published private(set) var relaySessionId: String?
@@ -28,6 +29,18 @@ final class PartnerRelayDisplaySession: ObservableObject {
     /// Used to avoid treating intentional ``tearDown()`` disconnects as unexpected drops.
     private var lastSocketStateForRecycle: ConnectionState = .disconnected
     private var relayDisconnectRecycleTask: Task<Void, Never>?
+    /// Delay clearing ``isCoachPaired`` on socket drop so a hotspot blip does not restart 3–2–1 / waiting overlay.
+    private var unpairedDebounceTask: Task<Void, Never>?
+    private static let unpairedDebounceNanoseconds: UInt64 = 1_500_000_000
+    /// Legacy/race: `DISPLAY_ALREADY_CONNECTED` should be rare after same-token relay replace; keep bounded reconnect.
+    private var displayAlreadyConnectedRetryTask: Task<Void, Never>?
+    private var displayAlreadyConnectedRetryCount = 0
+    private static let displayAlreadyConnectedMaxRetries = 3
+    private static let displayAlreadyConnectedBackoffNs: [UInt64] = [
+        2_000_000_000,
+        5_000_000_000,
+        10_000_000_000,
+    ]
 
     /// Mirror into the activity’s pairing flag (e.g. `TwoMinuteSessionManager.setConnected`).
     var onCoachPairingChanged: ((Bool) -> Void)?
@@ -66,6 +79,7 @@ final class PartnerRelayDisplaySession: ObservableObject {
             let created = try await WebSocketSessionAPI.createSession()
             await MainActor.run {
                 joinCode = created.joinCode
+                PartnerSetupLog.display("new relay room created joinSuffix=\(PartnerSetupLog.joinCodeSuffix(created.joinCode)) \(PartnerSetupLog.activityTag())")
             }
             #if DEBUG
             print("[RelayWS-DEBUG] session creation OK sessionId=\(created.sessionId)")
@@ -136,6 +150,9 @@ final class PartnerRelayDisplaySession: ObservableObject {
     func startDisplaySessionIfNeeded() async {
         if let t = transport, joinCode != nil {
             if hasActiveRelayInFlightOrLive {
+                await MainActor.run {
+                    PartnerSetupLog.display("reconnect preserve live relay socket=\(socketConnectionState.rawValue) joinSuffix=\(PartnerSetupLog.joinCodeSuffix(joinCode)) \(PartnerSetupLog.activityTag())")
+                }
                 #if DEBUG
                 print("[RelayWS-DEBUG] PartnerRelayDisplaySession.startDisplaySessionIfNeeded — reusing active relay (socket=\(socketConnectionState.rawValue), same join code)")
                 PartnerPersistDebug.log("startDisplaySessionIfNeeded → reuse existing relay (socket active/in-flight)")
@@ -144,6 +161,7 @@ final class PartnerRelayDisplaySession: ObservableObject {
             }
             if socketConnectionState == .disconnected {
                 await MainActor.run {
+                    PartnerSetupLog.display("reconnect preserve existing session socket=disconnected joinSuffix=\(PartnerSetupLog.joinCodeSuffix(joinCode)) \(PartnerSetupLog.activityTag())")
                     #if DEBUG
                     print("[RelayWS-DEBUG] PartnerRelayDisplaySession.startDisplaySessionIfNeeded — reconnecting existing transport (same join code, was disconnected)")
                     PartnerPersistDebug.log("startDisplaySessionIfNeeded → reconnect existing transport (was disconnected)")
@@ -166,11 +184,12 @@ final class PartnerRelayDisplaySession: ObservableObject {
     /// Does **not** clear `joinCode` / `relaySessionId`; use ``resetSession()`` for a full new session.
     func stopHosting() {
         cancelRelayDisconnectRecycleTask()
+        cancelUnpairedDebounceTask()
+        resetDisplayAlreadyConnectedRetryState()
         lastSocketStateForRecycle = .disconnected
         transport?.disconnect()
         socketConnectionState = .disconnected
-        isCoachPaired = false
-        onCoachPairingChanged?(false)
+        applyCoachUnpaired(notify: true)
     }
 
     /// Full relay reset: tear down local state and create a **new** HTTP session (new `relaySessionId` + join code).
@@ -203,19 +222,48 @@ final class PartnerRelayDisplaySession: ObservableObject {
     /// Disconnects socket and clears relay UI state.
     func tearDown() {
         cancelRelayDisconnectRecycleTask()
+        cancelUnpairedDebounceTask()
+        resetDisplayAlreadyConnectedRetryState()
         lastSocketStateForRecycle = .disconnected
         transport?.disconnect()
         transport = nil
         joinCode = nil
         relaySessionId = nil
         socketConnectionState = .disconnected
-        isCoachPaired = false
-        onCoachPairingChanged?(false)
+        applyCoachUnpaired(notify: true)
     }
 
     func cancelRelayDisconnectRecycleTask() {
         relayDisconnectRecycleTask?.cancel()
         relayDisconnectRecycleTask = nil
+    }
+
+    private func cancelUnpairedDebounceTask() {
+        if unpairedDebounceTask != nil {
+            PartnerSetupLog.display("unpairedDebounce cancelled \(PartnerSetupLog.activityTag())")
+        }
+        unpairedDebounceTask?.cancel()
+        unpairedDebounceTask = nil
+    }
+
+    @MainActor
+    private func applyCoachPaired() {
+        cancelUnpairedDebounceTask()
+        guard !isCoachPaired else { return }
+        isCoachPaired = true
+        PartnerSetupLog.display("isCoachPaired false→true \(PartnerSetupLog.activityTag())")
+        onCoachPairingChanged?(true)
+    }
+
+    @MainActor
+    private func applyCoachUnpaired(notify: Bool) {
+        cancelUnpairedDebounceTask()
+        guard isCoachPaired else { return }
+        isCoachPaired = false
+        PartnerSetupLog.display("isCoachPaired true→false \(PartnerSetupLog.activityTag())")
+        if notify {
+            onCoachPairingChanged?(false)
+        }
     }
 
     /// Tear down the expired relay and create a fresh display session (new join code).
@@ -242,23 +290,49 @@ final class PartnerRelayDisplaySession: ObservableObject {
 
     @MainActor
     private func applySocketConnectionState(_ state: ConnectionState) {
-        let wasConnected = lastSocketStateForRecycle == .connected
+        let previous = lastSocketStateForRecycle
+        let wasConnected = previous == .connected
         lastSocketStateForRecycle = state
         socketConnectionState = state
+        if state == .connected || state == .disconnected, previous != state {
+            PartnerSetupLog.display("socket \(previous.rawValue)→\(state.rawValue) paired=\(isCoachPaired) \(PartnerSetupLog.activityTag())")
+        }
         if state == .disconnected {
-            isCoachPaired = false
-            onCoachPairingChanged?(false)
+            scheduleCoachUnpairedAfterTransientDisconnectIfNeeded()
             if wasConnected {
                 scheduleDisplayRelayRecycleAfterUnexpectedDisconnectIfNeeded()
             }
         } else if state == .connected {
+            cancelUnpairedDebounceTask()
             cancelRelayDisconnectRecycleTask()
+            resetDisplayAlreadyConnectedRetryState()
+            PartnerSetupLog.display(
+                "snapshot sent after replacement-or-reconnect joinSuffix=\(PartnerSetupLog.joinCodeSuffix(joinCode)) \(PartnerSetupLog.activityTag())"
+            )
+            TrainingPartnerConnectionCoordinator.shared.broadcastPartnerSessionSnapshotFromDisplay(reason: "socket_connected")
             TrainingPartnerConnectionCoordinator.shared.rebroadcastTimedSessionActiveFromDisplayIfNeeded()
             TrainingPartnerConnectionCoordinator.shared.rebroadcastDisplayRepEngineReadyFromDisplayIfNeeded()
         }
     }
 
-    /// When the relay drops while the app is active (e.g. server expired the session), player iPad gets a new join code after a short debounce.
+    /// Keep ``isCoachPaired`` through a short socket drop so countdown / setup does not restart.
+    @MainActor
+    private func scheduleCoachUnpairedAfterTransientDisconnectIfNeeded() {
+        guard isCoachPaired else { return }
+        cancelUnpairedDebounceTask()
+        PartnerSetupLog.display("unpairedDebounce scheduled 1.5s \(PartnerSetupLog.activityTag())")
+        unpairedDebounceTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: Self.unpairedDebounceNanoseconds)
+            guard !Task.isCancelled else { return }
+            guard socketConnectionState == .disconnected else { return }
+            unpairedDebounceTask = nil
+            PartnerSetupLog.display("unpairedDebounce fired \(PartnerSetupLog.activityTag())")
+            applyCoachUnpaired(notify: true)
+        }
+    }
+
+    /// When the relay drops while the app is active, wait 1.5s then reconnect.
+    /// If a timed session is already managing, the existing join code is reused; otherwise a new room may be minted.
     @MainActor
     private func scheduleDisplayRelayRecycleAfterUnexpectedDisconnectIfNeeded() {
         guard CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
@@ -287,19 +361,79 @@ final class PartnerRelayDisplaySession: ObservableObject {
     }
 
     private func handleRawRelayText(_ text: String) {
-        if text.contains("peer_joined") {
+        if text.contains("control.error") || text.contains("\"type\":\"control.error\"") {
             Task { @MainActor in
-                isCoachPaired = true
-                onCoachPairingChanged?(true)
-                TrainingPartnerConnectionCoordinator.shared.rebroadcastTimedSessionActiveFromDisplayIfNeeded()
-                TrainingPartnerConnectionCoordinator.shared.rebroadcastDisplayRepEngineReadyFromDisplayIfNeeded()
+                handleRelayControlErrorText(text)
             }
         }
         if text.contains("peer_left") {
             Task { @MainActor in
-                isCoachPaired = false
-                onCoachPairingChanged?(false)
+                applyCoachUnpaired(notify: true)
+            }
+            return
+        }
+        let ackShowsPeerPresent = text.contains("\"peerPresent\":true")
+            || text.contains("\"peerPresent\": true")
+        if text.contains("peer_joined") || ackShowsPeerPresent {
+            Task { @MainActor in
+                applyCoachPaired()
+                TrainingPartnerConnectionCoordinator.shared.broadcastPartnerSessionSnapshotFromDisplay(reason: "peer_joined_or_ack")
+                TrainingPartnerConnectionCoordinator.shared.rebroadcastTimedSessionActiveFromDisplayIfNeeded()
+                TrainingPartnerConnectionCoordinator.shared.rebroadcastDisplayRepEngineReadyFromDisplayIfNeeded()
             }
         }
+    }
+
+    @MainActor
+    private func handleRelayControlErrorText(_ text: String) {
+        let code: String
+        if text.contains("DISPLAY_ALREADY_CONNECTED") {
+            code = "DISPLAY_ALREADY_CONNECTED"
+        } else if text.contains("INVALID_TOKEN") {
+            code = "INVALID_TOKEN"
+        } else if text.contains("SESSION_NOT_FOUND") {
+            code = "SESSION_NOT_FOUND"
+        } else if text.contains("SESSION_EXPIRED") {
+            code = "SESSION_EXPIRED"
+        } else {
+            code = "UNKNOWN"
+        }
+        PartnerSetupLog.display(
+            "relay control.error code=\(code) joinSuffix=\(PartnerSetupLog.joinCodeSuffix(joinCode)) \(PartnerSetupLog.activityTag())"
+        )
+        guard code == "DISPLAY_ALREADY_CONNECTED" else { return }
+        // Same-token reclaim on current relay makes this obsolete; keep bounded retry for older relays / races.
+        scheduleDisplayAlreadyConnectedRetryIfNeeded()
+    }
+
+    @MainActor
+    private func scheduleDisplayAlreadyConnectedRetryIfNeeded() {
+        guard transport != nil, joinCode != nil else { return }
+        guard displayAlreadyConnectedRetryCount < Self.displayAlreadyConnectedMaxRetries else {
+            PartnerSetupLog.display(
+                "DISPLAY_ALREADY_CONNECTED retries exhausted max=\(Self.displayAlreadyConnectedMaxRetries) joinSuffix=\(PartnerSetupLog.joinCodeSuffix(joinCode))"
+            )
+            return
+        }
+        let attempt = displayAlreadyConnectedRetryCount
+        let delay = Self.displayAlreadyConnectedBackoffNs[min(attempt, Self.displayAlreadyConnectedBackoffNs.count - 1)]
+        displayAlreadyConnectedRetryTask?.cancel()
+        displayAlreadyConnectedRetryTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: delay)
+            guard !Task.isCancelled else { return }
+            guard socketConnectionState == .disconnected else { return }
+            guard let t = transport else { return }
+            displayAlreadyConnectedRetryCount += 1
+            PartnerSetupLog.display(
+                "DISPLAY_ALREADY_CONNECTED retry attempt=\(displayAlreadyConnectedRetryCount)/\(Self.displayAlreadyConnectedMaxRetries) joinSuffix=\(PartnerSetupLog.joinCodeSuffix(joinCode))"
+            )
+            t.connect()
+        }
+    }
+
+    private func resetDisplayAlreadyConnectedRetryState() {
+        displayAlreadyConnectedRetryTask?.cancel()
+        displayAlreadyConnectedRetryTask = nil
+        displayAlreadyConnectedRetryCount = 0
     }
 }

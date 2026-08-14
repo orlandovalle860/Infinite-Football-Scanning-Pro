@@ -82,7 +82,9 @@ struct CoachRemoteHubView: View {
 
     var body: some View {
         Group {
-            if coachLinkReadyForActivities {
+            if partnerCoordinator.shouldShowCoachReconnectingToDisplay {
+                coachReconnectingRecoveryStack
+            } else if coachLinkReadyForActivities {
                 activitySelectionStack
             } else {
                 CoachRemoteHubRelayPairingView()
@@ -152,6 +154,7 @@ struct CoachRemoteHubView: View {
         .onAppear {
             partnerSessionActive = TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive
             Task {
+                await partnerCoordinator.attemptColdStartPartnerCoachResumeIfNeeded()
                 await partnerCoordinator.attemptCoachRelayAutoReconnectFromStoredJoinCodeIfNeeded(reason: "coach_hub_onAppear")
             }
             openCoachRemoteForLiveTimedSessionIfNeeded()
@@ -221,6 +224,10 @@ struct CoachRemoteHubView: View {
     /// Display started / resumed a timed partner session (e.g. Train Again) — open the matching coach remote from the hub.
     private func openCoachRemoteForLiveTimedSessionIfNeeded() {
         guard partnerCoordinator.isPartnerTrainingSessionActive else { return }
+        guard !partnerCoordinator.shouldSuppressLiveTimedSessionRecovery else {
+            PartnerSetupLog.coach("recovery suppressed because session intentionally ended — skip auto-open activity")
+            return
+        }
         guard CoachRemoteHubLaunchPolicy.canOpenActivitySelection else { return }
         guard isOnCoachHubSurface else { return }
         guard let activityId = partnerCoordinator.currentTimedSessionActivityId,
@@ -256,6 +263,26 @@ struct CoachRemoteHubView: View {
             router.popLast()
         }
         router.push(item.route)
+    }
+
+    private var coachReconnectingRecoveryStack: some View {
+        VStack(spacing: 20) {
+            Spacer()
+            ProgressView()
+                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                .scaleEffect(1.2)
+            Text(CoachRemoteCopy.reconnectingToPlayerDisplay)
+                .font(.title3.weight(.semibold))
+                .foregroundColor(.white)
+                .multilineTextAlignment(.center)
+            Text("Restoring the same live session — no new join code needed.")
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.7))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 28)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var activitySelectionStack: some View {

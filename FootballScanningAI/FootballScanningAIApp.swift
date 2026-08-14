@@ -26,6 +26,9 @@ struct FootballScanningAIApp: App {
 
         // Additional protection for outdoor use
         setupScreenProtection()
+
+        // Touch shared coordinator so cold-start resume observers are registered promptly.
+        _ = TrainingPartnerConnectionCoordinator.shared
     }
     
     private func setupScreenProtection() {

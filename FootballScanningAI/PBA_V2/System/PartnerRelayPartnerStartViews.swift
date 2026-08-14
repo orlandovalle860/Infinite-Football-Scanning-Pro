@@ -395,3 +395,50 @@ struct PartnerRelayCoachJoinSection: View {
     }
 
 }
+
+// MARK: - Display: mid-session coach reconnect recovery (existing join code, not new setup)
+
+/// Compact recovery UI when the live timed session is still running but the coach is unpaired.
+/// Exposes the **same** join code for emergency re-pair — labeled as reconnect, not setup.
+struct PartnerRelayCoachReconnectRecoveryOverlay: View {
+    let joinCode: String?
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Spacer()
+            VStack(spacing: 10) {
+                Text("Coach reconnect")
+                    .font(.headline.weight(.semibold))
+                    .foregroundColor(.white)
+                Text("Session still live — coach can reconnect with this code. Not a new setup.")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.75))
+                    .multilineTextAlignment(.center)
+                if let code = joinCode, !code.isEmpty {
+                    Text(code)
+                        .font(.system(size: 40, weight: .bold, design: .monospaced))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(Color.cyan.opacity(0.22))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .stroke(Color.cyan.opacity(0.85), lineWidth: 1.5)
+                                )
+                        )
+                }
+            }
+            .padding(20)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.black.opacity(0.72))
+            )
+            .padding(.horizontal, 24)
+            .padding(.bottom, 36)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .allowsHitTesting(false)
+    }
+}

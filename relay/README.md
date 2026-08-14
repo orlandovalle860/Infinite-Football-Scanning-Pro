@@ -35,7 +35,7 @@ Default: **HTTP** `http://127.0.0.1:3000`, **WebSocket** `ws://127.0.0.1:3000/ws
 | `HOST` | `0.0.0.0` | Bind address (`127.0.0.1` if only the reverse proxy on the same machine connects) |
 | `PUBLIC_WS_URL` | `ws://<host>:<port>/ws` (derived) | **Canonical WebSocket base** returned in JSON as `wsUrl` (see `normalizeRelayWsUrl()` in `server.js`). **Must** be set to your public `wss://…` URL in production. |
 | `ROOM_TTL_MS` | `86400000` (24h) | Session expiry from creation |
-| `EMPTY_ROOM_GRACE_MS` | `300000` (5m) | After both peers disconnect, delete room after this delay |
+| `EMPTY_ROOM_GRACE_MS` | `900000` (15m) | After both peers disconnect, delete room after this delay (field walk-away / dual-drop) |
 
 Template for production: copy `relay/.env.production.example` and adjust values on the server.
 
@@ -72,6 +72,12 @@ websocat "ws://127.0.0.1:3000/ws?sessionId=SESSION_ID&role=coach&token=COACH_TOK
 ```
 
 You should see `control.ack` on each side; when both are up, `control.peer_joined`. JSON text messages from one side appear on the other (opaque relay).
+
+### Same-token display reconnect
+
+If the display WebSocket dies uncleanly (Personal Hotspot walk-away) and reconnects with the **same** `sessionId` + `displayToken` while the old socket is still registered, the relay **replaces** the stale display socket immediately. Room, join code, and coach socket are preserved. A different token cannot steal the slot (`INVALID_TOKEN`).
+
+Heartbeat stays **30s** for true dead-peer cleanup; same-token reclaim does not wait for it.
 
 Health check:
 

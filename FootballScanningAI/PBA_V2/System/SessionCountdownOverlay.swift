@@ -57,13 +57,20 @@ struct SessionCountdownModifier: ViewModifier {
             }
             syncCoachMessageSuppression(countdownValue: countdown)
         }
-        .onChange(of: partnerReady) { _, ready in
+        .onChange(of: partnerReady) { wasReady, ready in
+            PartnerSetupLog.display("partnerReadyForCountdown \(wasReady)→\(ready) hasStartedCountdown=\(hasStartedCountdown) hasFinishedInitialCountdown=\(hasFinishedInitialCountdown) countdown=\(countdown.map(String.init) ?? "nil") \(PartnerSetupLog.activityTag())")
             guard waitForPartnerReady else { return }
             if !ready {
+                // Once 3–2–1 has started, finish it. A brief relay blip used to cancel
+                // and re-arm the countdown forever while the coach waited on setup.
+                if hasStartedCountdown, !hasFinishedInitialCountdown {
+                    return
+                }
+                PartnerSetupLog.display("countdown cancelled \(PartnerSetupLog.activityTag())")
                 cancelCountdownTask()
                 countdown = nil
                 syncCoachMessageSuppression(countdownValue: nil)
-                // Before the first "Go" completes, allow a fresh 3–2–1 after reconnect; after that, never re-arm mid-block.
+                // Before the first "Go" completes, allow a fresh 3–2–1 after a true unpaired wait; after that, never re-arm mid-block.
                 if !hasFinishedInitialCountdown {
                     hasStartedCountdown = false
                 }
@@ -103,6 +110,7 @@ struct SessionCountdownModifier: ViewModifier {
         countdownScheduleToken = UUID()
         let token = countdownScheduleToken
         countdown = 3
+        PartnerSetupLog.display("countdown start \(PartnerSetupLog.activityTag())")
         Task { @MainActor in
             var remaining = 3
             while remaining > 0 {
@@ -115,6 +123,7 @@ struct SessionCountdownModifier: ViewModifier {
             guard countdownScheduleToken == token else { return }
             countdown = nil
             hasFinishedInitialCountdown = true
+            PartnerSetupLog.display("countdown finish \(PartnerSetupLog.activityTag())")
         }
     }
 }

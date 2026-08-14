@@ -551,7 +551,7 @@ struct OneTouchPassingDisplaySessionView: View {
             break
         case .startNextBlock:
             break
-        case .timedSessionActive, .timedSessionInactive, .displayRepEngineReady, .activityChanged:
+        case .timedSessionActive, .timedSessionInactive, .displayRepEngineReady, .activityChanged, .partnerSessionSnapshot, .requestPartnerSessionSnapshot:
             break
         }
     }
@@ -651,6 +651,7 @@ struct OneTouchPassingDisplaySessionView: View {
             && sessionTransportMode == .relayWebSocket
             && !partnerRelaySession.isCoachPaired
             && !TrainingPartnerConnectionCoordinator.shared.isMidSessionPartnerDisconnect
+            && !TrainingPartnerConnectionCoordinator.shared.shouldSuppressDisplaySetupOverlayForLiveTimedSession
     }
 
     /// Partner: countdown only after coach is connected (Multipeer) or paired on relay. Solo: always ready.
@@ -1471,7 +1472,9 @@ struct OneTouchPassingDisplaySessionView: View {
 
     @ViewBuilder
     private var waitingForCoachRelayOverlay: some View {
-        if shouldShowRelayWaiting {
+        if TrainingPartnerConnectionCoordinator.shared.shouldShowDisplayCoachReconnectRecoveryCode {
+            PartnerRelayCoachReconnectRecoveryOverlay(joinCode: partnerRelaySession.joinCode)
+        } else if shouldShowRelayWaiting {
             PartnerRelayDisplayWaitingOverlay(
                 joinCode: partnerRelaySession.joinCode,
                 activityTitle: "One-Touch Passing",
@@ -1536,6 +1539,8 @@ struct OneTouchPassingDisplaySessionView: View {
         case .timedSessionActive(let id, _): return "timedSessionActive(\(id))"
         case .timedSessionInactive: return "timedSessionInactive"
         case .displayRepEngineReady(let id, _): return "displayRepEngineReady(\(id))"
+        case .partnerSessionSnapshot: return "partnerSessionSnapshot"
+        case .requestPartnerSessionSnapshot: return "requestPartnerSessionSnapshot"
         }
     }
     #endif

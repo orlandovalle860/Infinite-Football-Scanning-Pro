@@ -81,21 +81,7 @@ struct WebSocketRelayJoinSessionResponse: Decodable {
 
     /// Full WebSocket URL with `sessionId`, `role=coach`, and `token` query parameters.
     func webSocketURLForCoach() throws -> URL {
-        guard let base = URL(string: wsUrl) else {
-            throw WebSocketSessionAPIError.invalidURL
-        }
-        guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
-            throw WebSocketSessionAPIError.invalidURL
-        }
-        var items = components.queryItems ?? []
-        items.append(URLQueryItem(name: "sessionId", value: sessionId))
-        items.append(URLQueryItem(name: "role", value: "coach"))
-        items.append(URLQueryItem(name: "token", value: coachToken))
-        components.queryItems = items
-        guard let url = components.url else {
-            throw WebSocketSessionAPIError.invalidURL
-        }
-        return url
+        try WebSocketSessionAPI.coachWebSocketURL(wsUrl: wsUrl, sessionId: sessionId, coachToken: coachToken)
     }
 }
 
@@ -108,6 +94,37 @@ enum WebSocketSessionAPIError: Error {
 enum WebSocketSessionAPI {
     /// Shown when HTTP join fails because the relay session or join code is no longer valid (e.g. expired).
     static let relayJoinCodeExpiredUserMessage = UserFacingErrorMessage.sessionExpiredReconnect
+
+    /// Build coach WS URL from stored public `wsUrl` + session credentials (no HTTP join).
+    static func coachWebSocketURL(wsUrl: String, sessionId: String, coachToken: String) throws -> URL {
+        guard let base = URL(string: wsUrl) else {
+            throw WebSocketSessionAPIError.invalidURL
+        }
+        guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
+            throw WebSocketSessionAPIError.invalidURL
+        }
+        var items = (components.queryItems ?? []).filter { item in
+            let name = item.name.lowercased()
+            return name != "sessionid" && name != "role" && name != "token"
+        }
+        items.append(URLQueryItem(name: "sessionId", value: sessionId))
+        items.append(URLQueryItem(name: "role", value: "coach"))
+        items.append(URLQueryItem(name: "token", value: coachToken))
+        components.queryItems = items
+        guard let url = components.url else {
+            throw WebSocketSessionAPIError.invalidURL
+        }
+        return url
+    }
+
+    static func parseRelayExpiresAt(_ raw: String?) -> Date? {
+        guard let raw, !raw.isEmpty else { return nil }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = iso.date(from: raw) { return d }
+        iso.formatOptions = [.withInternetDateTime]
+        return iso.date(from: raw)
+    }
 
     /// `true` when ``joinSession(joinCode:)`` failed because the join code is invalid or the relay session expired (404 / `INVALID_JOIN_CODE`).
     static func isInvalidOrExpiredJoinSessionError(_ error: Error) -> Bool {

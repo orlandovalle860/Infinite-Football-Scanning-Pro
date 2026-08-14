@@ -99,32 +99,17 @@ struct CoachRemoteHubRelayPairingView: View {
         }
         do {
             let joined = try await WebSocketSessionAPI.joinSession(joinCode: code)
-            let wsURL = try joined.webSocketURLForCoach()
-
-            TrainingPartnerConnectionCoordinator.shared.recordRelaySessionId(joined.sessionId)
-            let config = WebSocketSessionConfig(url: wsURL, sessionId: joined.sessionId, authToken: joined.coachToken)
-            let transport = WebSocketRemoteTransport(config: config)
-            let displayPeerJoinedBinding = $coachRelayDisplayPeerJoined
-            let remote = remoteService
-            transport.onRawTextReceived = { text in
-                TrainingPartnerConnectionCoordinator.shared.ingestCoachRelayRawControlText(text)
-                if text.contains("peer_joined") {
-                    Task { @MainActor in
-                        displayPeerJoinedBinding.wrappedValue = true
-                    }
-                }
-                if text.lowercased().contains("peer_left") {
-                    Task { @MainActor in
-                        displayPeerJoinedBinding.wrappedValue = false
-                        remote.disconnect()
-                    }
-                }
-            }
-
             await MainActor.run {
-                TrainingPartnerConnectionCoordinator.shared.recordCoachRelayJoinCode(code)
-                remoteService.replaceTransport(transport)
-                remoteService.connect()
+                TrainingPartnerConnectionCoordinator.shared.beginPartnerTrainingSessionIfNeeded()
+                TrainingPartnerConnectionCoordinator.shared.installCoachRelayAfterHTTPJoin(
+                    joinCode: code,
+                    sessionId: joined.sessionId,
+                    coachToken: joined.coachToken,
+                    wsUrl: joined.wsUrl,
+                    expiresAt: joined.expiresAt,
+                    connect: true
+                )
+                coachRelayDisplayPeerJoined = TrainingPartnerConnectionCoordinator.shared.coachRelayDisplayPeerPresent
                 coachRelayJoinBanner = nil
                 coachRelayJoinBusy = false
             }
@@ -152,14 +137,19 @@ struct CoachRemoteHubRelayPairingView: View {
     private func attemptCoachRelayAutoReconnectIfNeeded() {
         guard !didAttemptCoachRelayAutoReconnect else { return }
         let coord = TrainingPartnerConnectionCoordinator.shared
-        guard let code = coord.lastCoachRelayJoinCode?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !code.isEmpty,
-              !coord.isPartnerTransportLinkLive else {
-            return
-        }
+        guard !coord.isPartnerTransportLinkLive else { return }
+        let hasMemoryCode = !(coord.lastCoachRelayJoinCode?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        let hasPersisted = PartnerCoachResumeStore.loadCredentialsForReconnect() != nil
+        guard hasMemoryCode || hasPersisted else { return }
         didAttemptCoachRelayAutoReconnect = true
-        coachRelayJoinCodeInput = code
-        Task { await startCoachRelayJoin() }
+        if let code = coord.lastCoachRelayJoinCode, !code.isEmpty {
+            coachRelayJoinCodeInput = code
+        }
+        Task {
+            await TrainingPartnerConnectionCoordinator.shared.attemptCoachRelayAutoReconnectFromStoredJoinCodeIfNeeded(
+                reason: "hub_pairing_onAppear"
+            )
+        }
     }
 }
 

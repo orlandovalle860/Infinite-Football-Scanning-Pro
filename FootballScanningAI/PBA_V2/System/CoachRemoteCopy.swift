@@ -16,6 +16,12 @@ enum CoachRemoteCopy {
     /// Coach remote while display is still on instruction / countdown cue.
     static let waitingForDisplaySetup = "Waiting for player to finish setup…"
 
+    /// Coach remote while a live timed session has temporarily lost the display socket (hotspot / relay blip).
+    static let reconnectingToPlayerDisplay = "Reconnecting to player display…"
+
+    /// Coach hub while cold-starting into a persisted live Partner session.
+    static let restoringLivePartnerSession = "Restoring live session…"
+
     /// PASS step — timing input (after cue on Display). Same phrase as pre-block partner instructions.
     static let passTimingInstruction = ActivityInstructionData.partnerCoachPassTimingLine
 

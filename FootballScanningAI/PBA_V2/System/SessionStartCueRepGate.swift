@@ -264,7 +264,10 @@ enum SessionStartCueRepGate {
         guard shouldBroadcastDisplayRepEngineReady else { return }
         guard TimedSessionController.shared.mode == .partner else { return }
         guard CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
-        guard !TrainingPartnerConnectionCoordinator.shared.isPartnerDisplayCountdownActive else { return }
+        guard !TrainingPartnerConnectionCoordinator.shared.isPartnerDisplayCountdownActive else {
+            PartnerSetupLog.display("displayRepEngineReady skipped isPartnerDisplayCountdownActive=true \(PartnerSetupLog.activityTag())")
+            return
+        }
         guard let activity = TimedSessionController.shared.currentActivity else { return }
         TrainingPartnerConnectionCoordinator.shared.broadcastDisplayRepEngineReadyFromDisplay(activity: activity)
     }

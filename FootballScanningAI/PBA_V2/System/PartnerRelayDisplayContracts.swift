@@ -411,8 +411,11 @@ private enum PartnerLinkPassiveStatusFormatting {
         if relaySocket == .connected && relayCoachPaired {
             return "Connected to coach"
         }
+        let liveTimed = TimedSessionController.shared.mode == .partner
+            && TimedSessionController.shared.isManagingSession
+            && TimedSessionController.shared.isSessionActive
         if relaySocket == .searching || relaySocket == .connecting || (relaySocket == .connected && !relayCoachPaired) {
-            return "Waiting for coach..."
+            return liveTimed ? "Reconnecting..." : "Waiting for coach..."
         }
         if multipeerState == .searching || multipeerState == .connecting {
             return "Waiting for coach..."

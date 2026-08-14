@@ -12,6 +12,8 @@ import {
   claimCoachSlot,
   attachSocket,
   detachSocket,
+  sessionSuffix,
+  joinSuffix,
 } from './roomStore.js';
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -177,10 +179,20 @@ wss.on('connection', (ws, _req, url) => {
   }
 
   let room;
+  let replacedPriorDisplay = false;
+  let replacedPriorCoach = false;
   try {
-    room = attachSocket(sessionId, role, token, ws);
+    const attached = attachSocket(sessionId, role, token, ws);
+    room = attached.room;
+    replacedPriorDisplay = !!attached.replacedPriorDisplay;
+    replacedPriorCoach = !!attached.replacedPriorCoach;
   } catch (e) {
     const code = e.code || 'ATTACH_FAILED';
+    if (code === 'DISPLAY_ALREADY_CONNECTED' || code === 'COACH_ALREADY_CONNECTED') {
+      console.log(
+        `[PartnerSetup] ${code} legitimate rejection sessionSuffix=${sessionSuffix(sessionId)} role=${role}`
+      );
+    }
     safeJsonSend(ws, {
       type: 'control.error',
       code,
@@ -188,6 +200,17 @@ wss.on('connection', (ws, _req, url) => {
     });
     ws.close(4401, code);
     return;
+  }
+
+  if (replacedPriorDisplay) {
+    console.log(
+      `[PartnerSetup] coach preserved after display replace sessionSuffix=${sessionSuffix(room.sessionId)} joinSuffix=${joinSuffix(room.joinCode)} coachConnected=${!!(room.coachSocket && room.coachSocket.readyState === WebSocket.OPEN)}`
+    );
+  }
+  if (replacedPriorCoach) {
+    console.log(
+      `[PartnerSetup] display preserved after coach replace sessionSuffix=${sessionSuffix(room.sessionId)} joinSuffix=${joinSuffix(room.joinCode)} displayConnected=${!!(room.displaySocket && room.displaySocket.readyState === WebSocket.OPEN)}`
+    );
   }
 
   ws.isAlive = true;
@@ -210,6 +233,7 @@ wss.on('connection', (ws, _req, url) => {
     sendControl(peer, { type: 'control.peer_joined', sessionId: room.sessionId });
   }
 
+  // Heartbeat stays 30s: same-token display reclaim no longer waits for zombie reap.
   const heartbeat = setInterval(() => {
     if (ws.isAlive === false) {
       clearInterval(heartbeat);
@@ -229,6 +253,21 @@ wss.on('connection', (ws, _req, url) => {
     if (cleanedUp) return;
     cleanedUp = true;
     clearInterval(heartbeat);
+
+    // Replaced by a newer same-token peer: do not clear the new socket or emit a teardown peer_left.
+    if (ws.__relayReplacedByNewer) {
+      console.log(
+        `[PartnerSetup] old ${role} socket closed after replacement sessionSuffix=${sessionSuffix(room.sessionId)}`
+      );
+      return;
+    }
+
+    const stillCurrent =
+      role === 'display' ? room.displaySocket === ws : room.coachSocket === ws;
+    if (!stillCurrent) {
+      return;
+    }
+
     const other = role === 'display' ? room.coachSocket : room.displaySocket;
     detachSocket(room, role);
     if (other && other.readyState === WebSocket.OPEN) {

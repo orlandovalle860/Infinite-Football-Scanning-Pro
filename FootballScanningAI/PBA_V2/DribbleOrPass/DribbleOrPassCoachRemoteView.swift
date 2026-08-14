@@ -336,11 +336,11 @@ struct DribbleOrPassCoachRemoteView: View {
 
     private var readyView: some View {
         VStack(spacing: 20) {
-            if !coachSessionConnected, timedSession.isSessionActive {
+            if partnerCoordinator.shouldShowCoachReconnectingToDisplay {
                 CoachRemoteWaitingForDisplaySessionView(
                     headerTitle: "Coach — \(ActivityKind.dribbleOrPass.displayName)",
-                    transportConnected: false,
-                    statusMessage: "Reconnecting to session…"
+                    transportConnected: coachSessionConnected,
+                    statusMessage: CoachRemoteCopy.reconnectingToPlayerDisplay
                 )
             } else if !coachSessionConnected {
                 connectionSection
@@ -351,9 +351,7 @@ struct DribbleOrPassCoachRemoteView: View {
                 CoachRemoteWaitingForDisplaySessionView(
                     headerTitle: "Coach — \(ActivityKind.dribbleOrPass.displayName)",
                     transportConnected: coachSessionConnected,
-                    statusMessage: partnerCoordinator.isPartnerRelayReconnecting
-                        ? "Reconnecting to session…"
-                        : CoachRemoteCopy.waitingForDisplaySetup
+                    statusMessage: CoachRemoteCopy.waitingForDisplaySetup
                 )
             } else {
                 sharedSessionInput(repIndex: currentRepIndex)
@@ -556,40 +554,16 @@ struct DribbleOrPassCoachRemoteView: View {
             let joined = try await WebSocketSessionAPI.joinSession(joinCode: code)
             dopCoachRelayLog("join HTTP: success sessionId=\(joined.sessionId)")
 
-            let wsURL = try joined.webSocketURLForCoach()
-            dopCoachRelayLog("join HTTP: coach WebSocket URL ready \(wsURL.absoluteString)")
-
-            TrainingPartnerConnectionCoordinator.shared.recordRelaySessionId(joined.sessionId)
-            let config = WebSocketSessionConfig(url: wsURL, sessionId: joined.sessionId, authToken: joined.coachToken)
-            let transport = WebSocketRemoteTransport(config: config)
-            let displayPeerJoinedBinding = $coachRelayDisplayPeerJoined
-            // Capture service for peer_left: relay sends this when the display disconnects; the coach WebSocket can
-            // otherwise stay `.connected` until TCP times out, so the UI must react to control frames explicitly.
-            let remote = remoteService
-            transport.onRawTextReceived = { text in
-                TrainingPartnerConnectionCoordinator.shared.ingestCoachRelayRawControlText(text)
-                if text.contains("peer_joined") {
-                    dopCoachRelayLog("peer_joined detected (raw frame)")
-                    Task { @MainActor in
-                        displayPeerJoinedBinding.wrappedValue = true
-                    }
-                }
-                if text.lowercased().contains("peer_left") {
-                    dopCoachRelayLog("peer_left detected — disconnecting coach relay (display socket left room)")
-                    Task { @MainActor in
-                        displayPeerJoinedBinding.wrappedValue = false
-                        CoachPersistDebug.log("peer_left — before remote.disconnect", joinField: "", peerJoined: false)
-                        remote.disconnect()
-                        CoachPersistDebug.log("peer_left — after remote.disconnect", joinField: "", peerJoined: false)
-                    }
-                }
-            }
-
-            dopCoachRelayLog("RemoteService.replaceTransport + connect()")
             await MainActor.run {
-                TrainingPartnerConnectionCoordinator.shared.recordCoachRelayJoinCode(code)
-                remoteService.replaceTransport(transport)
-                remoteService.connect()
+                TrainingPartnerConnectionCoordinator.shared.installCoachRelayAfterHTTPJoin(
+                    joinCode: code,
+                    sessionId: joined.sessionId,
+                    coachToken: joined.coachToken,
+                    wsUrl: joined.wsUrl,
+                    expiresAt: joined.expiresAt,
+                    connect: true
+                )
+                coachRelayDisplayPeerJoined = TrainingPartnerConnectionCoordinator.shared.coachRelayDisplayPeerPresent
                 coachRelayJoinBanner = nil
                 coachRelayJoinBusy = false
             }
@@ -618,16 +592,26 @@ struct DribbleOrPassCoachRemoteView: View {
     private func attemptCoachRelayAutoReconnectIfNeeded() {
         guard !didAttemptCoachRelayAutoReconnect else { return }
         let coord = TrainingPartnerConnectionCoordinator.shared
-        guard let code = coord.lastCoachRelayJoinCode,
-              !code.isEmpty,
-              !coord.isPartnerTransportLinkLive else {
+        guard !coord.isPartnerTransportLinkLive else {
+            CoachPersistDebug.log("auto-reconnect skipped (no code or transport live)", joinField: coachRelayJoinCodeInput, peerJoined: coord.coachRelayDisplayPeerPresent)
+            return
+        }
+        let hasMemoryCode = !(coord.lastCoachRelayJoinCode?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        let hasPersisted = PartnerCoachResumeStore.loadCredentialsForReconnect() != nil
+        guard hasMemoryCode || hasPersisted else {
             CoachPersistDebug.log("auto-reconnect skipped (no code or transport live)", joinField: coachRelayJoinCodeInput, peerJoined: coord.coachRelayDisplayPeerPresent)
             return
         }
         didAttemptCoachRelayAutoReconnect = true
-        coachRelayJoinCodeInput = code
-        CoachPersistDebug.log("auto-reconnect starting with stored join code", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
-        Task { await startDOPCoachRelayJoin() }
+        if let code = coord.lastCoachRelayJoinCode, !code.isEmpty {
+            coachRelayJoinCodeInput = code
+        }
+        CoachPersistDebug.log("auto-reconnect starting with stored credentials", joinField: coachRelayJoinCodeInput, peerJoined: coachRelayDisplayPeerJoined)
+        Task {
+            await TrainingPartnerConnectionCoordinator.shared.attemptCoachRelayAutoReconnectFromStoredJoinCodeIfNeeded(
+                reason: "dop_coach_onAppear"
+            )
+        }
     }
 
     private var blockCompleteView: some View {

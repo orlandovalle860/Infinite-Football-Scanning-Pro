@@ -816,5 +816,13 @@ struct CoachRemoteWaitingForDisplaySessionView: View {
                 Spacer()
             }
         }
+        .onChange(of: statusMessage, initial: true) { _, newValue in
+            if newValue == CoachRemoteCopy.waitingForDisplaySetup {
+                PartnerSetupLog.coach("ui waitingForDisplaySetup \(PartnerSetupLog.coachRepControlReason()) \(PartnerSetupLog.activityTag())")
+                PartnerSetupLog.logCoachRepControlIfChanged()
+            } else if newValue == CoachRemoteCopy.reconnectingToPlayerDisplay {
+                PartnerSetupLog.coach("ui reconnectingToPlayerDisplay \(PartnerSetupLog.activityTag())")
+            }
+        }
     }
 }

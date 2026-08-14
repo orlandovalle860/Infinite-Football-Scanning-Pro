@@ -547,7 +547,7 @@ struct TwoMinuteCriticalScanSessionView: View {
             break
         case .startNextBlock:
             break
-        case .timedSessionActive, .timedSessionInactive, .displayRepEngineReady, .activityChanged:
+        case .timedSessionActive, .timedSessionInactive, .displayRepEngineReady, .activityChanged, .partnerSessionSnapshot, .requestPartnerSessionSnapshot:
             break
         }
     }
@@ -1705,6 +1705,7 @@ struct TwoMinuteCriticalScanSessionView: View {
     private var shouldShowWaitingForCoachOverlay: Bool {
         guard mode.requiresPhoneDisplayRelay else { return false }
         if TrainingPartnerConnectionCoordinator.shared.isMidSessionPartnerDisconnect { return false }
+        if TrainingPartnerConnectionCoordinator.shared.shouldSuppressDisplaySetupOverlayForLiveTimedSession { return false }
         if sessionTransportMode == .relayWebSocket {
             return !partnerRelaySession.isCoachPaired
         }
@@ -1832,7 +1833,9 @@ struct TwoMinuteCriticalScanSessionView: View {
 
     private var waitingForCoachOverlay: some View {
         Group {
-            if shouldShowWaitingForCoachOverlay {
+            if TrainingPartnerConnectionCoordinator.shared.shouldShowDisplayCoachReconnectRecoveryCode {
+                PartnerRelayCoachReconnectRecoveryOverlay(joinCode: partnerRelaySession.joinCode)
+            } else if shouldShowWaitingForCoachOverlay {
                 if mode.requiresPhoneDisplayRelay, sessionTransportMode == .relayWebSocket {
                     PartnerRelayDisplayWaitingWithSessionErrorOverlay(
                         joinCode: partnerRelaySession.joinCode,

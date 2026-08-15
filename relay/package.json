@@ -7,7 +7,9 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "dev": "node --watch src/server.js",
+    "test:coach-replace": "node scripts/same_token_coach_replace_test.mjs",
+    "test:empty-grace": "node scripts/empty_room_grace_test.mjs"
   },
   "engines": {
     "node": ">=18"

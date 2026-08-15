@@ -357,6 +357,15 @@ struct CoachSessionView: View {
                 scheduleCoachWaitingStartRepHapticLoop()
             }
         }
+        .onChange(of: partnerSessionCoordinator.isTransientPartnerLinkLossReconnecting) { _, reconnecting in
+            if reconnecting {
+                cancelCoachWaitingStartRepHapticLoop()
+                HotspotBaselineLog.emit("COACH waiting_start_haptics_cancel reason=transient_reconnecting")
+            } else if coachWaitingStartRepHapticsEligible() {
+                scheduleCoachWaitingStartRepHapticLoop()
+                HotspotBaselineLog.emit("COACH waiting_start_haptics_resume eligible=true")
+            }
+        }
         .onChange(of: timedSession.isSessionActive) { _, active in
             if active {
                 if coachWaitingStartRepHapticsEligible() {
@@ -400,9 +409,17 @@ struct CoachSessionView: View {
     private func handleTap() {
         switch phase {
         case .idle, .waitingForNextRep:
-            guard TimedSessionDisplayIntegration.coachRemoteRepControlEnabled else { return }
+            guard TimedSessionDisplayIntegration.coachRemoteRepControlEnabled else {
+                HotspotBaselineLog.emit(
+                    "COACH TAP_TO_START reject reason=rep_control_disabled uiPhase=\(String(describing: phase)) repZeroBased=\(currentRepZeroBased)"
+                )
+                return
+            }
             guard CoachTapInputGuard.mayStartNextRep() else {
                 print("[INPUT-GUARD] Start rep tap debounced (650ms after PASS or prior start)")
+                HotspotBaselineLog.emit(
+                    "COACH TAP_TO_START reject reason=tap_debounce uiPhase=\(String(describing: phase)) repZeroBased=\(currentRepZeroBased)"
+                )
                 return
             }
             print("[INPUT] Start next rep")
@@ -426,10 +443,21 @@ struct CoachSessionView: View {
             }
         case .waitingBeep:
             print("[INPUT-GUARD] Tap ignored before beep")
+            HotspotBaselineLog.emit(
+                "COACH TAP_TO_START reject reason=waiting_beep uiPhase=waitingBeep repZeroBased=\(currentRepZeroBased)"
+            )
         case .logging:
-            guard TimedSessionDisplayIntegration.coachRemoteRepControlEnabled else { return }
+            guard TimedSessionDisplayIntegration.coachRemoteRepControlEnabled else {
+                HotspotBaselineLog.emit(
+                    "COACH TAP_TO_START reject reason=rep_control_disabled uiPhase=logging repZeroBased=\(currentRepZeroBased)"
+                )
+                return
+            }
             guard CoachTapInputGuard.mayStartNextRep() else {
                 print("[INPUT-GUARD] Start rep tap debounced (650ms after PASS or prior start)")
+                HotspotBaselineLog.emit(
+                    "COACH TAP_TO_START reject reason=tap_debounce uiPhase=logging repZeroBased=\(currentRepZeroBased)"
+                )
                 return
             }
             print("[INPUT] Start next rep (logging optional)")
@@ -444,12 +472,21 @@ struct CoachSessionView: View {
         // Never advance phase on rejection — otherwise
         // the child races ahead to `.waitingPass` while the parent is still
         // `.ready`, and the user's pass tap silently fails.
+        HotspotBaselineLog.emit(
+            "COACH TAP_TO_START tapped uiPhase=\(String(describing: phase)) repZeroBased=\(currentRepZeroBased) transportConnected=\(coachTransportConnected)"
+        )
         let accepted = onRepStarted?(currentRepZeroBased) ?? true
         guard accepted else {
             print("[INPUT-GUARD] Start rep rejected by parent — remaining idle")
+            HotspotBaselineLog.emit(
+                "COACH TAP_TO_START rejected_by_parent uiPhase=\(String(describing: phase)) repZeroBased=\(currentRepZeroBased)"
+            )
             scheduleCoachWaitingStartRepHapticLoop()
             return
         }
+        HotspotBaselineLog.emit(
+            "COACH TAP_TO_START accepted_local uiPhase=\(String(describing: phase)) repZeroBased=\(currentRepZeroBased)"
+        )
         CoachTapInputGuard.recordAcceptedStartRepTap()
         registerValidTapFeedback()
         triggerHaptic(style: .light)
@@ -593,6 +630,7 @@ struct CoachSessionView: View {
         guard partnerSessionCoordinator.isPartnerTrainingSessionActive else { return false }
         guard !partnerSessionCoordinator.isPartnerDisplayCountdownActive else { return false }
         guard !partnerSessionCoordinator.isMidSessionPartnerDisconnect else { return false }
+        guard !partnerSessionCoordinator.isTransientPartnerLinkLossReconnecting else { return false }
         return true
     }
 

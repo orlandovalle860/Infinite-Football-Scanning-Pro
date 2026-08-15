@@ -904,6 +904,8 @@ struct AwayFromPressureDisplaySessionView: View {
             && sessionTransportMode == .relayWebSocket
             && !partnerRelaySession.isCoachPaired
             && !TrainingPartnerConnectionCoordinator.shared.isMidSessionPartnerDisconnect
+            && !TrainingPartnerConnectionCoordinator.shared.isTransientPartnerLinkLossReconnecting
+            && !TrainingPartnerConnectionCoordinator.shared.isPartnerDrillUnderway
     }
 
     /// Partner: countdown only after coach is connected (Multipeer) or paired on relay. Solo: always ready.
@@ -1561,10 +1563,13 @@ struct AwayFromPressureDisplaySessionView: View {
         partnerCoachRepGate = wrapGate
         if case .waitingForNextRep = engine.phase, repIndex < partnerCoachRepGate.expectedNextCoachRepIndex {
             if repIndex + 1 == partnerCoachRepGate.expectedNextCoachRepIndex {
-                sendRepStartedAck(repIndex: repIndex)
-                #if DEBUG
-                print("[PartnerCoach][AFP] duplicate nextRep \(repIndex) (already applied) — re-sent repStarted")
-                #endif
+                var gate = partnerCoachRepGate
+                gate.alignExpectedNextForCoachSoftReconnectReplay(repIndex: repIndex)
+                partnerCoachRepGate = gate
+                HotspotBaselineLog.emit(
+                    "DISPLAY nextRep replay reason=duplicate_while_waiting activity=AFP repIndex=\(repIndex) expectedNext=\(partnerCoachRepGate.expectedNextCoachRepIndex)"
+                )
+                _ = tryCommitPartnerCoachNextRep(repIndex: repIndex)
             } else {
                 #if DEBUG
                 print("[PartnerCoach][AFP] ignoring stale nextRep \(repIndex) (displayTrackedNext=\(partnerCoachRepGate.expectedNextCoachRepIndex))")
@@ -1620,15 +1625,21 @@ struct AwayFromPressureDisplaySessionView: View {
         print("[NEXTREP] received repIndex=\(repIndex) while phase=\(engine.phase) currentRepIndex=\(engine.currentRepIndex)")
         if repIndex < partnerCoachRepGate.expectedNextCoachRepIndex {
             if repIndex + 1 == partnerCoachRepGate.expectedNextCoachRepIndex, case .waitingForNextRep = engine.phase {
-                sendRepStartedAck(repIndex: repIndex)
-                pendingNextRepIndex = nil
-                return true
-            }
-            if repIndex + 1 == partnerCoachRepGate.expectedNextCoachRepIndex {
+                var gate = partnerCoachRepGate
+                gate.alignExpectedNextForCoachSoftReconnectReplay(repIndex: repIndex)
+                partnerCoachRepGate = gate
+                HotspotBaselineLog.emit(
+                    "DISPLAY nextRep replay reason=duplicate_while_waiting_commit activity=AFP repIndex=\(repIndex)"
+                )
+                // Fall through to apply after rewinding the gate.
+            } else if repIndex + 1 == partnerCoachRepGate.expectedNextCoachRepIndex {
                 print("[NEXTREP BLOCKED] phase=\(engine.phase) expected=waitingForNextRep")
+                pendingNextRepIndex = nil
+                return false
+            } else {
+                pendingNextRepIndex = nil
+                return false
             }
-            pendingNextRepIndex = nil
-            return false
         }
         if repIndex < engine.currentRepIndex {
             if !SoloTimeBasedDisplaySessionSupport.allowsPartnerCoachChunkWrapNextRep(

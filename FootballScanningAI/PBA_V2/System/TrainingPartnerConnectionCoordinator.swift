@@ -54,6 +54,9 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
     /// Cleared when pairing ends or when coach UI explicitly clears the join form after a real disconnect.
     private(set) var lastCoachRelayJoinCode: String?
 
+    /// Coach WebSocket credentials from the last successful HTTP join (same training run). Used for same-room reconnect without POST /join.
+    private var retainedCoachWebSocketSessionConfig: WebSocketSessionConfig?
+
     /// Session-scoped calibration state (one calibration per active partner training run).
     private(set) var sessionCalibrationResolved: Bool = false
     private(set) var sessionCalibrationAverageTravelTime: Double?
@@ -69,7 +72,20 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
     private var recycleDisplayRelayDueToExpiredCodeObserver: NSObjectProtocol?
     private var coachRelayDisconnectCancellable: AnyCancellable?
     private var midSessionLinkCancellable: AnyCancellable?
+    private var networkReachabilityCancellable: AnyCancellable?
     private var bannerAutoHideTask: Task<Void, Never>?
+    /// Bounded same-room display WebSocket reconnect while Partner is active and the socket is down (no new room / join code).
+    private var displaySameRoomReconnectRetryTask: Task<Void, Never>?
+    private var displaySameRoomReconnectAttemptCount: Int = 0
+    /// Low-frequency same-room display reconnect after the fast burst (no new room / join code).
+    private var displaySameRoomSlowReconnectRetryTask: Task<Void, Never>?
+    private var displaySameRoomSlowReconnectAttemptCount: Int = 0
+    /// Bounded same-room coach WebSocket reconnect using retained sessionId/token (no POST /join).
+    private var coachSameRoomReconnectRetryTask: Task<Void, Never>?
+    private var coachSameRoomReconnectAttemptCount: Int = 0
+    /// Low-frequency coach same-room reconnect after the fast burst (keeps trying until display peer returns).
+    private var coachSameRoomSlowReconnectRetryTask: Task<Void, Never>?
+    private var coachSameRoomSlowReconnectAttemptCount: Int = 0
     /// Short grace window around transient system interruptions (e.g. screenshot UI) so brief socket flaps do not force relay recycle.
     private var transientLifecycleInterruptionUntil: Date?
 
@@ -79,8 +95,13 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
     private var hadPartnerTransportLinkLiveThisSession: Bool = false
     /// True after drill play has begun (countdown finished, rep sync, or coach `nextRep`) so we do not show recovery during pairing/setup.
     private var hasStartedAtLeastOneRep: Bool = false
-    /// Full-screen recovery UI while partner link drops mid-drill (both devices).
+    /// Coach phone: next TAP index surviving view remount / reconnect (not cleared by mid-session transport flaps).
+    private var coachPersistedNextRepIndex: Int = 0
+    private var coachPersistedNextRepActivityId: String?
+    /// Full-screen recovery UI while partner link drops mid-drill (legacy flag; transport loss no longer sets this).
     @Published private(set) var isMidSessionPartnerDisconnect: Bool = false
+    /// Transient transport/peer loss mid-drill — non-destructive reconnecting scrim on coach + display (not session end).
+    @Published private(set) var isTransientPartnerLinkLossReconnecting: Bool = false
     private var midSessionDisconnectDebounceToken: UUID?
     /// True after transport dropped while drilling (foreground only); cleared when link returns or session resets.
     private var linkDownSinceDrillUnderway: Bool = false
@@ -238,6 +259,11 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
                     self.coachRelayDisplayPeerPresent = false
                 }
             }
+        networkReachabilityCancellable = NetworkReachabilityObserver.shared.reachableSubject
+            .receive(on: RunLoop.main)
+            .sink { [weak self] in
+                self?.pokeDisplaySameRoomReconnectFromNetworkPathSatisfied()
+            }
         subscribeMidSessionPartnerLinkMonitoring()
     }
 
@@ -259,6 +285,11 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         }
         midSessionDisconnectDebounceToken = nil
         midSessionLinkCancellable?.cancel()
+        networkReachabilityCancellable?.cancel()
+        displaySameRoomReconnectRetryTask?.cancel()
+        displaySameRoomSlowReconnectRetryTask?.cancel()
+        coachSameRoomReconnectRetryTask?.cancel()
+        coachSameRoomSlowReconnectRetryTask?.cancel()
     }
 
     func setCheckpointDrift(displayRep: Int, coachRep: Int) {
@@ -300,11 +331,26 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
 
     /// Forward raw WebSocket text from the coach relay transport so shared UI can track `peer_joined` / `peer_left`.
     func ingestCoachRelayRawControlText(_ text: String) {
+        let classified = HotspotBaselineLog.classifyRelayFrame(text)
+        if classified == "control.peer_joined" || classified == "control.peer_left" || classified.hasPrefix("DISPLAY_") || classified.hasPrefix("COACH_") || classified == "control.error" || classified == "INVALID_TOKEN" || classified == "INVALID_JOIN_CODE" || classified == "SESSION_NOT_FOUND" || classified == "SESSION_EXPIRED" {
+            HotspotBaselineLog.emit(
+                "COACH relay_frame kind=\(classified) partnerActive=\(isPartnerTrainingSessionActive) activityId=\(currentTimedSessionActivityId ?? lastNonNilActivityId ?? "nil") coachSocket=\(coachRelayRemoteService.connectionState.rawValue) displayPeerPresent=\(coachRelayDisplayPeerPresent) midSessionDisconnect=\(isMidSessionPartnerDisconnect) sessionSuffix=\(HotspotBaselineLog.sessionSuffix(trackedRelaySessionId))"
+            )
+        }
         if text.contains("peer_joined") {
             coachRelayDisplayPeerPresent = true
         }
         if text.lowercased().contains("peer_left") {
             coachRelayDisplayPeerPresent = false
+        }
+        if text.contains("control.ack"), text.contains("peerPresent") {
+            let peerPresent = text.contains("\"peerPresent\":true") || text.contains("\"peerPresent\": true")
+            if peerPresent != coachRelayDisplayPeerPresent {
+                HotspotBaselineLog.emit(
+                    "COACH displayPeerPresent \(coachRelayDisplayPeerPresent)->\(peerPresent) reason=control_ack_peerPresent sessionSuffix=\(HotspotBaselineLog.sessionSuffix(trackedRelaySessionId))"
+                )
+                coachRelayDisplayPeerPresent = peerPresent
+            }
         }
         refreshMidSessionPartnerDisconnectState()
     }
@@ -343,7 +389,7 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
     private func refreshMidSessionPartnerDisconnectState() {
         guard isPartnerTrainingSessionActive else {
             cancelMidSessionDisconnectDebounce()
-            if isMidSessionPartnerDisconnect {
+            if isMidSessionPartnerDisconnect || isTransientPartnerLinkLossReconnecting {
                 clearMidSessionPartnerDisconnectState()
             }
             return
@@ -361,6 +407,9 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
                     } else {
                         isHandlingSoftReconnect = true
                         linkDownSinceDrillUnderway = false
+                        HotspotBaselineLog.emit(
+                            "COACH soft_reconnect_rep_restart activityId=\(currentTimedSessionActivityId ?? lastNonNilActivityId ?? "nil") sessionSuffix=\(HotspotBaselineLog.sessionSuffix(trackedRelaySessionId))"
+                        )
                         relayLifecycleBanner = .reconnectedRestartingRep
                         scheduleAutoHideReconnectedRestartingRepBanner()
                         NotificationCenter.default.post(name: .partnerSoftReconnectRepRestart, object: nil)
@@ -379,7 +428,37 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
             if case .reconnecting = relayLifecycleBanner {
                 relayLifecycleBanner = .hidden
             }
+            // Coach mid-session soft-resume: PARTNER LINK LIVE is enough to leave "Restoring session…".
+            // Do not wait for partnerSessionCheckpoint (display only emits that on its own foreground path).
+            if !CoachRemoteSessionStartGate.isPadPlayerRole(),
+               retainedCoachWebSocketSessionConfig != nil,
+               case .restoringSession = relayLifecycleBanner,
+               awaitingSoftResumeCheckpointValidation {
+                awaitingSoftResumeCheckpointValidation = false
+                HotspotBaselineLog.emit(
+                    "COACH soft_resume_checkpoint_wait_cleared reason=partner_link_live sessionSuffix=\(HotspotBaselineLog.sessionSuffix(retainedCoachWebSocketSessionConfig?.sessionId ?? trackedRelaySessionId))"
+                )
+                clearCheckpointDrift()
+                relayLifecycleBanner = .sessionRestoredSoft
+                scheduleAutoHideSessionRestoredSoftBanner()
+                clearSoftResumeInterruptionState()
+                HotspotBaselineLog.emit(
+                    "COACH restore_complete reason=partner_link_live activityId=\(currentTimedSessionActivityId ?? lastNonNilActivityId ?? "nil") sessionSuffix=\(HotspotBaselineLog.sessionSuffix(retainedCoachWebSocketSessionConfig?.sessionId ?? trackedRelaySessionId))"
+                )
+                cancelCoachSameRoomReconnectRetry(reason: "partner_link_live")
+            }
+            if isTransientPartnerLinkLossReconnecting {
+                HotspotBaselineLog.emit(
+                    "TRANSPORT_LOSS reconnecting cleared reason=link_live_again role=\(CoachRemoteSessionStartGate.isPadPlayerRole() ? "display" : "coach") activityId=\(currentTimedSessionActivityId ?? lastNonNilActivityId ?? "nil")"
+                )
+                isTransientPartnerLinkLossReconnecting = false
+                cancelDisplaySameRoomReconnectRetry(reason: "connected")
+                cancelCoachSameRoomReconnectRetry(reason: "partner_link_live")
+            }
             if isMidSessionPartnerDisconnect {
+                HotspotBaselineLog.emit(
+                    "COACH midSessionDisconnect true->false reason=link_live_again activityId=\(currentTimedSessionActivityId ?? lastNonNilActivityId ?? "nil")"
+                )
                 isMidSessionPartnerDisconnect = false
             }
             return
@@ -392,14 +471,17 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
             return
         }
         guard !isMidSessionPartnerDisconnect else { return }
-        scheduleMidSessionDisconnectOverlayIfNeeded()
+        scheduleTransientPartnerLinkLossReconnectingIfNeeded()
     }
 
     private func cancelMidSessionDisconnectDebounce() {
         midSessionDisconnectDebounceToken = nil
     }
 
-    private func scheduleMidSessionDisconnectOverlayIfNeeded() {
+    /// Temporary peer/socket loss while a partner drill is underway.
+    /// Shows reconnecting UI only — does **not** treat transport loss as session end
+    /// (no ``isMidSessionPartnerDisconnect`` / “Session ended” / join-screen path).
+    private func scheduleTransientPartnerLinkLossReconnectingIfNeeded() {
         guard midSessionDisconnectDebounceToken == nil else { return }
         let token = UUID()
         midSessionDisconnectDebounceToken = token
@@ -414,17 +496,541 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
                 guard self.hadPartnerTransportLinkLiveThisSession else { return }
                 guard self.hasStartedAtLeastOneRep else { return }
                 guard !self.isMidSessionPartnerDisconnect else { return }
-                self.isMidSessionPartnerDisconnect = true
+                guard !self.isTransientPartnerLinkLossReconnecting else {
+                    self.relayLifecycleBanner = .reconnecting
+                    if CoachRemoteSessionStartGate.isPadPlayerRole() {
+                        self.startDisplaySameRoomReconnectRetryLoopIfNeeded(trigger: "transient_link_loss_already_active")
+                    } else {
+                        self.startCoachSameRoomReconnectRetryLoopIfNeeded(trigger: "transient_link_loss_already_active")
+                    }
+                    return
+                }
+                let role = CoachRemoteSessionStartGate.isPadPlayerRole() ? "display" : "coach"
+                let trackedSuffix = HotspotBaselineLog.sessionSuffix(self.trackedRelaySessionId)
+                let displaySuffix = HotspotBaselineLog.sessionSuffix(self.relayDisplaySession.relaySessionId)
+                HotspotBaselineLog.emit(
+                    "TRANSPORT_LOSS reconnecting_not_session_ended fn=scheduleTransientPartnerLinkLossReconnectingIfNeeded role=\(role) activityId=\(self.currentTimedSessionActivityId ?? self.lastNonNilActivityId ?? "nil") partnerActive=\(self.isPartnerTrainingSessionActive) coachSocket=\(self.coachRelayRemoteService.connectionState.rawValue) displayPeerPresent=\(self.coachRelayDisplayPeerPresent) displaySocket=\(self.relayDisplaySession.socketConnectionState.rawValue) isCoachPaired=\(self.relayDisplaySession.isCoachPaired) linkLive=\(self.isPartnerTransportLinkLive) sessionSuffix=\(trackedSuffix) displaySessionSuffix=\(displaySuffix)"
+                )
+                self.isTransientPartnerLinkLossReconnecting = true
+                self.relayLifecycleBanner = .reconnecting
                 self.relayDisplaySession.cancelRelayDisconnectRecycleTask()
+                if CoachRemoteSessionStartGate.isPadPlayerRole() {
+                    self.startDisplaySameRoomReconnectRetryLoopIfNeeded(trigger: "transient_link_loss")
+                } else {
+                    self.startCoachSameRoomReconnectRetryLoopIfNeeded(trigger: "transient_link_loss")
+                }
             }
         }
     }
 
+    /// Display mid-session recovery: socket up alone is not enough — need `peer_joined` (coach present).
+    @MainActor
+    private var isDisplayRelayCoachLinkRestored: Bool {
+        relayDisplaySession.socketConnectionState == .connected && relayDisplaySession.isCoachPaired
+    }
+
+    /// Display: unexpected WebSocket drop while Partner is active — start same-room reconnect retries (no new room).
+    @MainActor
+    func noteDisplayRelaySocketUnexpectedDisconnect() {
+        guard CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
+        guard isPartnerTrainingSessionActive else { return }
+        guard relayDisplaySession.hasAdoptableRelaySession else { return }
+        // Heal identity if beginPartnerTrainingSession wiped it after warm-up (legacy path).
+        if trackedRelaySessionId == nil,
+           let sid = relayDisplaySession.relaySessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !sid.isEmpty {
+            recordRelaySessionId(sid)
+        }
+        startDisplaySameRoomReconnectRetryLoopIfNeeded(trigger: "unexpected_socket_disconnect")
+    }
+
+    /// Display WebSocket became connected — only stop retries once the coach peer is back.
+    @MainActor
+    func noteDisplayRelaySocketConnectedForReconnectRetry() {
+        if isDisplayRelayCoachLinkRestored || isPartnerTransportLinkLive {
+            cancelDisplaySameRoomReconnectRetry(reason: "connected")
+            return
+        }
+        // Connected without coach: keep slow force-fresh retries (do not treat socket-up as success).
+        guard isPartnerTrainingSessionActive, relayDisplaySession.hasAdoptableRelaySession else { return }
+        HotspotBaselineLog.emit(
+            "DISPLAY socket_connected_without_coach keep_retrying sessionSuffix=\(HotspotBaselineLog.sessionSuffix(relayDisplaySession.relaySessionId)) joinSuffix=\(HotspotBaselineLog.joinSuffix(relayDisplaySession.joinCode))"
+        )
+        startDisplaySameRoomSlowReconnectRetryLoopIfNeeded(trigger: "connected_without_coach")
+    }
+
+    /// Path becomes satisfied again — cancel sleepy backoff and immediately force a fresh same-room socket.
+    @MainActor
+    private func pokeDisplaySameRoomReconnectFromNetworkPathSatisfied() {
+        guard CoachRemoteSessionStartGate.isPadPlayerRole() else {
+            pokeCoachSameRoomReconnectFromNetworkPathSatisfied()
+            return
+        }
+        guard isPartnerTrainingSessionActive else { return }
+        guard relayDisplaySession.hasAdoptableRelaySession else { return }
+        guard !isDisplayRelayCoachLinkRestored else { return }
+
+        HotspotBaselineLog.emit(
+            "DISPLAY path_satisfied_reconnect poke priorSocket=\(relayDisplaySession.socketConnectionState.rawValue) coachPaired=\(relayDisplaySession.isCoachPaired) sessionSuffix=\(HotspotBaselineLog.sessionSuffix(relayDisplaySession.relaySessionId ?? trackedRelaySessionId)) joinSuffix=\(HotspotBaselineLog.joinSuffix(relayDisplaySession.joinCode))"
+        )
+        // Drop in-flight 8s/12s sleeps so recovery isn't gated by an offline-era backoff.
+        cancelDisplaySameRoomReconnectRetry(reason: "path_satisfied_restart")
+        cancelDisplaySameRoomSlowReconnectRetry(reason: "path_satisfied_restart")
+        startDisplaySameRoomReconnectRetryLoopIfNeeded(trigger: "path_satisfied")
+        Task { @MainActor in
+            // Burst a few immediate attempts — first radio-up often still fails once.
+            for i in 0..<4 {
+                if i > 0 {
+                    try? await Task.sleep(nanoseconds: 750_000_000)
+                }
+                guard self.isPartnerTrainingSessionActive else { return }
+                guard !self.isDisplayRelayCoachLinkRestored else { return }
+                await self.performDisplaySameRoomReconnectAttempt(
+                    label: "path_satisfied_\(i)",
+                    forceFreshSocket: true
+                )
+                if self.isDisplayRelayCoachLinkRestored { return }
+            }
+        }
+    }
+
+    @MainActor
+    private func pokeCoachSameRoomReconnectFromNetworkPathSatisfied() {
+        guard !CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
+        guard isPartnerTrainingSessionActive else { return }
+        guard coachRelayRemoteService.connectionState != .connected else { return }
+        guard retainedCoachWebSocketSessionConfig != nil else { return }
+
+        HotspotBaselineLog.emit(
+            "COACH path_satisfied_reconnect poke sessionSuffix=\(HotspotBaselineLog.sessionSuffix(retainedCoachWebSocketSessionConfig?.sessionId ?? trackedRelaySessionId))"
+        )
+        cancelCoachSameRoomReconnectRetry(reason: "path_satisfied_restart")
+        startCoachSameRoomReconnectRetryLoopIfNeeded(trigger: "path_satisfied")
+        Task { @MainActor in
+            for i in 0..<4 {
+                if i > 0 {
+                    try? await Task.sleep(nanoseconds: 750_000_000)
+                }
+                guard self.isPartnerTrainingSessionActive else { return }
+                guard self.coachRelayRemoteService.connectionState != .connected else { return }
+                self.performCoachSameRoomReconnectAttempt(label: "path_satisfied_\(i)")
+                if self.coachRelayRemoteService.connectionState == .connected { return }
+            }
+        }
+    }
+
+    /// Bounded backoff reconnect of the **existing** display relay transport (no POST /v1/sessions).
+    @MainActor
+    private func startDisplaySameRoomReconnectRetryLoopIfNeeded(trigger: String) {
+        guard CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
+        guard isPartnerTrainingSessionActive else { return }
+        guard relayDisplaySession.hasAdoptableRelaySession else { return }
+        guard displaySameRoomReconnectRetryTask == nil else { return }
+
+        HotspotBaselineLog.emit(
+            "DISPLAY reconnect_retry_scheduled trigger=\(trigger) sessionSuffix=\(HotspotBaselineLog.sessionSuffix(relayDisplaySession.relaySessionId))"
+        )
+
+        displaySameRoomReconnectRetryTask = Task { @MainActor [weak self] in
+            // Modest exponential backoff; cancel only when coach peer is back (not socket-up alone).
+            let delaysNs: [UInt64] = [
+                500_000_000,
+                1_000_000_000,
+                2_000_000_000,
+                4_000_000_000,
+                8_000_000_000,
+                8_000_000_000,
+                8_000_000_000,
+                8_000_000_000,
+                8_000_000_000,
+                8_000_000_000
+            ]
+            for delay in delaysNs {
+                try? await Task.sleep(nanoseconds: delay)
+                guard let self else { return }
+                guard !Task.isCancelled else { return }
+
+                if !self.isPartnerTrainingSessionActive {
+                    self.cancelDisplaySameRoomReconnectRetry(reason: "session_end")
+                    return
+                }
+                if self.isDisplayRelayCoachLinkRestored || self.isPartnerTransportLinkLive {
+                    self.cancelDisplaySameRoomReconnectRetry(reason: "connected")
+                    return
+                }
+                if !self.relayDisplaySession.hasAdoptableRelaySession {
+                    self.cancelDisplaySameRoomReconnectRetry(reason: "invalid_session")
+                    return
+                }
+                // Still mid-session recovery context (or socket still down / coach missing while Partner active).
+                guard self.isTransientPartnerLinkLossReconnecting
+                    || self.relayDisplaySession.socketConnectionState == .disconnected
+                    || !self.relayDisplaySession.isCoachPaired else {
+                    self.cancelDisplaySameRoomReconnectRetry(reason: "connected")
+                    return
+                }
+
+                await self.performDisplaySameRoomReconnectAttempt(label: nil, forceFreshSocket: true)
+
+                if self.isDisplayRelayCoachLinkRestored || self.isPartnerTransportLinkLive {
+                    self.cancelDisplaySameRoomReconnectRetry(reason: "connected")
+                    return
+                }
+            }
+            // Fast burst exhausted — keep Partner session on the same room with low-frequency retries.
+            guard let self else { return }
+            self.displaySameRoomReconnectRetryTask = nil
+            self.displaySameRoomReconnectAttemptCount = 0
+            if self.isPartnerTrainingSessionActive,
+               !self.isDisplayRelayCoachLinkRestored,
+               self.relayDisplaySession.hasAdoptableRelaySession {
+                self.startDisplaySameRoomSlowReconnectRetryLoopIfNeeded(trigger: "fast_burst_exhausted")
+            }
+        }
+    }
+
+    @MainActor
+    private func performDisplaySameRoomReconnectAttempt(label: String?, forceFreshSocket: Bool = true) async {
+        guard isPartnerTrainingSessionActive else {
+            cancelDisplaySameRoomReconnectRetry(reason: "session_end")
+            return
+        }
+        guard relayDisplaySession.hasAdoptableRelaySession else {
+            cancelDisplaySameRoomReconnectRetry(reason: "invalid_session")
+            return
+        }
+        if isDisplayRelayCoachLinkRestored || isPartnerTransportLinkLive {
+            cancelDisplaySameRoomReconnectRetry(reason: "connected")
+            return
+        }
+
+        displaySameRoomReconnectAttemptCount += 1
+        let n = displaySameRoomReconnectAttemptCount
+        let labelPart = label.map { " label=\($0)" } ?? ""
+        HotspotBaselineLog.emit(
+            "DISPLAY reconnect_retry_attempt number=\(n)\(labelPart) forceFresh=\(forceFreshSocket) coachPaired=\(relayDisplaySession.isCoachPaired) socket=\(relayDisplaySession.socketConnectionState.rawValue) sessionSuffix=\(HotspotBaselineLog.sessionSuffix(relayDisplaySession.relaySessionId))"
+        )
+
+        // Force a new WebSocket task even if prior attempt is stuck in `.connecting` or connected-without-coach.
+        await relayDisplaySession.reconnectSameRoomTransport(forceFreshSocket: forceFreshSocket)
+
+        // Brief settle so connecting→connected / peer_joined can land before we log result.
+        try? await Task.sleep(nanoseconds: 350_000_000)
+        let state = relayDisplaySession.socketConnectionState
+        HotspotBaselineLog.emit(
+            "DISPLAY reconnect_retry_result state=\(state.rawValue) coachPaired=\(relayDisplaySession.isCoachPaired) number=\(n) sessionSuffix=\(HotspotBaselineLog.sessionSuffix(relayDisplaySession.relaySessionId))"
+        )
+        if isDisplayRelayCoachLinkRestored || isPartnerTransportLinkLive {
+            cancelDisplaySameRoomReconnectRetry(reason: "connected")
+        }
+    }
+
+    /// After the aggressive burst: retry the same retained room every ~3s until coach peer_joined returns.
+    @MainActor
+    private func startDisplaySameRoomSlowReconnectRetryLoopIfNeeded(trigger: String) {
+        guard CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
+        guard isPartnerTrainingSessionActive else { return }
+        guard relayDisplaySession.hasAdoptableRelaySession else { return }
+        guard displaySameRoomSlowReconnectRetryTask == nil else { return }
+        guard !isDisplayRelayCoachLinkRestored else { return }
+
+        HotspotBaselineLog.emit(
+            "DISPLAY reconnect_slow_retry_scheduled trigger=\(trigger) sessionSuffix=\(HotspotBaselineLog.sessionSuffix(relayDisplaySession.relaySessionId)) joinSuffix=\(HotspotBaselineLog.joinSuffix(relayDisplaySession.joinCode))"
+        )
+
+        displaySameRoomSlowReconnectRetryTask = Task { @MainActor [weak self] in
+            let delayNs: UInt64 = 3_000_000_000
+            while true {
+                try? await Task.sleep(nanoseconds: delayNs)
+                guard let self else { return }
+                guard !Task.isCancelled else { return }
+
+                if !self.isPartnerTrainingSessionActive {
+                    self.cancelDisplaySameRoomSlowReconnectRetry(reason: "session_end")
+                    return
+                }
+                if self.isDisplayRelayCoachLinkRestored || self.isPartnerTransportLinkLive {
+                    self.cancelDisplaySameRoomSlowReconnectRetry(reason: "connected")
+                    return
+                }
+                if !self.relayDisplaySession.hasAdoptableRelaySession {
+                    self.cancelDisplaySameRoomSlowReconnectRetry(reason: "invalid_session")
+                    return
+                }
+
+                self.displaySameRoomSlowReconnectAttemptCount += 1
+                let n = self.displaySameRoomSlowReconnectAttemptCount
+                HotspotBaselineLog.emit(
+                    "DISPLAY reconnect_slow_retry_attempt number=\(n) coachPaired=\(self.relayDisplaySession.isCoachPaired) socket=\(self.relayDisplaySession.socketConnectionState.rawValue) sessionSuffix=\(HotspotBaselineLog.sessionSuffix(self.relayDisplaySession.relaySessionId)) joinSuffix=\(HotspotBaselineLog.joinSuffix(self.relayDisplaySession.joinCode))"
+                )
+                await self.relayDisplaySession.reconnectSameRoomTransport(forceFreshSocket: true)
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                if self.isDisplayRelayCoachLinkRestored || self.isPartnerTransportLinkLive {
+                    self.cancelDisplaySameRoomSlowReconnectRetry(reason: "connected")
+                    return
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func cancelDisplaySameRoomSlowReconnectRetry(reason: String) {
+        let hadTask = displaySameRoomSlowReconnectRetryTask != nil
+        let hadAttempts = displaySameRoomSlowReconnectAttemptCount > 0
+        displaySameRoomSlowReconnectRetryTask?.cancel()
+        displaySameRoomSlowReconnectRetryTask = nil
+        if hadTask || hadAttempts {
+            HotspotBaselineLog.emit(
+                "DISPLAY reconnect_slow_retry_cancel reason=\(reason) sessionSuffix=\(HotspotBaselineLog.sessionSuffix(relayDisplaySession.relaySessionId))"
+            )
+        }
+        displaySameRoomSlowReconnectAttemptCount = 0
+    }
+
+    @MainActor
+    private func cancelDisplaySameRoomReconnectRetry(reason: String) {
+        let hadTask = displaySameRoomReconnectRetryTask != nil
+        let hadAttempts = displaySameRoomReconnectAttemptCount > 0
+        displaySameRoomReconnectRetryTask?.cancel()
+        displaySameRoomReconnectRetryTask = nil
+        if hadTask || hadAttempts {
+            HotspotBaselineLog.emit(
+                "DISPLAY reconnect_retry_cancel reason=\(reason) sessionSuffix=\(HotspotBaselineLog.sessionSuffix(relayDisplaySession.relaySessionId))"
+            )
+        }
+        displaySameRoomReconnectAttemptCount = 0
+        // Connected / session end / invalid also stop the slow loop.
+        if reason == "connected" || reason == "session_end" || reason == "invalid_session" {
+            cancelDisplaySameRoomSlowReconnectRetry(reason: reason)
+        }
+    }
+
+    /// Bounded backoff coach reconnect using retained same-session WebSocket credentials (no POST /join).
+    @MainActor
+    private func startCoachSameRoomReconnectRetryLoopIfNeeded(trigger: String) {
+        guard !CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
+        guard isPartnerTrainingSessionActive else { return }
+        guard retainedCoachWebSocketSessionConfig != nil else { return }
+        guard coachSameRoomReconnectRetryTask == nil else { return }
+
+        HotspotBaselineLog.emit(
+            "COACH reconnect_retry_scheduled trigger=\(trigger) sessionSuffix=\(HotspotBaselineLog.sessionSuffix(retainedCoachWebSocketSessionConfig?.sessionId ?? trackedRelaySessionId))"
+        )
+
+        coachSameRoomReconnectRetryTask = Task { @MainActor [weak self] in
+            let delaysNs: [UInt64] = [
+                500_000_000,
+                1_000_000_000,
+                2_000_000_000,
+                4_000_000_000,
+                8_000_000_000,
+                8_000_000_000,
+                8_000_000_000,
+                8_000_000_000,
+                8_000_000_000,
+                8_000_000_000
+            ]
+            for delay in delaysNs {
+                try? await Task.sleep(nanoseconds: delay)
+                guard let self else { return }
+                guard !Task.isCancelled else { return }
+
+                if !self.isPartnerTrainingSessionActive {
+                    self.cancelCoachSameRoomReconnectRetry(reason: "session_end")
+                    return
+                }
+                // Success requires PARTNER LINK LIVE (socket connected + display peerPresent), not socket-open alone.
+                if self.isPartnerTransportLinkLive {
+                    self.cancelCoachSameRoomReconnectRetry(reason: "partner_link_live")
+                    return
+                }
+                if self.retainedCoachWebSocketSessionConfig == nil {
+                    self.cancelCoachSameRoomReconnectRetry(reason: "invalid_session")
+                    return
+                }
+
+                self.performCoachSameRoomReconnectAttempt(label: nil)
+
+                // Allow connecting → connected / peer_joined to settle.
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                HotspotBaselineLog.emit(
+                    "COACH reconnect_retry_result state=\(self.coachRelayRemoteService.connectionState.rawValue) peerPresent=\(self.coachRelayDisplayPeerPresent) linkLive=\(self.isPartnerTransportLinkLive) sessionSuffix=\(HotspotBaselineLog.sessionSuffix(self.retainedCoachWebSocketSessionConfig?.sessionId ?? self.trackedRelaySessionId))"
+                )
+                if self.isPartnerTransportLinkLive {
+                    self.cancelCoachSameRoomReconnectRetry(reason: "partner_link_live")
+                    return
+                }
+            }
+            // Fast burst exhausted — keep trying; a connected-without-peer socket used to no-op forever.
+            guard let self else { return }
+            self.coachSameRoomReconnectRetryTask = nil
+            self.coachSameRoomReconnectAttemptCount = 0
+            if self.isPartnerTrainingSessionActive,
+               !self.isPartnerTransportLinkLive,
+               self.retainedCoachWebSocketSessionConfig != nil {
+                self.startCoachSameRoomSlowReconnectRetryLoopIfNeeded(trigger: "fast_burst_exhausted")
+            }
+        }
+    }
+
+    @MainActor
+    private func performCoachSameRoomReconnectAttempt(label: String?) {
+        guard isPartnerTrainingSessionActive else {
+            cancelCoachSameRoomReconnectRetry(reason: "session_end")
+            return
+        }
+        guard retainedCoachWebSocketSessionConfig != nil else {
+            cancelCoachSameRoomReconnectRetry(reason: "invalid_session")
+            return
+        }
+        if isPartnerTransportLinkLive {
+            cancelCoachSameRoomReconnectRetry(reason: "partner_link_live")
+            return
+        }
+
+        coachSameRoomReconnectAttemptCount += 1
+        let n = coachSameRoomReconnectAttemptCount
+        let labelPart = label.map { " label=\($0)" } ?? ""
+        HotspotBaselineLog.emit(
+            "COACH reconnect_retry_attempt number=\(n)\(labelPart) sessionSuffix=\(HotspotBaselineLog.sessionSuffix(retainedCoachWebSocketSessionConfig?.sessionId ?? trackedRelaySessionId))"
+        )
+        HotspotBaselineLog.emit(
+            "COACH reconnect_same_session number=\(n) sessionSuffix=\(HotspotBaselineLog.sessionSuffix(retainedCoachWebSocketSessionConfig?.sessionId ?? trackedRelaySessionId))"
+        )
+        reconnectCoachRelayWebSocketFromRetainedConfigIfNeeded(reason: "coach_same_room_retry_\(n)")
+    }
+
+    /// After the aggressive burst: retry every ~3s until the display peer is back (same retained room).
+    @MainActor
+    private func startCoachSameRoomSlowReconnectRetryLoopIfNeeded(trigger: String) {
+        guard !CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
+        guard isPartnerTrainingSessionActive else { return }
+        guard retainedCoachWebSocketSessionConfig != nil else { return }
+        guard coachSameRoomSlowReconnectRetryTask == nil else { return }
+        guard !isPartnerTransportLinkLive else { return }
+
+        HotspotBaselineLog.emit(
+            "COACH reconnect_slow_retry_scheduled trigger=\(trigger) sessionSuffix=\(HotspotBaselineLog.sessionSuffix(retainedCoachWebSocketSessionConfig?.sessionId ?? trackedRelaySessionId))"
+        )
+
+        coachSameRoomSlowReconnectRetryTask = Task { @MainActor [weak self] in
+            let delayNs: UInt64 = 3_000_000_000
+            while true {
+                try? await Task.sleep(nanoseconds: delayNs)
+                guard let self else { return }
+                guard !Task.isCancelled else { return }
+
+                if !self.isPartnerTrainingSessionActive {
+                    self.cancelCoachSameRoomSlowReconnectRetry(reason: "session_end")
+                    return
+                }
+                if self.isPartnerTransportLinkLive {
+                    self.cancelCoachSameRoomSlowReconnectRetry(reason: "partner_link_live")
+                    return
+                }
+                if self.retainedCoachWebSocketSessionConfig == nil {
+                    self.cancelCoachSameRoomSlowReconnectRetry(reason: "invalid_session")
+                    return
+                }
+
+                self.coachSameRoomSlowReconnectAttemptCount += 1
+                let n = self.coachSameRoomSlowReconnectAttemptCount
+                HotspotBaselineLog.emit(
+                    "COACH reconnect_slow_retry_attempt number=\(n) peerPresent=\(self.coachRelayDisplayPeerPresent) socket=\(self.coachRelayRemoteService.connectionState.rawValue) sessionSuffix=\(HotspotBaselineLog.sessionSuffix(self.retainedCoachWebSocketSessionConfig?.sessionId ?? self.trackedRelaySessionId))"
+                )
+                self.reconnectCoachRelayWebSocketFromRetainedConfigIfNeeded(reason: "coach_same_room_slow_retry_\(n)")
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                if self.isPartnerTransportLinkLive {
+                    self.cancelCoachSameRoomSlowReconnectRetry(reason: "partner_link_live")
+                    return
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func cancelCoachSameRoomSlowReconnectRetry(reason: String) {
+        let hadTask = coachSameRoomSlowReconnectRetryTask != nil
+        let hadAttempts = coachSameRoomSlowReconnectAttemptCount > 0
+        coachSameRoomSlowReconnectRetryTask?.cancel()
+        coachSameRoomSlowReconnectRetryTask = nil
+        if hadTask || hadAttempts {
+            HotspotBaselineLog.emit(
+                "COACH reconnect_slow_retry_cancel reason=\(reason) sessionSuffix=\(HotspotBaselineLog.sessionSuffix(retainedCoachWebSocketSessionConfig?.sessionId ?? trackedRelaySessionId))"
+            )
+        }
+        coachSameRoomSlowReconnectAttemptCount = 0
+    }
+
+    @MainActor
+    private func cancelCoachSameRoomReconnectRetry(reason: String) {
+        let hadTask = coachSameRoomReconnectRetryTask != nil
+        let hadAttempts = coachSameRoomReconnectAttemptCount > 0
+        coachSameRoomReconnectRetryTask?.cancel()
+        coachSameRoomReconnectRetryTask = nil
+        if hadTask || hadAttempts {
+            HotspotBaselineLog.emit(
+                "COACH reconnect_retry_cancel reason=\(reason) sessionSuffix=\(HotspotBaselineLog.sessionSuffix(retainedCoachWebSocketSessionConfig?.sessionId ?? trackedRelaySessionId))"
+            )
+        }
+        coachSameRoomReconnectAttemptCount = 0
+        if reason == "partner_link_live" || reason == "session_end" || reason == "invalid_session"
+            || reason == "path_satisfied_restart" {
+            cancelCoachSameRoomSlowReconnectRetry(reason: reason)
+        }
+    }
+
+    /// True after the partner drill has begun (used to suppress initial “waiting for coach” pairing UI during mid-session link loss).
+    var isPartnerDrillUnderway: Bool { hasStartedAtLeastOneRep }
+
+    /// Coach relay: display left the room (`control.peer_left`).
+    /// During an active partner run, keep the coach WebSocket attached so the same room can recover when the display returns.
+    /// Only disconnect when pairing is already inactive (standby / join flow).
+    @MainActor
+    func shouldPreserveCoachRelaySocketOnDisplayPeerLeft() -> Bool {
+        isPartnerTrainingSessionActive
+    }
+
+    /// True when coach has same-session WebSocket credentials (or join code while mid-reconnect) to restore without POST `/join`.
+    @MainActor
+    var hasRetainedCoachRelayReconnectIdentity: Bool {
+        if retainedCoachWebSocketSessionConfig != nil { return true }
+        guard let code = lastCoachRelayJoinCode?.trimmingCharacters(in: .whitespacesAndNewlines), !code.isEmpty else {
+            return false
+        }
+        return isTransientPartnerLinkLossReconnecting
+            || isMidSessionPartnerDisconnect
+            || hasStartedAtLeastOneRep
+            || currentTimedSessionActivityId != nil
+            || lastNonNilActivityId != nil
+    }
+
+    /// Mid-session coach transport loss: keep activity remote UI mounted (do not swap to join-code screen).
+    /// Requires an active partner run **and** reconnect identity / live drill — not partner-active alone
+    /// (that wrongly skipped the hub join screen on cold launch / stale session flags).
+    @MainActor
+    var shouldKeepCoachActivityRemoteMountedAcrossTransientLinkLoss: Bool {
+        guard isPartnerTrainingSessionActive else { return false }
+        if hasRetainedCoachRelayReconnectIdentity { return true }
+        if currentTimedSessionActivityId != nil || lastNonNilActivityId != nil { return true }
+        return isTransientPartnerLinkLossReconnecting || isMidSessionPartnerDisconnect
+    }
+
+    /// Coach hub: live display peer on the coach relay WebSocket (relay product path — not Multipeer).
+    @MainActor
+    var isCoachRelayDisplayLinkLive: Bool {
+        coachRelayRemoteService.connectionState == .connected && coachRelayDisplayPeerPresent
+    }
+
     private func clearMidSessionPartnerDisconnectState() {
         cancelMidSessionDisconnectDebounce()
+        cancelDisplaySameRoomReconnectRetry(reason: "session_end")
+        cancelDisplaySameRoomSlowReconnectRetry(reason: "session_end")
+        cancelCoachSameRoomReconnectRetry(reason: "session_end")
         hadPartnerTransportLinkLiveThisSession = false
         hasStartedAtLeastOneRep = false
         isMidSessionPartnerDisconnect = false
+        isTransientPartnerLinkLossReconnecting = false
         linkDownSinceDrillUnderway = false
         partnerRelaySuspendedForBackground = false
         isHandlingSoftReconnect = false
@@ -518,6 +1124,9 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
     func handleCoachEnterCodeAfterDisplayUnavailable(router: AppRouter) {
         guard !CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
         guard isPartnerTrainingSessionActive else { return }
+        HotspotBaselineLog.emit(
+            "COACH leave_live_activity fn=handleCoachEnterCodeAfterDisplayUnavailable will_call_remote.disconnect clear_pairing=true navigate=popToRoot activityId=\(currentTimedSessionActivityId ?? lastNonNilActivityId ?? "nil") joinSuffix=\(HotspotBaselineLog.joinSuffix(lastCoachRelayJoinCode)) sessionSuffix=\(HotspotBaselineLog.sessionSuffix(trackedRelaySessionId))"
+        )
         relaySessionMutationToken += 1
         coachRelayRemoteService.disconnect()
         coachRelayDisplayPeerPresent = false
@@ -533,20 +1142,25 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         ConnectionManager.shared.stopBrowsing()
         prepareMultipeerCoachRemote(connectionManager: ConnectionManager.shared)
         print("[Partner] Coach ready for new code — relay disconnected, cached join code cleared, Multipeer browsing restarted")
+        HotspotBaselineLog.emit("COACH navigation popToRoot endingPartnerSession=false after display_unavailable Enter Code")
         router.popToRoot(endingPartnerSession: false)
     }
 
     /// Player iPad: replace the display relay with a fresh `/v1/sessions` + join code while keeping the partner training run active.
+    /// Mid-session automatic recovery must **not** mint a new room while the existing relay identity is still retained.
     @MainActor
     func recyclePlayerDisplayRelaySessionKeepingPartnerRun(reason: String) async {
         guard CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
         guard isPartnerTrainingSessionActive else { return }
-        if TimedSessionController.shared.isManagingSession,
-           CurrentSessionStore.shared.sessionId != nil {
-            RelaySoftResumeDebug.logFallbackToRejoin(reason: "\(reason)_skipped_preserve_training_session")
-            await relayDisplaySession.startDisplaySessionIfNeeded()
+
+        if shouldPreserveDisplayRelaySameRoomForActivePartnerSession(reason: reason) {
+            await preserveActivePartnerDisplayRelaySameRoom(trigger: reason)
             return
         }
+
+        HotspotBaselineLog.emit(
+            "DISPLAY recycle_will_force_new_room reason=\(reason) priorSessionSuffix=\(HotspotBaselineLog.sessionSuffix(relayDisplaySession.relaySessionId)) priorJoinSuffix=\(HotspotBaselineLog.joinSuffix(relayDisplaySession.joinCode))"
+        )
         RelaySoftResumeDebug.logFallbackToRejoin(reason: "\(reason)_ipad_auto_recycle")
         relayDisplaySession.cancelRelayDisconnectRecycleTask()
         trackedRelaySessionId = nil
@@ -556,9 +1170,76 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         await forceRegenerateIPadDisplayRelaySessionAfterForeground(reason: "\(reason)_ipad_auto_recycle")
     }
 
+    /// Authoritative mid-session protection: Partner training active + retained display relay identity.
+    /// Does **not** depend on Supabase ``CurrentSessionStore.sessionId``.
+    /// Definitive invalid/expired reasons may still force a new room.
+    @MainActor
+    func shouldBlockAutomaticNewDisplayRelayRoom() -> Bool {
+        shouldPreserveDisplayRelaySameRoomForActivePartnerSession(reason: "mint_guard")
+    }
+
+    @MainActor
+    private func isDefinitiveDisplayRelayInvalidationReason(_ reason: String) -> Bool {
+        let r = reason.lowercased()
+        return r.contains("expired")
+            || r.contains("session_not_found")
+            || r.contains("invalid_join")
+            || r.contains("invalid_token")
+            || r.contains("session_expired")
+    }
+
+    @MainActor
+    private func shouldPreserveDisplayRelaySameRoomForActivePartnerSession(reason: String) -> Bool {
+        guard isPartnerTrainingSessionActive else { return false }
+        if isDefinitiveDisplayRelayInvalidationReason(reason) { return false }
+
+        let joinOK: Bool = {
+            guard let raw = relayDisplaySession.joinCode?.trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
+            return !raw.isEmpty
+        }()
+        let sessionKnown =
+            (relayDisplaySession.relaySessionId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+            || (trackedRelaySessionId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+            || (lastKnownValidRelaySessionId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+
+        // Prefer live adoptable transport+code; also preserve when join/session identity remains after a transient drop.
+        if relayDisplaySession.hasAdoptableRelaySession { return true }
+        if joinOK && sessionKnown { return true }
+        if joinOK { return true }
+        return false
+    }
+
+    @MainActor
+    private func preserveActivePartnerDisplayRelaySameRoom(trigger: String) async {
+        HotspotBaselineLog.emit(
+            "DISPLAY recycle_blocked reason=active_partner_session_same_room_preserved trigger=\(trigger) sessionSuffix=\(HotspotBaselineLog.sessionSuffix(relayDisplaySession.relaySessionId)) joinSuffix=\(HotspotBaselineLog.joinSuffix(relayDisplaySession.joinCode))"
+        )
+        RelaySoftResumeDebug.logFallbackToRejoin(reason: "\(trigger)_same_room_preserved")
+        relayDisplaySession.cancelRelayDisconnectRecycleTask()
+        switch relayLifecycleBanner {
+        case .reconnecting, .restoringSession, .sessionRestoredSoft, .connectionRestored, .reconnectedRestartingRep:
+            break
+        default:
+            if relayDisplaySession.socketConnectionState != .connected {
+                relayLifecycleBanner = .reconnecting
+            }
+        }
+        await relayDisplaySession.reconnectSameRoomTransport(forceFreshSocket: true)
+        startDisplaySameRoomReconnectRetryLoopIfNeeded(trigger: "recycle_blocked_\(trigger)")
+        if displaySameRoomReconnectRetryTask == nil,
+           relayDisplaySession.socketConnectionState != .connected,
+           relayDisplaySession.hasAdoptableRelaySession {
+            startDisplaySameRoomSlowReconnectRetryLoopIfNeeded(trigger: "recycle_blocked_\(trigger)")
+        }
+    }
+
     /// Player iPad: tear down relay and `POST /v1/sessions` so join code + `relaySessionId` stay aligned with the server.
     @MainActor
     private func forceRegenerateIPadDisplayRelaySessionAfterForeground(reason: String) async {
+        if shouldPreserveDisplayRelaySameRoomForActivePartnerSession(reason: reason) {
+            await preserveActivePartnerDisplayRelaySameRoom(trigger: reason)
+            return
+        }
         relayDisplaySession.stopHosting()
         try? await Task.sleep(nanoseconds: 200_000_000)
         trackedRelaySessionId = nil
@@ -580,9 +1261,8 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
     private func mintFreshIPadDisplayRelaySessionWhenForegroundReconnectStillOffline() async {
         guard CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
         guard isPartnerTrainingSessionActive else { return }
-        if TimedSessionController.shared.isManagingSession,
-           CurrentSessionStore.shared.sessionId != nil {
-            await relayDisplaySession.startDisplaySessionIfNeeded()
+        if shouldPreserveDisplayRelaySameRoomForActivePartnerSession(reason: "foreground_mint_check") {
+            await preserveActivePartnerDisplayRelaySameRoom(trigger: "foreground_mint_check")
             return
         }
         let joinTrimmed = relayDisplaySession.joinCode?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -740,8 +1420,8 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         await relayDisplaySession.startDisplaySessionIfNeeded()
 
         if coachRelayRemoteService.connectionState != .connected {
-            LifecycleReconnectDebug.logReconnectAttempt(context: "coach.RemoteService.connect")
-            coachRelayRemoteService.connect()
+            LifecycleReconnectDebug.logReconnectAttempt(context: "coach.reconnectWebSocketFromRetainedConfig")
+            reconnectCoachRelayWebSocketFromRetainedConfigIfNeeded(reason: "foreground_didBecomeActive")
         }
 
         try? await Task.sleep(nanoseconds: 350_000_000)
@@ -813,6 +1493,8 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
             awaitingSoftResumeCheckpointValidation = true
             RelaySoftResumeDebug.logSoftResumeOutcome(success: false, reason: "coach_awaiting_checkpoint_validation")
             await postRelayForegroundReconnectCompleted()
+            // If PARTNER LINK LIVE already (connected + peerPresent), exit restoring without waiting for checkpoint.
+            refreshMidSessionPartnerDisconnectState()
             #if DEBUG
             PartnerPersistDebug.log("UIApplication.didBecomeActive — coach soft-resume awaiting checkpoint")
             #endif
@@ -867,9 +1549,94 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         lastCoachRelayJoinCode = trimmed
     }
 
+    /// Persist coach WebSocket credentials after a successful HTTP join so same-room reconnect can rebuild without POST /join.
+    func recordCoachRelayWebSocketSessionConfig(_ config: WebSocketSessionConfig) {
+        retainedCoachWebSocketSessionConfig = config
+        recordRelaySessionId(config.sessionId)
+        HotspotBaselineLog.emit(
+            "COACH retained_ws_config sessionSuffix=\(HotspotBaselineLog.sessionSuffix(config.sessionId))"
+        )
+    }
+
     /// Clears the stored coach join code. Only the coordinator should do this as part of an explicit partner-session end.
     private func clearRecordedCoachRelayJoinCode() {
         lastCoachRelayJoinCode = nil
+        clearRetainedCoachWebSocketSessionConfig()
+    }
+
+    private func clearRetainedCoachWebSocketSessionConfig() {
+        retainedCoachWebSocketSessionConfig = nil
+    }
+
+    /// Same-room coach reconnect without POST /join. Rebuilds `WebSocketRemoteTransport` when the installed transport is Pending/unusable.
+    /// Also force-refreshes when the socket is `.connected` but the display peer is missing (common hotspot hang:
+    /// cellular socket stays up, retries no-op'd, overlay stuck for minutes).
+    @MainActor
+    func reconnectCoachRelayWebSocketFromRetainedConfigIfNeeded(reason: String) {
+        guard !CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
+        guard isPartnerTrainingSessionActive else { return }
+
+        let connectedWithoutDisplayPeer = coachRelayRemoteService.connectionState == .connected
+            && !coachRelayDisplayPeerPresent
+        if connectedWithoutDisplayPeer {
+            HotspotBaselineLog.emit(
+                "COACH reconnect force_fresh reason=\(reason) connected_without_peer sessionSuffix=\(HotspotBaselineLog.sessionSuffix(retainedCoachWebSocketSessionConfig?.sessionId ?? trackedRelaySessionId))"
+            )
+            coachRelayRemoteService.disconnect()
+            coachRelayDisplayPeerPresent = false
+        } else if coachRelayRemoteService.connectionState == .connected {
+            return
+        }
+
+        let retained = retainedCoachWebSocketSessionConfig
+        let hasRetained = retained != nil
+        let transportKind = coachRelayRemoteService.installedTransportKindForDiagnostics
+        let usableWS = coachRelayRemoteService.hasUsableWebSocketRemoteTransport
+
+        HotspotBaselineLog.emit(
+            "COACH reconnect path reason=\(reason) retainedConfig=\(hasRetained) installedTransport=\(transportKind) rebuildingTransport=\(!usableWS && hasRetained) sessionSuffix=\(HotspotBaselineLog.sessionSuffix(retained?.sessionId ?? trackedRelaySessionId))"
+        )
+
+        guard let config = retained else {
+            HotspotBaselineLog.emit("COACH reconnect aborted reason=\(reason) missing_retained_ws_config")
+            return
+        }
+
+        if usableWS {
+            HotspotBaselineLog.emit(
+                "COACH reconnect connect_started reuse_existing_ws_transport sessionSuffix=\(HotspotBaselineLog.sessionSuffix(config.sessionId))"
+            )
+            coachRelayRemoteService.connect()
+            return
+        }
+
+        HotspotBaselineLog.emit(
+            "COACH reconnect connect_started rebuilding_ws_transport from_retained_config sessionSuffix=\(HotspotBaselineLog.sessionSuffix(config.sessionId))"
+        )
+        installCoachRelayWebSocketTransportFromRetainedConfig(config, reason: reason)
+    }
+
+    /// Installs a fresh coach WebSocket from retained same-session credentials (no HTTP /join).
+    @MainActor
+    private func installCoachRelayWebSocketTransportFromRetainedConfig(_ config: WebSocketSessionConfig, reason: String) {
+        let transport = WebSocketRemoteTransport(config: config)
+        let remote = coachRelayRemoteService
+        transport.onRawTextReceived = { text in
+            TrainingPartnerConnectionCoordinator.shared.ingestCoachRelayRawControlText(text)
+            if text.lowercased().contains("peer_left") {
+                Task { @MainActor in
+                    let preserve = TrainingPartnerConnectionCoordinator.shared.shouldPreserveCoachRelaySocketOnDisplayPeerLeft()
+                    HotspotBaselineLog.emit(
+                        "COACH peer_left HANDLER site=retainedConfigReconnect preserveSocket=\(preserve) reason=\(reason)"
+                    )
+                    if !preserve {
+                        remote.disconnect()
+                    }
+                }
+            }
+        }
+        remote.replaceTransport(transport)
+        remote.connect()
     }
 
     /// Call when entering the partner training flow (first relay display or first coach relay join).
@@ -881,6 +1648,7 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
             return
         }
         clearMidSessionPartnerDisconnectState()
+        clearPersistedCoachNextRepProgress(reason: "begin_partner_training_session")
         relaySessionMutationToken += 1
         let adoptExistingRelay = relayDisplaySession.hasAdoptableRelaySession
         if !adoptExistingRelay {
@@ -906,8 +1674,20 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         sessionCalibrationResolved = true
         sessionCalibrationAverageTravelTime = PartnerPassTempoCalibrationStore.seededAverageTravelTimeSeconds()
         sessionCalibrationMode = .partner
-        trackedRelaySessionId = nil
-        lastKnownValidRelaySessionId = nil
+        // Warm-up already created the display room + recorded its id; wiping here broke mid-session
+        // soft-reconnect (`trackedRelaySessionId` was nil in TRANSPORT_LOSS logs).
+        if adoptExistingRelay,
+           let sid = relayDisplaySession.relaySessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !sid.isEmpty {
+            trackedRelaySessionId = sid
+            lastKnownValidRelaySessionId = sid
+            HotspotBaselineLog.emit(
+                "DISPLAY adopt_tracked_session sessionSuffix=\(HotspotBaselineLog.sessionSuffix(sid)) joinSuffix=\(HotspotBaselineLog.joinSuffix(relayDisplaySession.joinCode))"
+            )
+        } else {
+            trackedRelaySessionId = nil
+            lastKnownValidRelaySessionId = nil
+        }
         clearSoftResumeInterruptionState()
         relayLifecycleBanner = .hidden
         #if DEBUG
@@ -943,6 +1723,7 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         EndTrainingDebug.log("explicit end requested reason=\(reason) notifyPeer=\(notifyPeer) — clearing active + stored join code before peer notify")
         #endif
         clearMidSessionPartnerDisconnectState()
+        clearPersistedCoachNextRepProgress(reason: "end_partner_training_session")
         relaySessionMutationToken += 1
         let endToken = relaySessionMutationToken
         isPartnerTrainingSessionActive = false
@@ -1318,12 +2099,81 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         TimedSessionController.shared.markPartnerDisplaySessionActiveFromRelay()
         print("[COACH STATE] currentTimedSessionActivityId=\(currentTimedSessionActivityId ?? "nil") ready=true")
         Task { await attemptCoachRelayAutoReconnectFromStoredJoinCodeIfNeeded(reason: "display_repEngineReady") }
+
+        // FIRST READY / NEW BLOCK: notify coach remotes (may reset currentRepIndex to 0).
+        // READY REBROADCAST after transient reconnect into the SAME live drill: do not notify —
+        // that incorrectly triggered applyPartnerTrainAgainCoachRemoteReset → nextRep 0.
+        //
+        // Do NOT require TimedSessionController.isManagingSession — that is true on the display
+        // iPad, not the coach iPhone, so it always failed the preserve check on coach.
+        let sameLiveDrillReadyRebroadcast =
+            repEngineWasReady == false
+            && isPartnerTrainingSessionActive
+            && hasStartedAtLeastOneRep
+
         if !repEngineWasReady {
-            NotificationCenter.default.post(
-                name: .partnerDisplayRepEngineBecameReady,
-                object: activityId
-            )
+            if sameLiveDrillReadyRebroadcast {
+                HotspotBaselineLog.emit(
+                    "COACH displayRepEngineReady rebroadcast preserved_rep_progress skip_trainAgainReset activityId=\(activityId) drillUnderway=\(hasStartedAtLeastOneRep)"
+                )
+            } else {
+                HotspotBaselineLog.emit(
+                    "COACH displayRepEngineReady first_ready_or_new_block post_trainAgainReset activityId=\(activityId) drillUnderway=\(hasStartedAtLeastOneRep)"
+                )
+                NotificationCenter.default.post(
+                    name: .partnerDisplayRepEngineBecameReady,
+                    object: activityId
+                )
+            }
         }
+    }
+
+    /// Coach remotes: true only for genuine first-ready / Train Again (drill not underway).
+    /// Same-live-session reconnect rebroadcasts must not reset ``currentRepIndex``.
+    @MainActor
+    func shouldApplyCoachTrainAgainRepReset() -> Bool {
+        guard isPartnerTrainingSessionActive else { return false }
+        if hasStartedAtLeastOneRep {
+            return false
+        }
+        // Survives `hasStartedAtLeastOneRep` being cleared incorrectly during transport flaps.
+        if let aid = currentTimedSessionActivityId ?? lastNonNilActivityId,
+           coachPersistedNextRepActivityId == aid,
+           coachPersistedNextRepIndex > 0 {
+            return false
+        }
+        return true
+    }
+
+    /// Record the coach TAP / in-flight rep index so reconnect or SwiftUI remount can restore it.
+    @MainActor
+    func notePersistedCoachNextRepIndex(_ index: Int, activityId: String) {
+        guard isPartnerTrainingSessionActive else { return }
+        guard !activityId.isEmpty else { return }
+        let clamped = max(0, index)
+        coachPersistedNextRepActivityId = activityId
+        coachPersistedNextRepIndex = clamped
+        HotspotBaselineLog.emit(
+            "COACH persisted_rep_note index=\(clamped) activityId=\(activityId)"
+        )
+    }
+
+    /// If local `@State` lagged (remount / Train Again false positive), return a higher persisted index.
+    @MainActor
+    func suggestedCoachRepIndexRestore(current: Int, activityId: String) -> Int? {
+        guard coachPersistedNextRepActivityId == activityId else { return nil }
+        guard coachPersistedNextRepIndex > current else { return nil }
+        return coachPersistedNextRepIndex
+    }
+
+    @MainActor
+    func clearPersistedCoachNextRepProgress(reason: String) {
+        guard coachPersistedNextRepIndex != 0 || coachPersistedNextRepActivityId != nil else { return }
+        HotspotBaselineLog.emit(
+            "COACH persisted_rep_clear reason=\(reason) wasIndex=\(coachPersistedNextRepIndex) wasActivity=\(coachPersistedNextRepActivityId ?? "nil")"
+        )
+        coachPersistedNextRepIndex = 0
+        coachPersistedNextRepActivityId = nil
     }
 
     /// Coach phone only: display not ready or session ended.
@@ -1360,6 +2210,13 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         isDisplayRepEngineReady = false
         displayTimedSessionAnnounced = false
         isPartnerDisplayCountdownActive = false
+        // Next displayRepEngineReady is a first-ready / new-block event (Train Again), not a reconnect rebroadcast.
+        hasStartedAtLeastOneRep = false
+        hadPartnerTransportLinkLiveThisSession = false
+        linkDownSinceDrillUnderway = false
+        isTransientPartnerLinkLossReconnecting = false
+        clearPersistedCoachNextRepProgress(reason: "soft_reset_timed_session_end")
+        cancelMidSessionDisconnectDebounce()
         TimedSessionController.shared.prepareCoachRemoteForPartnerDurationSelection()
         CurrentSessionStore.shared.resetPartnerTimedSessionEndHandled()
         #if DEBUG
@@ -1409,17 +2266,10 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
         NotificationCenter.default.post(name: .partnerTimedSessionEndedFromDisplay, object: nil)
     }
 
-    /// Coach phone: re-join relay using the stored join code (Train Again / hub tap while socket dropped or zombie).
+    /// Coach phone: restore relay socket using retained same-session WebSocket credentials (no POST /join).
     func attemptCoachRelayAutoReconnectFromStoredJoinCodeIfNeeded(reason: String) async {
         guard !CoachRemoteSessionStartGate.isPadPlayerRole() else { return }
         guard isPartnerTrainingSessionActive else { return }
-        guard let code = lastCoachRelayJoinCode?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !code.isEmpty else {
-            #if DEBUG
-            print("[CoachRelay] auto-reconnect skipped reason=\(reason) — no stored join code")
-            #endif
-            return
-        }
 
         let linkLive = isPartnerTransportLinkLive
         guard !linkLive else {
@@ -1431,44 +2281,21 @@ final class TrainingPartnerConnectionCoordinator: ObservableObject {
 
         if coachRelayRemoteService.connectionState == .connected {
             #if DEBUG
-            print("[CoachRelay] stale socket (connected, no peer) — disconnecting before re-join reason=\(reason)")
+            print("[CoachRelay] stale socket (connected, no peer) — disconnecting before reconnect reason=\(reason)")
             #endif
             coachRelayRemoteService.disconnect()
             coachRelayDisplayPeerPresent = false
         }
 
-        #if DEBUG
-        print("[CoachRelay] auto-reconnect starting reason=\(reason) joinCode=\(code)")
-        #endif
-        do {
-            let joined = try await WebSocketSessionAPI.joinSession(joinCode: code)
-            let wsURL = try joined.webSocketURLForCoach()
-            recordRelaySessionId(joined.sessionId)
-            let config = WebSocketSessionConfig(url: wsURL, sessionId: joined.sessionId, authToken: joined.coachToken)
-            let transport = WebSocketRemoteTransport(config: config)
-            let remote = coachRelayRemoteService
-            transport.onRawTextReceived = { text in
-                TrainingPartnerConnectionCoordinator.shared.ingestCoachRelayRawControlText(text)
-                if text.lowercased().contains("peer_left") {
-                    Task { @MainActor in
-                        remote.disconnect()
-                    }
-                }
-            }
-            recordCoachRelayJoinCode(code)
-            remote.replaceTransport(transport)
-            remote.connect()
+        // Same-session reconnect only: rebuild/reuse WebSocket from retained config — never POST /join (COACH_SLOT_TAKEN).
+        guard retainedCoachWebSocketSessionConfig != nil else {
             #if DEBUG
-            print("[CoachRelay] auto-reconnect ok reason=\(reason) — awaiting peer_joined for live link")
+            print("[CoachRelay] auto-reconnect skipped reason=\(reason) — no retained ws config")
             #endif
-        } catch {
-            #if DEBUG
-            print("[CoachRelay] auto-reconnect failed reason=\(reason) error=\(error.localizedDescription)")
-            #endif
-            if WebSocketSessionAPI.isInvalidOrExpiredJoinSessionError(error) {
-                recoverCoachRelayStateAfterExpiredJoinCode()
-            }
+            HotspotBaselineLog.emit("COACH reconnect aborted reason=\(reason) missing_retained_ws_config")
+            return
         }
+        reconnectCoachRelayWebSocketFromRetainedConfigIfNeeded(reason: reason)
     }
 
     /// Coach phone: switch timed-session activity on the display (coach remote owns the picker).

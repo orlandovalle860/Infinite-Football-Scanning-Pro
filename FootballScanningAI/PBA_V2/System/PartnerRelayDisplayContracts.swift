@@ -183,7 +183,7 @@ struct PartnerLinkPassiveStatusLine: View {
 
     var body: some View {
         Group {
-            if coordinator.isMidSessionPartnerDisconnect {
+            if coordinator.isTransientPartnerLinkLossReconnecting || coordinator.isMidSessionPartnerDisconnect {
                 EmptyView()
             } else if let text = statusText {
                 switch role {
@@ -283,76 +283,49 @@ struct PartnerDisplaySessionTopChrome: View {
     }
 }
 
-/// Full-screen scrim mid-drill when the partner link drops; either side can start fresh without ending the whole pairing run or restarting the app.
+/// Non-destructive mid-drill transport/peer loss scrim. Temporary link loss is **not** session end —
+/// no “Session ended”, no Start New Session / Enter Code actions here.
 struct PartnerMidSessionDisconnectRecoveryOverlay: View {
     @ObservedObject private var coordinator = TrainingPartnerConnectionCoordinator.shared
-    @EnvironmentObject private var router: AppRouter
 
     var body: some View {
         Group {
-            if coordinator.isMidSessionPartnerDisconnect {
+            if coordinator.isTransientPartnerLinkLossReconnecting {
                 ZStack {
-                    Color.black.opacity(0.58)
+                    Color.black.opacity(0.45)
                         .ignoresSafeArea()
-                    VStack(spacing: 20) {
-                        VStack(spacing: 6) {
-                            Text(primaryMessage)
-                                .font(.headline.weight(.semibold))
-                                .foregroundColor(.white)
-                                .multilineTextAlignment(.center)
-                            Text("Session ended")
-                                .font(.subheadline)
-                                .foregroundColor(.white.opacity(0.8))
-                                .multilineTextAlignment(.center)
-                        }
+                    VStack(spacing: 12) {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(1.15)
+                        Text(primaryMessage)
+                            .font(.headline.weight(.semibold))
+                            .foregroundColor(.white)
+                            .multilineTextAlignment(.center)
                         Text(subtitleMessage)
                             .font(.subheadline)
-                            .foregroundColor(.white.opacity(0.72))
+                            .foregroundColor(.white.opacity(0.78))
                             .multilineTextAlignment(.center)
-                        Button {
-                            if CoachRemoteSessionStartGate.isPadPlayerRole() {
-                                Task {
-                                    await coordinator.startNewPartnerSessionFromDisconnect(router: router)
-                                }
-                            } else {
-                                coordinator.handleCoachEnterCodeAfterDisplayUnavailable(router: router)
-                            }
-                        } label: {
-                            Text(primaryActionTitle)
-                                .font(.headline)
-                                .foregroundColor(.black)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
-                                .background(Color.yellow)
-                                .cornerRadius(12)
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.top, 8)
                     }
                     .padding(.horizontal, 28)
                     .padding(.vertical, 32)
                 }
                 .transition(.opacity)
+                .allowsHitTesting(false)
             }
         }
     }
 
     private var primaryMessage: String {
         CoachRemoteSessionStartGate.isPadPlayerRole()
-            ? "Remote disconnected"
-            : "Display unavailable"
+            ? "Reconnecting to remote…"
+            : "Reconnecting to display…"
     }
 
     private var subtitleMessage: String {
         CoachRemoteSessionStartGate.isPadPlayerRole()
-            ? "Start a new relay session on this iPad. The coach will need the new join code."
-            : "Return to the join screen and enter the code shown on the iPad."
-    }
-
-    private var primaryActionTitle: String {
-        CoachRemoteSessionStartGate.isPadPlayerRole()
-            ? "Start New Session"
-            : "Enter Code"
+            ? "Keeping this session. Waiting for the coach link to return."
+            : "Keeping this session. Waiting for the display to return."
     }
 }
 

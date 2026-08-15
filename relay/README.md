@@ -35,7 +35,7 @@ Default: **HTTP** `http://127.0.0.1:3000`, **WebSocket** `ws://127.0.0.1:3000/ws
 | `HOST` | `0.0.0.0` | Bind address (`127.0.0.1` if only the reverse proxy on the same machine connects) |
 | `PUBLIC_WS_URL` | `ws://<host>:<port>/ws` (derived) | **Canonical WebSocket base** returned in JSON as `wsUrl` (see `normalizeRelayWsUrl()` in `server.js`). **Must** be set to your public `wss://…` URL in production. |
 | `ROOM_TTL_MS` | `86400000` (24h) | Session expiry from creation |
-| `EMPTY_ROOM_GRACE_MS` | `300000` (5m) | After both peers disconnect, delete room after this delay |
+| `EMPTY_ROOM_GRACE_MS` | `900000` (15m) | After both peers disconnect, delete room after this delay |
 
 Template for production: copy `relay/.env.production.example` and adjust values on the server.
 
@@ -116,7 +116,7 @@ Optional (same as local dev):
 | Variable | Default |
 |----------|---------|
 | `ROOM_TTL_MS` | `86400000` |
-| `EMPTY_ROOM_GRACE_MS` | `300000` |
+| `EMPTY_ROOM_GRACE_MS` | `900000` |
 
 ### How to run the relay
 

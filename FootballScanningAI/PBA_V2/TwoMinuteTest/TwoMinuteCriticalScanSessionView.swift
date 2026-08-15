@@ -478,12 +478,20 @@ struct TwoMinuteCriticalScanSessionView: View {
             isBlockingDrillMessagesFromCoach: shouldBlockCoachDrillMessages,
             pendingNextRepIndex: &pendingNextRepIndex
         ) {
+            if case .nextRep(let repIndex) = msg {
+                HotspotBaselineLog.emit(
+                    "DISPLAY nextRep deferred reason=countdown_block repIndex=\(repIndex) phase=\(twoMTHotspotPhaseLabel(engine.phase)) expectedNext=\(partnerCoachRepGate.expectedNextCoachRepIndex)"
+                )
+            }
             return
         }
         switch msg {
         case .repStarted:
             return
         case .nextRep(let repIndex):
+            HotspotBaselineLog.emit(
+                "DISPLAY nextRep received repIndex=\(repIndex) phase=\(twoMTHotspotPhaseLabel(engine.phase)) engineRep=\(engine.currentRepIndex) expectedNext=\(partnerCoachRepGate.expectedNextCoachRepIndex)"
+            )
             applyPartnerCoachNextRep(repIndex: repIndex)
         case .passTriggered(let repIndex, let timestamp):
             guard twoMTAllowsPassTrigger(repIndex: repIndex) else { return }
@@ -572,8 +580,12 @@ struct TwoMinuteCriticalScanSessionView: View {
         engine.partnerSoftAbandonCurrentRepAwaitCoachRedo(blockRepCount: blockTotalReps)
         let safeRepIndex = max(0, min(engine.currentRepIndex, blockTotalReps - 1))
         var gate = partnerCoachRepGate
+        let priorExpected = gate.expectedNextCoachRepIndex
         gate.alignExpectedNextForCoachSoftReconnectReplay(repIndex: safeRepIndex)
         partnerCoachRepGate = gate
+        HotspotBaselineLog.emit(
+            "DISPLAY soft_reconnect_rep_align priorExpected=\(priorExpected) alignedExpected=\(partnerCoachRepGate.expectedNextCoachRepIndex) engineRep=\(safeRepIndex) phase=\(twoMTHotspotPhaseLabel(engine.phase))"
+        )
         TrainingPartnerConnectionCoordinator.shared.syncDisplaySessionCurrentRepIndex(
             safeRepIndex,
             activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId
@@ -623,7 +635,12 @@ struct TwoMinuteCriticalScanSessionView: View {
             repIndex: repIndex,
             instructionVisible: sessionStartCueContent != nil,
             pending: &pendingNextRepIndex
-        ) { return }
+        ) {
+            HotspotBaselineLog.emit(
+                "DISPLAY nextRep reject reason=session_start_cue_defer repIndex=\(repIndex) expectedNext=\(partnerCoachRepGate.expectedNextCoachRepIndex)"
+            )
+            return
+        }
         #if DEBUG
         if repIndex > partnerCoachRepGate.expectedNextCoachRepIndex {
             print("[PartnerCoach][2MT] nextRep coach ahead of displayTrackedNext: coach=\(repIndex) displayNext=\(partnerCoachRepGate.expectedNextCoachRepIndex)")
@@ -648,19 +665,30 @@ struct TwoMinuteCriticalScanSessionView: View {
         partnerCoachRepGate = wrapGate
         if case .waitingForNextRep = engine.phase, repIndex < partnerCoachRepGate.expectedNextCoachRepIndex {
             if repIndex + 1 == partnerCoachRepGate.expectedNextCoachRepIndex {
-                sendRepStartedAck(repIndex: repIndex)
-                #if DEBUG
-                print("[PartnerCoach][2MT] duplicate nextRep \(repIndex) (already applied) — re-sent repStarted")
-                #endif
+                // After background/reconnect the coach often re-sends the same nextRep while the
+                // gate still expects rep+1. Replay (re-arm) instead of ack-only so TAP TO START works.
+                var gate = partnerCoachRepGate
+                gate.alignExpectedNextForCoachSoftReconnectReplay(repIndex: repIndex)
+                partnerCoachRepGate = gate
+                HotspotBaselineLog.emit(
+                    "DISPLAY nextRep replay reason=duplicate_while_waiting repIndex=\(repIndex) expectedNext=\(partnerCoachRepGate.expectedNextCoachRepIndex) phase=waitingForNextRep"
+                )
+                _ = tryCommitPartnerCoachNextRep(repIndex: repIndex)
             } else {
                 #if DEBUG
                 print("[PartnerCoach][2MT] ignoring stale nextRep \(repIndex) (displayTrackedNext=\(partnerCoachRepGate.expectedNextCoachRepIndex))")
                 #endif
+                HotspotBaselineLog.emit(
+                    "DISPLAY nextRep reject reason=stale repIndex=\(repIndex) expectedNext=\(partnerCoachRepGate.expectedNextCoachRepIndex) phase=waitingForNextRep"
+                )
             }
             return
         }
         guard case .waitingForNextRep = engine.phase else {
             print("[NEXTREP] received repIndex=\(repIndex) while phase=\(engine.phase) currentRepIndex=\(engine.currentRepIndex)")
+            HotspotBaselineLog.emit(
+                "DISPLAY nextRep force_ready phase=\(twoMTHotspotPhaseLabel(engine.phase)) repIndex=\(repIndex) expectedNext=\(partnerCoachRepGate.expectedNextCoachRepIndex)"
+            )
             engine.forceReadyForIncomingCoachNextRep()
             repController.completeRepCycleEnd()
             _ = tryCommitPartnerCoachNextRep(repIndex: repIndex)
@@ -704,19 +732,36 @@ struct TwoMinuteCriticalScanSessionView: View {
             repIndex: repIndex,
             instructionVisible: sessionStartCueContent != nil,
             pending: &pendingNextRepIndex
-        ) { return false }
+        ) {
+            HotspotBaselineLog.emit(
+                "DISPLAY nextRep reject reason=session_start_cue_defer_commit repIndex=\(repIndex)"
+            )
+            return false
+        }
         print("[NEXTREP] received repIndex=\(repIndex) while phase=\(engine.phase) currentRepIndex=\(engine.currentRepIndex)")
         if repIndex < partnerCoachRepGate.expectedNextCoachRepIndex {
             if repIndex + 1 == partnerCoachRepGate.expectedNextCoachRepIndex, case .waitingForNextRep = engine.phase {
-                sendRepStartedAck(repIndex: repIndex)
-                pendingNextRepIndex = nil
-                return true
-            }
-            if repIndex + 1 == partnerCoachRepGate.expectedNextCoachRepIndex {
+                var gate = partnerCoachRepGate
+                gate.alignExpectedNextForCoachSoftReconnectReplay(repIndex: repIndex)
+                partnerCoachRepGate = gate
+                HotspotBaselineLog.emit(
+                    "DISPLAY nextRep replay reason=duplicate_while_waiting_commit repIndex=\(repIndex) expectedNext=\(partnerCoachRepGate.expectedNextCoachRepIndex) phase=waitingForNextRep"
+                )
+                // Fall through to apply after rewinding the gate.
+            } else if repIndex + 1 == partnerCoachRepGate.expectedNextCoachRepIndex {
                 print("[NEXTREP BLOCKED] phase=\(engine.phase) expected=waitingForNextRep")
+                HotspotBaselineLog.emit(
+                    "DISPLAY nextRep reject reason=duplicate_wrong_phase repIndex=\(repIndex) expectedNext=\(partnerCoachRepGate.expectedNextCoachRepIndex) phase=\(twoMTHotspotPhaseLabel(engine.phase))"
+                )
+                pendingNextRepIndex = nil
+                return false
+            } else {
+                HotspotBaselineLog.emit(
+                    "DISPLAY nextRep reject reason=stale_commit repIndex=\(repIndex) expectedNext=\(partnerCoachRepGate.expectedNextCoachRepIndex) phase=\(twoMTHotspotPhaseLabel(engine.phase))"
+                )
+                pendingNextRepIndex = nil
+                return false
             }
-            pendingNextRepIndex = nil
-            return false
         }
         if repIndex < engine.currentRepIndex {
             if !SoloTimeBasedDisplaySessionSupport.allowsPartnerCoachChunkWrapNextRep(
@@ -724,18 +769,27 @@ struct TwoMinuteCriticalScanSessionView: View {
                 engineCurrentRepIndex: engine.currentRepIndex
             ) {
                 pendingNextRepIndex = nil
+                HotspotBaselineLog.emit(
+                    "DISPLAY nextRep reject reason=behind_engine_no_wrap repIndex=\(repIndex) engineRep=\(engine.currentRepIndex)"
+                )
                 return false
             }
         }
         if repIndex == engine.currentRepIndex {
             guard case .waitingForNextRep = engine.phase else {
                 print("[NEXTREP BLOCKED] phase=\(engine.phase) expected=waitingForNextRep")
+                HotspotBaselineLog.emit(
+                    "DISPLAY nextRep reject reason=same_rep_wrong_phase repIndex=\(repIndex) phase=\(twoMTHotspotPhaseLabel(engine.phase))"
+                )
                 return false
             }
         }
         if repIndex > engine.currentRepIndex {
             guard case .waitingForNextRep = engine.phase else {
                 print("[NEXTREP BLOCKED] phase=\(engine.phase) expected=waitingForNextRep")
+                HotspotBaselineLog.emit(
+                    "DISPLAY nextRep reject reason=ahead_wrong_phase repIndex=\(repIndex) phase=\(twoMTHotspotPhaseLabel(engine.phase))"
+                )
                 return false
             }
         }
@@ -744,8 +798,14 @@ struct TwoMinuteCriticalScanSessionView: View {
             if twoMTDisplayEngineIsMidRep(repIndex: repIndex) {
                 sendRepStartedAck(repIndex: repIndex)
                 pendingNextRepIndex = nil
+                HotspotBaselineLog.emit(
+                    "DISPLAY nextRep reject reason=rep_controller_mid_rep_ack_only repIndex=\(repIndex) phase=\(twoMTHotspotPhaseLabel(engine.phase))"
+                )
                 return true
             }
+            HotspotBaselineLog.emit(
+                "DISPLAY nextRep reject reason=rep_controller_busy repIndex=\(repIndex) phase=\(twoMTHotspotPhaseLabel(engine.phase))"
+            )
             return false
         }
         let wasWaitingForNextRep: Bool
@@ -762,6 +822,9 @@ struct TwoMinuteCriticalScanSessionView: View {
             #if DEBUG
             print("[PartnerCoach][2MT] onNextRep did not arm (phase still waiting) — reverting repController; no ack")
             #endif
+            HotspotBaselineLog.emit(
+                "DISPLAY nextRep reject reason=onNextRep_did_not_arm repIndex=\(repIndex) phase=waitingForNextRep"
+            )
             return false
         }
         var gate = partnerCoachRepGate
@@ -769,7 +832,25 @@ struct TwoMinuteCriticalScanSessionView: View {
         partnerCoachRepGate = gate
         sendRepStartedAck(repIndex: repIndex)
         pendingNextRepIndex = nil
+        let armed: Bool = {
+            if case .armedScanning = engine.phase { return true }
+            return false
+        }()
+        HotspotBaselineLog.emit(
+            "DISPLAY nextRep accept repIndex=\(repIndex) phase=\(twoMTHotspotPhaseLabel(engine.phase)) expectedNext=\(partnerCoachRepGate.expectedNextCoachRepIndex) armedScanning=\(armed)"
+        )
         return true
+    }
+
+    private func twoMTHotspotPhaseLabel(_ phase: CriticalScanPhase) -> String {
+        switch phase {
+        case .waitingForNextRep: return "waitingForNextRep"
+        case .armedScanning(let r, _, _): return "armedScanning(\(r))"
+        case .beepedAwaitingPass(let r, _): return "beepedAwaitingPass(\(r))"
+        case .ballVisible(let r, _, _): return "ballVisible(\(r))"
+        case .awaitingExitLog(let r, _): return "awaitingExitLog(\(r))"
+        case .complete: return "complete"
+        }
     }
 
     private func flushPendingPartnerCoachNextRepIfNeeded() {
@@ -1702,9 +1783,13 @@ struct TwoMinuteCriticalScanSessionView: View {
     }
 
     /// Partner “waiting for coach” overlay: show until the coach is paired (Multipeer peer or relay `peer_joined`).
+    /// Mid-session transport loss must not fall back to initial pairing / “Start New Session” UI.
     private var shouldShowWaitingForCoachOverlay: Bool {
         guard mode.requiresPhoneDisplayRelay else { return false }
-        if TrainingPartnerConnectionCoordinator.shared.isMidSessionPartnerDisconnect { return false }
+        let coordinator = TrainingPartnerConnectionCoordinator.shared
+        if coordinator.isTransientPartnerLinkLossReconnecting { return false }
+        if coordinator.isMidSessionPartnerDisconnect { return false }
+        if coordinator.isPartnerDrillUnderway { return false }
         if sessionTransportMode == .relayWebSocket {
             return !partnerRelaySession.isCoachPaired
         }

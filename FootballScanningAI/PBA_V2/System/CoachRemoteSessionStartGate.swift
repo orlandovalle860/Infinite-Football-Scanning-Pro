@@ -51,14 +51,19 @@ enum CoachRemoteSessionStartGate {
 
 /// Coach Remote hub: join code vs activity grid gating.
 enum CoachRemoteHubLaunchPolicy {
-    /// Activity grid — only when partner transport is actually live (join code + peer_joined).
+    /// Activity grid only when the coach↔display **relay** link is live, or mid-session same-room reconnect
+    /// still has retained credentials. Never open Start Session just because `isPartnerTrainingSessionActive`
+    /// is sticky (that skipped join on cold launch).
     @MainActor
     static var canOpenActivitySelection: Bool {
         let coordinator = TrainingPartnerConnectionCoordinator.shared
-        if coordinator.isPartnerTrainingSessionActive {
-            return coordinator.isPartnerTransportLinkLive
+        if coordinator.isCoachRelayDisplayLinkLive { return true }
+        // Mid-session walk-away: keep the activity grid (not join entry) while reconnect identity exists.
+        if coordinator.shouldKeepCoachActivityRemoteMountedAcrossTransientLinkLoss,
+           coordinator.hasRetainedCoachRelayReconnectIdentity {
+            return true
         }
-        return CoachRemoteSessionStartGate.coachDeviceIsPresent()
+        return false
     }
 
     @MainActor

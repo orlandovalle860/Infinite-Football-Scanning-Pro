@@ -128,15 +128,24 @@ enum WebSocketSessionAPI {
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else {
+            HotspotBaselineLog.emit("HTTP createSession failed reason=non_http_response")
             throw WebSocketSessionAPIError.httpError(statusCode: -1, body: nil)
         }
         guard (200...299).contains(http.statusCode) else {
             let body = String(data: data, encoding: .utf8)
+            HotspotBaselineLog.emit(
+                "HTTP createSession failed status=\(http.statusCode) classified=\(HotspotBaselineLog.classifyRelayFrame(body ?? ""))"
+            )
             throw WebSocketSessionAPIError.httpError(statusCode: http.statusCode, body: body)
         }
         do {
-            return try JSONDecoder().decode(WebSocketRelayCreateSessionResponse.self, from: data)
+            let decoded = try JSONDecoder().decode(WebSocketRelayCreateSessionResponse.self, from: data)
+            HotspotBaselineLog.emit(
+                "HTTP createSession ok sessionSuffix=\(HotspotBaselineLog.sessionSuffix(decoded.sessionId)) joinSuffix=\(HotspotBaselineLog.joinSuffix(decoded.joinCode))"
+            )
+            return decoded
         } catch {
+            HotspotBaselineLog.emit("HTTP createSession decodingFailed")
             throw WebSocketSessionAPIError.decodingFailed(underlying: error)
         }
     }
@@ -150,20 +159,30 @@ enum WebSocketSessionAPI {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let normalizedCode = joinCode.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        HotspotBaselineLog.emit("HTTP POST_/join attempted joinSuffix=\(HotspotBaselineLog.joinSuffix(normalizedCode))")
         let body: [String: String] = ["joinCode": normalizedCode]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else {
+            HotspotBaselineLog.emit("HTTP POST_/join failed reason=non_http_response joinSuffix=\(HotspotBaselineLog.joinSuffix(normalizedCode))")
             throw WebSocketSessionAPIError.httpError(statusCode: -1, body: nil)
         }
         guard (200...299).contains(http.statusCode) else {
             let bodyStr = String(data: data, encoding: .utf8)
+            HotspotBaselineLog.emit(
+                "HTTP POST_/join failed status=\(http.statusCode) classified=\(HotspotBaselineLog.classifyRelayFrame(bodyStr ?? "")) joinSuffix=\(HotspotBaselineLog.joinSuffix(normalizedCode))"
+            )
             throw WebSocketSessionAPIError.httpError(statusCode: http.statusCode, body: bodyStr)
         }
         do {
-            return try JSONDecoder().decode(WebSocketRelayJoinSessionResponse.self, from: data)
+            let decoded = try JSONDecoder().decode(WebSocketRelayJoinSessionResponse.self, from: data)
+            HotspotBaselineLog.emit(
+                "HTTP POST_/join ok sessionSuffix=\(HotspotBaselineLog.sessionSuffix(decoded.sessionId)) joinSuffix=\(HotspotBaselineLog.joinSuffix(normalizedCode))"
+            )
+            return decoded
         } catch {
+            HotspotBaselineLog.emit("HTTP POST_/join decodingFailed joinSuffix=\(HotspotBaselineLog.joinSuffix(normalizedCode))")
             throw WebSocketSessionAPIError.decodingFailed(underlying: error)
         }
     }

@@ -194,6 +194,7 @@ struct TwoMinuteCoachRemoteView: View {
             #endif
             TrainingPartnerConnectionCoordinator.shared.beginPartnerTrainingSessionIfNeeded()
             TrainingPartnerConnectionCoordinator.shared.restoreCoachTimedSessionMirrorIfNeeded()
+            restorePersistedCoachRepIndexIfNeeded(source: "onAppear")
             let coordinator = TrainingPartnerConnectionCoordinator.shared
             coordinator.markSessionCalibrationResolved(
                 averageTravelTimeSeconds: PartnerPassTempoCalibrationStore.seededAverageTravelTimeSeconds(),
@@ -269,9 +270,14 @@ struct TwoMinuteCoachRemoteView: View {
                 coachRepIndexSnapshotAtDisconnect = nil
                 broadcastCoachSessionStartIfNeeded()
                 beginConnectedToCalibrationTransitionIfNeeded()
+                restorePersistedCoachRepIndexIfNeeded(source: "coachSessionConnected")
             } else {
                 if TrainingPartnerConnectionCoordinator.shared.shouldPersistPartnerPairing, wasConnected {
                     coachRepIndexSnapshotAtDisconnect = coachSyncRepIndexForCheckpoint()
+                    TrainingPartnerConnectionCoordinator.shared.notePersistedCoachNextRepIndex(
+                        coachSyncRepIndexForCheckpoint(),
+                        activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId
+                    )
                 } else {
                     coachRepIndexSnapshotAtDisconnect = nil
                 }
@@ -309,14 +315,19 @@ struct TwoMinuteCoachRemoteView: View {
 
     private var readyView: some View {
         VStack(spacing: 20) {
-            if !coachSessionConnected, timedSession.isSessionActive {
-                CoachRemoteWaitingForDisplaySessionView(
-                    headerTitle: "Coach — \(ActivityKind.twoMinuteTest.displayName)",
-                    transportConnected: false,
-                    statusMessage: "Reconnecting to session…"
-                )
-            } else if !coachSessionConnected {
-                connectionSection
+            // Mid-session link loss: never fall back to the join-code form (coach TimedSession is usually inactive).
+            // Keep TAP / waiting UI; PartnerMidSessionDisconnectRecoveryOverlay covers reconnect messaging.
+            if !coachSessionConnected,
+               !TrainingPartnerConnectionCoordinator.shared.shouldKeepCoachActivityRemoteMountedAcrossTransientLinkLoss {
+                if timedSession.isSessionActive {
+                    CoachRemoteWaitingForDisplaySessionView(
+                        headerTitle: "Coach — \(ActivityKind.twoMinuteTest.displayName)",
+                        transportConnected: false,
+                        statusMessage: "Reconnecting to session…"
+                    )
+                } else {
+                    connectionSection
+                }
             } else if showConnectedConfirmation {
                 PartnerConnectedConfirmationView()
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
@@ -363,16 +374,42 @@ struct TwoMinuteCoachRemoteView: View {
 
     @discardableResult
     private func startNextRepIfReady() -> Bool {
-        guard TimedSessionDisplayIntegration.coachRemoteRepControlEnabled else { return false }
+        let stateLabel: String = {
+            switch state {
+            case .ready: return "ready"
+            case .waitingForRepStart(let r): return "waitingForRepStart(\(r))"
+            case .armedForPass(let r): return "armedForPass(\(r))"
+            case .logging(let r): return "logging(\(r))"
+            case .complete: return "complete"
+            }
+        }()
+        HotspotBaselineLog.emit(
+            "COACH startNextRepIfReady enter state=\(stateLabel) currentRepIndex=\(currentRepIndex) linkLive=\(TrainingPartnerConnectionCoordinator.shared.isPartnerTransportLinkLive) connectionState=\(remoteService.connectionState.rawValue)"
+        )
+        restorePersistedCoachRepIndexIfNeeded(source: "startNextRepIfReady")
+        guard TimedSessionDisplayIntegration.coachRemoteRepControlEnabled else {
+            HotspotBaselineLog.emit(
+                "COACH startNextRepIfReady reject reason=rep_control_disabled currentRepIndex=\(currentRepIndex) activityId=\(TrainingPartnerConnectionCoordinator.shared.currentTimedSessionActivityId ?? "nil") ready=\(TrainingPartnerConnectionCoordinator.shared.isDisplayRepEngineReady)"
+            )
+            return false
+        }
         if TimedSessionDisplayIntegration.coachRemoteLoopsEngineChunks {
             currentRepIndex = TimedSessionDisplayIntegration.coachRemoteWrapRepIndex(
                 currentRepIndex,
                 chunkSize: totalReps
             )
         } else {
-            guard currentRepIndex < totalReps else { return false }
+            guard currentRepIndex < totalReps else {
+                HotspotBaselineLog.emit(
+                    "COACH startNextRepIfReady reject reason=rep_index_past_total currentRepIndex=\(currentRepIndex) totalReps=\(totalReps)"
+                )
+                return false
+            }
         }
-        if case .complete = state { return false }
+        if case .complete = state {
+            HotspotBaselineLog.emit("COACH startNextRepIfReady reject reason=state_complete")
+            return false
+        }
         pendingDirectionLogRepZeroBased = nil
         let now = Date().timeIntervalSince1970
         repStartTapSentTimestamp = now
@@ -380,9 +417,13 @@ struct TwoMinuteCoachRemoteView: View {
         if Self.partnerTransportMode == .multipeer {
             connectionManager.lastError = nil
         }
-        remoteService.sendNextRep(repIndex: currentRepIndex)
-        state = .waitingForRepStart(repIndex: currentRepIndex)
-        scheduleRepStartAckTimeout(for: currentRepIndex)
+        let repToSend = currentRepIndex
+        HotspotBaselineLog.emit(
+            "COACH startNextRepIfReady send nextRep repIndex=\(repToSend) priorState=\(stateLabel)"
+        )
+        remoteService.sendNextRep(repIndex: repToSend)
+        state = .waitingForRepStart(repIndex: repToSend)
+        scheduleRepStartAckTimeout(for: repToSend)
         return true
     }
 
@@ -552,13 +593,21 @@ struct TwoMinuteCoachRemoteView: View {
                 }
                 if text.lowercased().contains("peer_left") {
                     #if DEBUG
-                    print("[RelayWS-DEBUG][Coach] peer_left — disconnecting coach relay (display socket left room)")
+                    print("[RelayWS-DEBUG][Coach] peer_left — display socket left room")
                     #endif
                     Task { @MainActor in
                         displayPeerJoinedBinding.wrappedValue = false
-                        CoachPersistDebug.log("peer_left — before remote.disconnect", joinField: "", peerJoined: false)
-                        remote.disconnect()
-                        CoachPersistDebug.log("peer_left — after remote.disconnect", joinField: "", peerJoined: false)
+                        let preserve = TrainingPartnerConnectionCoordinator.shared.shouldPreserveCoachRelaySocketOnDisplayPeerLeft()
+                        HotspotBaselineLog.emit(
+                            "COACH peer_left HANDLER site=TwoMinuteCoachRemoteView preserveSocket=\(preserve) activityId=\(TrainingPartnerConnectionCoordinator.shared.currentTimedSessionActivityId ?? TrainingPartnerConnectionCoordinator.shared.lastNonNilActivityId ?? "nil") partnerActive=\(TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive)"
+                        )
+                        if preserve {
+                            CoachPersistDebug.log("peer_left — preserve coach relay socket (partner active)", joinField: "", peerJoined: false)
+                        } else {
+                            CoachPersistDebug.log("peer_left — before remote.disconnect", joinField: "", peerJoined: false)
+                            remote.disconnect()
+                            CoachPersistDebug.log("peer_left — after remote.disconnect", joinField: "", peerJoined: false)
+                        }
                     }
                 }
             }
@@ -568,6 +617,7 @@ struct TwoMinuteCoachRemoteView: View {
             #endif
             await MainActor.run {
                 TrainingPartnerConnectionCoordinator.shared.recordCoachRelayJoinCode(code)
+                TrainingPartnerConnectionCoordinator.shared.recordCoachRelayWebSocketSessionConfig(config)
                 remoteService.replaceTransport(transport)
                 remoteService.connect()
                 coachRelayJoinBanner = nil
@@ -603,9 +653,20 @@ struct TwoMinuteCoachRemoteView: View {
     private func attemptCoachRelayAutoReconnectIfNeeded() {
         guard !didAttemptCoachRelayAutoReconnect else { return }
         let coord = TrainingPartnerConnectionCoordinator.shared
-        guard let code = coord.lastCoachRelayJoinCode,
-              !code.isEmpty,
-              !coord.isPartnerTransportLinkLive else {
+        guard !coord.isPartnerTransportLinkLive else {
+            CoachPersistDebug.log("auto-reconnect skipped (no code or transport live)", joinField: coachRelayJoinCodeInput, peerJoined: coord.coachRelayDisplayPeerPresent)
+            return
+        }
+        // Mid-session: retained WebSocket only — never POST /join (COACH_SLOT_TAKEN → join screen).
+        if coord.isPartnerTrainingSessionActive {
+            didAttemptCoachRelayAutoReconnect = true
+            HotspotBaselineLog.emit("COACH activity_remote reconnect retained_ws activity=twoMinuteTest")
+            Task {
+                await coord.attemptCoachRelayAutoReconnectFromStoredJoinCodeIfNeeded(reason: "two_minute_coach_onAppear")
+            }
+            return
+        }
+        guard let code = coord.lastCoachRelayJoinCode, !code.isEmpty else {
             CoachPersistDebug.log("auto-reconnect skipped (no code or transport live)", joinField: coachRelayJoinCodeInput, peerJoined: coord.coachRelayDisplayPeerPresent)
             return
         }
@@ -692,12 +753,14 @@ struct TwoMinuteCoachRemoteView: View {
             chunkSize: totalReps
         ) {
             currentRepIndex = nextIndex
+            syncPersistedCoachRepIndex()
             state = .ready
             resetCoachSessionInput()
             pendingDirectionLogRepZeroBased = nil
             return
         }
         currentRepIndex = completedRepIndex + 1
+        syncPersistedCoachRepIndex()
         CoachFirstRunGuidanceStore.markCompletedFirstRun(activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId)
         state = .complete
         pendingDirectionLogRepZeroBased = nil
@@ -713,6 +776,10 @@ struct TwoMinuteCoachRemoteView: View {
     private func applyPartnerSoftReconnectFromCoordinatorNotificationTwoMinute() {
         guard TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive else { return }
         guard state != .complete else { return }
+        restorePersistedCoachRepIndexIfNeeded(source: "soft_reconnect")
+        HotspotBaselineLog.emit(
+            "COACH soft_reconnect_preserve_rep current=\(currentRepIndex) activity=2MT"
+        )
         clearRepStartAckWaitState()
         state = .ready
         resetCoachSessionInput()
@@ -721,10 +788,44 @@ struct TwoMinuteCoachRemoteView: View {
 
     private func applyPartnerTrainAgainCoachRemoteReset() {
         guard TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive else { return }
+        guard TrainingPartnerConnectionCoordinator.shared.shouldApplyCoachTrainAgainRepReset() else {
+            restorePersistedCoachRepIndexIfNeeded(source: "train_again_skipped")
+            HotspotBaselineLog.emit(
+                "COACH train_again_reset skipped reason=same_live_session_preserve_rep current=\(currentRepIndex) activity=2MT"
+            )
+            return
+        }
+        let old = currentRepIndex
+        HotspotBaselineLog.emit(
+            "COACH train_again_reset invoked reason=displayRepEngineBecameReady old=\(old) new=0 activity=2MT"
+        )
+        HotspotBaselineLog.emit("COACH rep_index_change old=\(old) new=0 reason=train_again_reset")
         currentRepIndex = 0
+        TrainingPartnerConnectionCoordinator.shared.clearPersistedCoachNextRepProgress(reason: "train_again_reset")
         clearRepStartAckWaitState()
         state = .ready
         resetCoachSessionInput()
+    }
+
+    private func restorePersistedCoachRepIndexIfNeeded(source: String) {
+        let activityId = ActivityKind.twoMinuteTest.sessionActivityActivityId
+        let coordinator = TrainingPartnerConnectionCoordinator.shared
+        guard let restored = coordinator.suggestedCoachRepIndexRestore(
+            current: currentRepIndex,
+            activityId: activityId
+        ) else { return }
+        HotspotBaselineLog.emit(
+            "COACH rep_index_restore source=\(source) old=\(currentRepIndex) new=\(restored) activity=2MT"
+        )
+        HotspotBaselineLog.emit("COACH rep_index_change old=\(currentRepIndex) new=\(restored) reason=persisted_restore_\(source)")
+        currentRepIndex = restored
+    }
+
+    private func syncPersistedCoachRepIndex() {
+        TrainingPartnerConnectionCoordinator.shared.notePersistedCoachNextRepIndex(
+            currentRepIndex,
+            activityId: ActivityKind.twoMinuteTest.sessionActivityActivityId
+        )
     }
 
     private func coachSyncRepIndexForCheckpoint() -> Int {

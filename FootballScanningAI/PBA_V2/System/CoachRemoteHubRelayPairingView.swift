@@ -116,13 +116,20 @@ struct CoachRemoteHubRelayPairingView: View {
                 if text.lowercased().contains("peer_left") {
                     Task { @MainActor in
                         displayPeerJoinedBinding.wrappedValue = false
-                        remote.disconnect()
+                        let preserve = TrainingPartnerConnectionCoordinator.shared.shouldPreserveCoachRelaySocketOnDisplayPeerLeft()
+                        HotspotBaselineLog.emit(
+                            "COACH peer_left HANDLER site=CoachRemoteHubRelayPairingView preserveSocket=\(preserve) partnerActive=\(TrainingPartnerConnectionCoordinator.shared.isPartnerTrainingSessionActive)"
+                        )
+                        if !preserve {
+                            remote.disconnect()
+                        }
                     }
                 }
             }
 
             await MainActor.run {
                 TrainingPartnerConnectionCoordinator.shared.recordCoachRelayJoinCode(code)
+                TrainingPartnerConnectionCoordinator.shared.recordCoachRelayWebSocketSessionConfig(config)
                 remoteService.replaceTransport(transport)
                 remoteService.connect()
                 coachRelayJoinBanner = nil
@@ -159,23 +166,41 @@ struct CoachRemoteHubRelayPairingView: View {
         }
         didAttemptCoachRelayAutoReconnect = true
         coachRelayJoinCodeInput = code
+        // Mid-session: same retained WebSocket only — never POST /join (COACH_SLOT_TAKEN → false "Couldn't join").
+        if coord.isPartnerTrainingSessionActive {
+            HotspotBaselineLog.emit(
+                "COACH hub_pairing skip_http_join reason=mid_session_retained_ws joinSuffix=\(HotspotBaselineLog.joinSuffix(code))"
+            )
+            Task {
+                await coord.attemptCoachRelayAutoReconnectFromStoredJoinCodeIfNeeded(reason: "hub_pairing_onAppear")
+            }
+            return
+        }
         Task { await startCoachRelayJoin() }
     }
 }
 
 /// Requires an active coach↔display link before showing a Coach Remote activity screen (join UI otherwise).
+/// Mid-session transient loss keeps the activity remote mounted so reconnect overlays work and we never
+/// HTTP ``/join`` into ``COACH_SLOT_TAKEN`` (which wrongly showed “Couldn't join” on the join screen).
 struct CoachRemoteActivityConnectionGate<Content: View>: View {
     @EnvironmentObject private var router: AppRouter
+    @ObservedObject private var partnerCoordinator = TrainingPartnerConnectionCoordinator.shared
     @ViewBuilder var content: () -> Content
 
     var body: some View {
         Group {
-            if CoachRemoteSessionStartGate.coachDeviceIsPresent() {
+            if shouldShowActivityRemote {
                 content()
             } else {
                 CoachRemoteHubRelayPairingView()
                     .environmentObject(router)
             }
         }
+    }
+
+    private var shouldShowActivityRemote: Bool {
+        if CoachRemoteSessionStartGate.coachDeviceIsPresent() { return true }
+        return partnerCoordinator.shouldKeepCoachActivityRemoteMountedAcrossTransientLinkLoss
     }
 }

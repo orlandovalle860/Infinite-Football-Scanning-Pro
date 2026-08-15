@@ -925,13 +925,16 @@ struct DribbleOrPassDisplaySessionView: View {
             loopsChunks: TimedSessionDisplayIntegration.shouldLoopEngineChunks
         )
         partnerCoachRepGate = wrapGate
-        // Between reps: `expectedNext` is the next index to apply; coach may retry the same `nextRep` after a missed `repStarted`.
+        // Between reps: after reconnect the coach often re-sends the same nextRep; replay instead of ack-only.
         if case .waitingForNextRep = engine.phase, repIndex < partnerCoachRepGate.expectedNextCoachRepIndex {
             if repIndex + 1 == partnerCoachRepGate.expectedNextCoachRepIndex {
-                sendRepStartedAck(repIndex: repIndex)
-                #if DEBUG
-                print("[PartnerCoach][DOP] duplicate nextRep \(repIndex) (already applied) — re-sent repStarted")
-                #endif
+                var gate = partnerCoachRepGate
+                gate.alignExpectedNextForCoachSoftReconnectReplay(repIndex: repIndex)
+                partnerCoachRepGate = gate
+                HotspotBaselineLog.emit(
+                    "DISPLAY nextRep replay reason=duplicate_while_waiting activity=DOP repIndex=\(repIndex) expectedNext=\(partnerCoachRepGate.expectedNextCoachRepIndex)"
+                )
+                _ = tryCommitPartnerCoachNextRep(repIndex: repIndex)
             } else {
                 #if DEBUG
                 print("[PartnerCoach][DOP] ignoring stale nextRep \(repIndex) (displayTrackedNext=\(partnerCoachRepGate.expectedNextCoachRepIndex))")
@@ -988,15 +991,21 @@ struct DribbleOrPassDisplaySessionView: View {
         print("[NEXTREP] received repIndex=\(repIndex) while phase=\(engine.phase) currentRepIndex=\(engine.currentRepIndex)")
         if repIndex < partnerCoachRepGate.expectedNextCoachRepIndex {
             if repIndex + 1 == partnerCoachRepGate.expectedNextCoachRepIndex, case .waitingForNextRep = engine.phase {
-                sendRepStartedAck(repIndex: repIndex)
-                pendingNextRepIndex = nil
-                return true
-            }
-            if repIndex + 1 == partnerCoachRepGate.expectedNextCoachRepIndex {
+                var gate = partnerCoachRepGate
+                gate.alignExpectedNextForCoachSoftReconnectReplay(repIndex: repIndex)
+                partnerCoachRepGate = gate
+                HotspotBaselineLog.emit(
+                    "DISPLAY nextRep replay reason=duplicate_while_waiting_commit activity=DOP repIndex=\(repIndex)"
+                )
+                // Fall through to apply after rewinding the gate.
+            } else if repIndex + 1 == partnerCoachRepGate.expectedNextCoachRepIndex {
                 print("[NEXTREP BLOCKED] phase=\(engine.phase) expected=waitingForNextRep")
+                pendingNextRepIndex = nil
+                return false
+            } else {
+                pendingNextRepIndex = nil
+                return false
             }
-            pendingNextRepIndex = nil
-            return false
         }
         if repIndex < engine.currentRepIndex {
             if !SoloTimeBasedDisplaySessionSupport.allowsPartnerCoachChunkWrapNextRep(
@@ -1248,6 +1257,8 @@ struct DribbleOrPassDisplaySessionView: View {
             && sessionTransportMode == .relayWebSocket
             && !partnerRelaySession.isCoachPaired
             && !TrainingPartnerConnectionCoordinator.shared.isMidSessionPartnerDisconnect
+            && !TrainingPartnerConnectionCoordinator.shared.isTransientPartnerLinkLossReconnecting
+            && !TrainingPartnerConnectionCoordinator.shared.isPartnerDrillUnderway
     }
 
     /// Partner: countdown only after coach is connected (Multipeer) or paired on relay. Solo: always ready.

@@ -247,7 +247,14 @@ struct CoachRemoteHubView: View {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         lastUsedActivityKey = item.id
         if let activity = item.activityKind {
-            partnerCoordinator.beginCoachHubActivityLaunch(activity: activity)
+            let sameLiveActivity = partnerCoordinator.isPartnerTrainingSessionActive
+                && partnerCoordinator.currentTimedSessionActivityId == activity.sessionActivityActivityId
+            if sameLiveActivity {
+                // Mid-session reopen (e.g. after walk-away): keep display ready flags — don't force a fresh sessionStarted cycle.
+                partnerCoordinator.restoreCoachTimedSessionMirrorIfNeeded()
+            } else {
+                partnerCoordinator.beginCoachHubActivityLaunch(activity: activity)
+            }
         } else {
             partnerCoordinator.restoreCoachTimedSessionMirrorIfNeeded()
         }

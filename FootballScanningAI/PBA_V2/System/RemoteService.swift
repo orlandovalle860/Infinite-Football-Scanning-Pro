@@ -10,6 +10,19 @@ final class RemoteService: ObservableObject {
 
     private var transport: RemoteTransport
 
+    /// True when the installed transport can open a relay WebSocket (not pending/Multipeer placeholder).
+    var hasUsableWebSocketRemoteTransport: Bool {
+        transport is WebSocketRemoteTransport
+    }
+
+    /// Diagnostic label for HotspotBaseline (never includes credentials).
+    var installedTransportKindForDiagnostics: String {
+        if transport is WebSocketRemoteTransport { return "WebSocketRemoteTransport" }
+        if transport is RelayPendingRemoteTransport { return "RelayPendingRemoteTransport" }
+        if transport is MultipeerRemoteTransport { return "MultipeerRemoteTransport" }
+        return "other"
+    }
+
     var onTwoMinuteMessageReceived: ((TwoMinuteMessage) -> Void)? {
         didSet {
             bindTransportMessageForwarding()
@@ -33,13 +46,21 @@ final class RemoteService: ObservableObject {
     }
 
     func connect() {
+        HotspotBaselineLog.emit(
+            "COACH RemoteService.connect() priorState=\(connectionState.rawValue) transport=\(installedTransportKindForDiagnostics)"
+        )
         transport.connect()
         connectionState = transport.connectionState
+        HotspotBaselineLog.emit(
+            "COACH RemoteService.connect() afterState=\(connectionState.rawValue) transport=\(installedTransportKindForDiagnostics)"
+        )
     }
 
     func disconnect() {
+        HotspotBaselineLog.emit("COACH RemoteService.disconnect() CALLED priorState=\(connectionState.rawValue)")
         transport.disconnect()
         connectionState = transport.connectionState
+        HotspotBaselineLog.emit("COACH RemoteService.disconnect() afterState=\(connectionState.rawValue)")
     }
 
     func send(_ message: TwoMinuteMessage) {
@@ -71,9 +92,20 @@ final class RemoteService: ObservableObject {
     }
 
     func sendNextRep(repIndex: Int) {
-        send(.nextRep(repIndex: repIndex))
+        HotspotBaselineLog.emit(
+            "COACH sendNextRep called repIndex=\(repIndex) connectionState=\(connectionState.rawValue) transport=\(installedTransportKindForDiagnostics)"
+        )
+        send(.nextRep(repIndex: repIndex)) { [weak self] in
+            HotspotBaselineLog.emit(
+                "COACH sendNextRep completion repIndex=\(repIndex) connectionState=\(self?.connectionState.rawValue ?? "nil") transport=\(self?.installedTransportKindForDiagnostics ?? "nil")"
+            )
+        }
         DispatchQueue.main.async {
-            TrainingPartnerConnectionCoordinator.shared.markPartnerDrillUnderwayForMidSessionRecovery()
+            let coordinator = TrainingPartnerConnectionCoordinator.shared
+            coordinator.markPartnerDrillUnderwayForMidSessionRecovery()
+            if let activityId = coordinator.currentTimedSessionActivityId ?? coordinator.lastNonNilActivityId {
+                coordinator.notePersistedCoachNextRepIndex(repIndex, activityId: activityId)
+            }
         }
     }
 
@@ -104,6 +136,7 @@ final class RemoteService: ObservableObject {
 
     private func mirrorConnectionState(_ state: ConnectionState, source: String) {
         guard connectionState != state else { return }
+        HotspotBaselineLog.emit("COACH socket \(connectionState.rawValue)->\(state.rawValue) source=\(source)")
 #if DEBUG
         print("[RemoteService] connectionState \(connectionState.rawValue) -> \(state.rawValue) [\(source)]")
 #endif

@@ -177,10 +177,18 @@ wss.on('connection', (ws, _req, url) => {
   }
 
   let room;
+  /** @type {import('ws').WebSocket | null} */
+  let replacedSocket = null;
   try {
-    room = attachSocket(sessionId, role, token, ws);
+    const attached = attachSocket(sessionId, role, token, ws);
+    room = attached.room;
+    replacedSocket = attached.replacedSocket;
   } catch (e) {
     const code = e.code || 'ATTACH_FAILED';
+    if (code === 'SESSION_NOT_FOUND') {
+      const suffix = String(sessionId || '').slice(0, 8) || 'nil';
+      console.log(`[pba-relay] RELAY attach_rejected reason=SESSION_NOT_FOUND sessionSuffix=${suffix}`);
+    }
     safeJsonSend(ws, {
       type: 'control.error',
       code,
@@ -188,6 +196,11 @@ wss.on('connection', (ws, _req, url) => {
     });
     ws.close(4401, code);
     return;
+  }
+
+  if (replacedSocket) {
+    const suffix = String(room.sessionId || '').slice(0, 8);
+    console.log(`[pba-relay] ${role.toUpperCase()} socket replacement sessionSuffix=${suffix}`);
   }
 
   ws.isAlive = true;
@@ -205,9 +218,27 @@ wss.on('connection', (ws, _req, url) => {
     peerPresent,
   });
 
+  // Same-token replacement is transport recovery: notify the NEW socket of an existing peer,
+  // but do not flap the peer with peer_left/peer_joined (zombie may still look "present").
   if (peer && peer.readyState === WebSocket.OPEN) {
     sendControl(ws, { type: 'control.peer_joined', sessionId: room.sessionId });
-    sendControl(peer, { type: 'control.peer_joined', sessionId: room.sessionId });
+    if (!replacedSocket) {
+      sendControl(peer, { type: 'control.peer_joined', sessionId: room.sessionId });
+    }
+  }
+
+  // Only after the new socket owns the role slot, close the stale one.
+  if (replacedSocket && replacedSocket !== ws) {
+    const closeReason = role === 'display' ? 'display_replaced' : 'coach_replaced';
+    try {
+      replacedSocket.close(4000, closeReason);
+    } catch {
+      try {
+        replacedSocket.terminate();
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   const heartbeat = setInterval(() => {
@@ -229,8 +260,13 @@ wss.on('connection', (ws, _req, url) => {
     if (cleanedUp) return;
     cleanedUp = true;
     clearInterval(heartbeat);
+    // Capture peer before detach. Identity-safe: only notify if THIS socket still owns the slot.
     const other = role === 'display' ? room.coachSocket : room.displaySocket;
-    detachSocket(room, role);
+    const detached = detachSocket(room, role, ws);
+    if (!detached) {
+      // Replaced (or already cleared by a newer owner) — do not send false peer_left.
+      return;
+    }
     if (other && other.readyState === WebSocket.OPEN) {
       sendControl(other, {
         type: 'control.peer_left',
@@ -250,8 +286,31 @@ wss.on('connection', (ws, _req, url) => {
 
 /**
  * Relay opaque payloads. JSON with type control.* from client: only control.ping gets control.pong; not relayed.
+ * control.ping must work even when the peer slot is empty (solo-in-room keepalive / recovery).
  */
 function handleAppMessage(room, role, _sender, data, isBinary) {
+  if (!isBinary) {
+    const text = data.toString();
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = null;
+    }
+    if (parsed && typeof parsed.type === 'string' && parsed.type.startsWith('control.')) {
+      if (parsed.type === 'control.ping') {
+        sendControl(_sender, { type: 'control.pong', sessionId: room.sessionId });
+      }
+      return;
+    }
+    if (parsed == null) {
+      const peer = role === 'display' ? room.coachSocket : room.displaySocket;
+      if (!peer || peer.readyState !== WebSocket.OPEN) return;
+      peer.send(text);
+      return;
+    }
+  }
+
   const peer = role === 'display' ? room.coachSocket : room.displaySocket;
   if (!peer || peer.readyState !== WebSocket.OPEN) return;
 
@@ -260,24 +319,7 @@ function handleAppMessage(room, role, _sender, data, isBinary) {
     return;
   }
 
-  const text = data.toString();
-
-  let parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    peer.send(text);
-    return;
-  }
-
-  if (parsed && typeof parsed.type === 'string' && parsed.type.startsWith('control.')) {
-    if (parsed.type === 'control.ping') {
-      sendControl(_sender, { type: 'control.pong', sessionId: room.sessionId });
-    }
-    return;
-  }
-
-  peer.send(text);
+  peer.send(data.toString());
 }
 
 server.listen(PORT, HOST, () => {

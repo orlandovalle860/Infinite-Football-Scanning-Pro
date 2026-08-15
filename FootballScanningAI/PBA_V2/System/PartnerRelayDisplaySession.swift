@@ -67,6 +67,9 @@ final class PartnerRelayDisplaySession: ObservableObject {
             await MainActor.run {
                 joinCode = created.joinCode
             }
+            HotspotBaselineLog.emit(
+                "DISPLAY new_relay_room sessionSuffix=\(HotspotBaselineLog.sessionSuffix(created.sessionId)) joinSuffix=\(HotspotBaselineLog.joinSuffix(created.joinCode))"
+            )
             #if DEBUG
             print("[RelayWS-DEBUG] session creation OK sessionId=\(created.sessionId)")
             print("[RelayWS-DEBUG] joinCode=\(created.joinCode) (share with coach for relay join)")
@@ -136,6 +139,9 @@ final class PartnerRelayDisplaySession: ObservableObject {
     func startDisplaySessionIfNeeded() async {
         if let t = transport, joinCode != nil {
             if hasActiveRelayInFlightOrLive {
+                HotspotBaselineLog.emit(
+                    "DISPLAY retain_same_room action=reuse_in_flight_or_live socket=\(socketConnectionState.rawValue) sessionSuffix=\(HotspotBaselineLog.sessionSuffix(relaySessionId)) joinSuffix=\(HotspotBaselineLog.joinSuffix(joinCode))"
+                )
                 #if DEBUG
                 print("[RelayWS-DEBUG] PartnerRelayDisplaySession.startDisplaySessionIfNeeded — reusing active relay (socket=\(socketConnectionState.rawValue), same join code)")
                 PartnerPersistDebug.log("startDisplaySessionIfNeeded → reuse existing relay (socket active/in-flight)")
@@ -144,6 +150,9 @@ final class PartnerRelayDisplaySession: ObservableObject {
             }
             if socketConnectionState == .disconnected {
                 await MainActor.run {
+                    HotspotBaselineLog.emit(
+                        "DISPLAY reconnect_same_room action=transport_connect sessionSuffix=\(HotspotBaselineLog.sessionSuffix(relaySessionId)) joinSuffix=\(HotspotBaselineLog.joinSuffix(joinCode))"
+                    )
                     #if DEBUG
                     print("[RelayWS-DEBUG] PartnerRelayDisplaySession.startDisplaySessionIfNeeded — reconnecting existing transport (same join code, was disconnected)")
                     PartnerPersistDebug.log("startDisplaySessionIfNeeded → reconnect existing transport (was disconnected)")
@@ -153,6 +162,15 @@ final class PartnerRelayDisplaySession: ObservableObject {
                 return
             }
         }
+        HotspotBaselineLog.emit(
+            "DISPLAY will_create_new_room reason=missing_transport_or_joinCode transport=\(transport != nil) joinSuffix=\(HotspotBaselineLog.joinSuffix(joinCode))"
+        )
+        if TrainingPartnerConnectionCoordinator.shared.shouldBlockAutomaticNewDisplayRelayRoom() {
+            HotspotBaselineLog.emit(
+                "DISPLAY will_create_new_room blocked reason=active_partner_session_same_room_preserved sessionSuffix=\(HotspotBaselineLog.sessionSuffix(relaySessionId)) joinSuffix=\(HotspotBaselineLog.joinSuffix(joinCode))"
+            )
+            return
+        }
         #if DEBUG
         if TrainingPartnerConnectionCoordinator.shared.shouldPersistPartnerPairing {
             print("[RelayWS-DEBUG] NEW /v1/sessions while partner training active — old transport/joinCode missing (transport=\(transport != nil) joinCode=\(joinCode ?? "nil")). Coach must use the NEW code on the display.")
@@ -160,6 +178,47 @@ final class PartnerRelayDisplaySession: ObservableObject {
         PartnerPersistDebug.log("startDisplaySessionIfNeeded → create new relay session (HTTP + WebSocket)")
         #endif
         await startDisplaySession()
+    }
+
+    /// Same-room reconnect for mid-session recovery: always opens a fresh WebSocket task when
+    /// ``forceFreshSocket`` is true so a hung `.connecting` attempt cannot block retries.
+    /// Never creates a new HTTP room.
+    @MainActor
+    func reconnectSameRoomTransport(forceFreshSocket: Bool) async {
+        guard let t = transport, joinCode != nil else {
+            await startDisplaySessionIfNeeded()
+            return
+        }
+        if !forceFreshSocket, hasActiveRelayInFlightOrLive {
+            HotspotBaselineLog.emit(
+                "DISPLAY reconnect_same_room action=skip_in_flight socket=\(socketConnectionState.rawValue) sessionSuffix=\(HotspotBaselineLog.sessionSuffix(relaySessionId)) joinSuffix=\(HotspotBaselineLog.joinSuffix(joinCode))"
+            )
+            return
+        }
+        if socketConnectionState == .connected {
+            let midSessionMissingCoach = forceFreshSocket
+                && !isCoachPaired
+                && TrainingPartnerConnectionCoordinator.shared.isTransientPartnerLinkLossReconnecting
+            if midSessionMissingCoach {
+                HotspotBaselineLog.emit(
+                    "DISPLAY reconnect_same_room action=force_fresh connected_without_coach sessionSuffix=\(HotspotBaselineLog.sessionSuffix(relaySessionId)) joinSuffix=\(HotspotBaselineLog.joinSuffix(joinCode))"
+                )
+                t.connect()
+                return
+            }
+            HotspotBaselineLog.emit(
+                "DISPLAY reconnect_same_room action=already_connected sessionSuffix=\(HotspotBaselineLog.sessionSuffix(relaySessionId)) joinSuffix=\(HotspotBaselineLog.joinSuffix(joinCode))"
+            )
+            return
+        }
+        HotspotBaselineLog.emit(
+            "DISPLAY reconnect_same_room action=transport_connect forceFresh=\(forceFreshSocket) priorSocket=\(socketConnectionState.rawValue) sessionSuffix=\(HotspotBaselineLog.sessionSuffix(relaySessionId)) joinSuffix=\(HotspotBaselineLog.joinSuffix(joinCode))"
+        )
+        #if DEBUG
+        print("[RelayWS-DEBUG] PartnerRelayDisplaySession.reconnectSameRoomTransport forceFresh=\(forceFreshSocket) prior=\(socketConnectionState.rawValue)")
+        PartnerPersistDebug.log("reconnectSameRoomTransport → forceFresh=\(forceFreshSocket)")
+        #endif
+        t.connect()
     }
 
     /// Stops the relay WebSocket and cancels deferred recycle work (display-side relay “host”).
@@ -242,17 +301,32 @@ final class PartnerRelayDisplaySession: ObservableObject {
 
     @MainActor
     private func applySocketConnectionState(_ state: ConnectionState) {
-        let wasConnected = lastSocketStateForRecycle == .connected
+        let previousState = lastSocketStateForRecycle
+        let wasConnected = previousState == .connected
+        let previousPaired = isCoachPaired
         lastSocketStateForRecycle = state
         socketConnectionState = state
+        HotspotBaselineLog.emit(
+            "DISPLAY socket \(previousState.rawValue)->\(state.rawValue) sessionSuffix=\(HotspotBaselineLog.sessionSuffix(relaySessionId)) joinSuffix=\(HotspotBaselineLog.joinSuffix(joinCode)) isCoachPaired=\(isCoachPaired)"
+        )
         if state == .disconnected {
+            if previousPaired {
+                HotspotBaselineLog.emit(
+                    "DISPLAY isCoachPaired true->false reason=socket_disconnected sessionSuffix=\(HotspotBaselineLog.sessionSuffix(relaySessionId)) joinSuffix=\(HotspotBaselineLog.joinSuffix(joinCode))"
+                )
+            }
             isCoachPaired = false
             onCoachPairingChanged?(false)
             if wasConnected {
+                HotspotBaselineLog.emit(
+                    "DISPLAY unexpected_disconnect_may_schedule_recycle sessionSuffix=\(HotspotBaselineLog.sessionSuffix(relaySessionId)) joinSuffix=\(HotspotBaselineLog.joinSuffix(joinCode))"
+                )
                 scheduleDisplayRelayRecycleAfterUnexpectedDisconnectIfNeeded()
+                TrainingPartnerConnectionCoordinator.shared.noteDisplayRelaySocketUnexpectedDisconnect()
             }
         } else if state == .connected {
             cancelRelayDisconnectRecycleTask()
+            TrainingPartnerConnectionCoordinator.shared.noteDisplayRelaySocketConnectedForReconnectRetry()
             TrainingPartnerConnectionCoordinator.shared.rebroadcastTimedSessionActiveFromDisplayIfNeeded()
             TrainingPartnerConnectionCoordinator.shared.rebroadcastDisplayRepEngineReadyFromDisplayIfNeeded()
         }
@@ -282,13 +356,25 @@ final class PartnerRelayDisplaySession: ObservableObject {
                 #endif
                 return
             }
+            HotspotBaselineLog.emit(
+                "DISPLAY recycle_task_firing reason=relay_socket_dropped_while_active sessionSuffix=\(HotspotBaselineLog.sessionSuffix(relaySessionId)) joinSuffix=\(HotspotBaselineLog.joinSuffix(joinCode))"
+            )
             await TrainingPartnerConnectionCoordinator.shared.recyclePlayerDisplayRelaySessionKeepingPartnerRun(reason: "relay_socket_dropped_while_active")
         }
     }
 
     private func handleRawRelayText(_ text: String) {
+        let classified = HotspotBaselineLog.classifyRelayFrame(text)
+        if classified != "other" {
+            HotspotBaselineLog.emit(
+                "DISPLAY relay_frame kind=\(classified) sessionSuffix=\(HotspotBaselineLog.sessionSuffix(relaySessionId)) joinSuffix=\(HotspotBaselineLog.joinSuffix(joinCode)) isCoachPaired=\(isCoachPaired)"
+            )
+        }
         if text.contains("peer_joined") {
             Task { @MainActor in
+                HotspotBaselineLog.emit(
+                    "DISPLAY isCoachPaired \(isCoachPaired)->true reason=peer_joined sessionSuffix=\(HotspotBaselineLog.sessionSuffix(relaySessionId)) joinSuffix=\(HotspotBaselineLog.joinSuffix(joinCode))"
+                )
                 isCoachPaired = true
                 onCoachPairingChanged?(true)
                 TrainingPartnerConnectionCoordinator.shared.rebroadcastTimedSessionActiveFromDisplayIfNeeded()
@@ -297,8 +383,28 @@ final class PartnerRelayDisplaySession: ObservableObject {
         }
         if text.contains("peer_left") {
             Task { @MainActor in
+                HotspotBaselineLog.emit(
+                    "DISPLAY isCoachPaired \(isCoachPaired)->false reason=peer_left sessionSuffix=\(HotspotBaselineLog.sessionSuffix(relaySessionId)) joinSuffix=\(HotspotBaselineLog.joinSuffix(joinCode))"
+                )
                 isCoachPaired = false
                 onCoachPairingChanged?(false)
+            }
+        }
+        // Fresh connect ack: sync pairing from relay truth (avoids sticky isCoachPaired on zombie/replace).
+        if text.contains("control.ack"), text.contains("peerPresent") {
+            Task { @MainActor in
+                let peerPresent = text.contains("\"peerPresent\":true") || text.contains("\"peerPresent\": true")
+                if peerPresent != isCoachPaired {
+                    HotspotBaselineLog.emit(
+                        "DISPLAY isCoachPaired \(isCoachPaired)->\(peerPresent) reason=control_ack_peerPresent sessionSuffix=\(HotspotBaselineLog.sessionSuffix(relaySessionId)) joinSuffix=\(HotspotBaselineLog.joinSuffix(joinCode))"
+                    )
+                    isCoachPaired = peerPresent
+                    onCoachPairingChanged?(peerPresent)
+                    if peerPresent {
+                        TrainingPartnerConnectionCoordinator.shared.rebroadcastTimedSessionActiveFromDisplayIfNeeded()
+                        TrainingPartnerConnectionCoordinator.shared.rebroadcastDisplayRepEngineReadyFromDisplayIfNeeded()
+                    }
+                }
             }
         }
     }

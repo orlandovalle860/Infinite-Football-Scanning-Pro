@@ -70,11 +70,11 @@ Navigate to your newly created app and fill in:
 - **Keywords**: football,scanning,training,soccer,awareness,decision,skills,coaching,drills,vision
 - **Description**: [Copy from App_Store_Metadata.md]
 - **Promotional Text**: Master football scanning skills with two training modes. Build awareness and decision-making under pressure. Privacy-focused training with optional cloud sync.
-- **Support URL**: https://orlandovalle860.github.io/Infinite-Football-Scanning-Pro/privacy_policy.html
+- **Support URL**: https://www.infinite-football.com/support
 - **Marketing URL**: (Leave blank for now)
 
 ### 4.2 App Review Information
-- **Contact Information**: orlandovalle860@gmail.com
+- **Contact Information**: support@infinite-football.com
 - **Demo Account**: (Not required for your app)
 - **Notes**: [Copy from App_Store_Metadata.md]
 
@@ -112,7 +112,7 @@ Fill in the same information as before:
 - **Keywords**: football,scanning,training,soccer,awareness,decision,skills,coaching,drills,vision
 - **Description**: [Copy from App_Store_Metadata.md]
 - **Promotional Text**: Master football scanning skills with two training modes. Build awareness and decision-making under pressure. Privacy-focused training with optional cloud sync.
-- **Support URL**: https://orlandovalle860.github.io/Infinite-Football-Scanning-Pro/privacy_policy.html
+- **Support URL**: https://www.infinite-football.com/support
 
 ## Step 7: Prepare for Screenshots
 
@@ -194,7 +194,7 @@ Fill in the same information as before:
 
 ## Contact Information
 - **Developer**: Orlando Valle
-- **Email**: orlandovalle860@gmail.com
+- **Email**: support@infinite-football.com
 - **Privacy Policy**: https://orlandovalle860.github.io/Infinite-Football-Scanning-Pro/privacy_policy.html
 
 You're now ready to proceed with screenshots and app submission! 

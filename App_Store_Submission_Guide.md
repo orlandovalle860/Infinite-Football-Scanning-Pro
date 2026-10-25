@@ -41,11 +41,11 @@ Fill in the following fields:
 - **Keywords**: football,scanning,training,soccer,awareness,decision,skills,coaching,drills,vision
 - **Description**: [Use the full description from App_Store_Metadata.md]
 - **Promotional Text**: Master football scanning skills with two training modes. Build awareness and decision-making under pressure. Privacy-focused training with optional cloud sync.
-- **Support URL**: https://orlandovalle860.github.io/Infinite-Football-Scanning-Pro/privacy_policy.html
+- **Support URL**: https://www.infinite-football.com/support
 - **Marketing URL**: (Optional - can leave blank)
 
 **App Review Information:**
-- **Contact Information**: orlandovalle860@gmail.com
+- **Contact Information**: support@infinite-football.com
 - **Demo Account**: (Not required for this app)
 - **Notes**: [Use the review notes from App_Store_Metadata.md]
 
@@ -164,5 +164,5 @@ You need screenshots for these device sizes:
 
 ## Contact Information
 - **Developer**: Orlando Valle
-- **Email**: orlandovalle860@gmail.com
+- **Email**: support@infinite-football.com
 - **Privacy Policy**: https://orlandovalle860.github.io/Infinite-Football-Scanning-Pro/privacy_policy.html 

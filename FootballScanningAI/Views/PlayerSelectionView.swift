@@ -143,7 +143,7 @@ struct PlayerSelectionView: View {
         .alert("Delete Account", isPresented: $showDeleteAccountFailureAlert) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("We couldn't delete your account right now. You've been signed out. Try again or contact orlandovalle860@gmail.com.")
+            Text("We couldn't delete your account right now. You've been signed out. Try again or contact support@infinite-football.com.")
         }
         .onAppear { loadPlayers() }
         .sheet(isPresented: $showAddPlayer) {
